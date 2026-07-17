@@ -1,0 +1,699 @@
+/*=============================================================================
+    utilities.css
+
+    BioResearch AI
+    Scientific Research Workstation
+
+===============================================================================
+
+Purpose
+-------
+Provides small reusable utility classes.
+
+Utilities are intentionally low-level and should be combined with
+components rather than replacing them.
+
+Examples
+
+    • Flexbox
+    • Grid
+    • Alignment
+    • Width
+    • Spacing
+    • Typography
+    • Borders
+    • Visibility
+    • Overflow
+    • Scientific helpers
+
+Design Philosophy
+-----------------
+
+Utilities should never define application semantics.
+
+Good:
+
+    .flex
+    .gap-4
+    .text-center
+
+Bad:
+
+    .paper-card
+    .workspace
+    .report-panel
+
+Those belong in components.css.
+
+=============================================================================*/
+
+
+/*=============================================================================
+    Display
+=============================================================================*/
+
+.block { display: block; }
+
+.inline { display: inline; }
+
+.inline-block { display: inline-block; }
+
+.flex { display: flex; }
+
+.inline-flex { display: inline-flex; }
+
+.grid { display: grid; }
+
+.hidden { display: none; }
+
+
+/*=============================================================================
+    Flex Direction
+=============================================================================*/
+
+.flex-row { flex-direction: row; }
+
+.flex-column { flex-direction: column; }
+
+
+/*=============================================================================
+    Alignment
+=============================================================================*/
+
+.items-start { align-items: flex-start; }
+
+.items-center { align-items: center; }
+
+.items-end { align-items: flex-end; }
+
+.justify-start { justify-content: flex-start; }
+
+.justify-center { justify-content: center; }
+
+.justify-end { justify-content: flex-end; }
+
+.justify-between { justify-content: space-between; }
+
+.justify-around { justify-content: space-around; }
+
+
+/*=============================================================================
+    Flex
+=============================================================================*/
+
+.flex-wrap { flex-wrap: wrap; }
+
+.flex-1 { flex: 1; }
+
+.flex-none { flex: none; }
+
+
+/*=============================================================================
+    Grid
+=============================================================================*/
+
+.grid-2 {
+
+    display: grid;
+
+    grid-template-columns:
+
+        repeat(2,1fr);
+
+}
+
+.grid-3 {
+
+    display: grid;
+
+    grid-template-columns:
+
+        repeat(3,1fr);
+
+}
+
+.grid-auto {
+
+    display: grid;
+
+    grid-template-columns:
+
+        repeat(auto-fit,minmax(280px,1fr));
+
+}
+
+
+/*=============================================================================
+    Gap
+=============================================================================*/
+
+.gap-1 { gap: var(--space-1); }
+
+.gap-2 { gap: var(--space-2); }
+
+.gap-3 { gap: var(--space-3); }
+
+.gap-4 { gap: var(--space-4); }
+
+.gap-5 { gap: var(--space-5); }
+
+.gap-6 { gap: var(--space-6); }
+
+.gap-8 { gap: var(--space-8); }
+
+
+/*=============================================================================
+    Width
+=============================================================================*/
+
+.w-full { width: 100%; }
+
+.w-auto { width: auto; }
+
+.max-w-sm { max-width: 640px; }
+
+.max-w-md { max-width: 768px; }
+
+.max-w-lg { max-width: 1024px; }
+
+.max-w-xl { max-width: 1280px; }
+
+
+/*=============================================================================
+    Height
+=============================================================================*/
+
+.h-full { height: 100%; }
+
+.min-h-screen { min-height: 100vh; }
+
+
+/*=============================================================================
+    Padding
+=============================================================================*/
+
+.p-2 { padding: var(--space-2); }
+
+.p-3 { padding: var(--space-3); }
+
+.p-4 { padding: var(--space-4); }
+
+.p-5 { padding: var(--space-5); }
+
+.p-6 { padding: var(--space-6); }
+
+.p-8 { padding: var(--space-8); }
+
+
+/*=============================================================================
+    Margin
+=============================================================================*/
+
+.m-0 { margin: 0; }
+
+.mt-2 { margin-top: var(--space-2); }
+
+.mt-4 { margin-top: var(--space-4); }
+
+.mt-6 { margin-top: var(--space-6); }
+
+.mb-2 { margin-bottom: var(--space-2); }
+
+.mb-4 { margin-bottom: var(--space-4); }
+
+.mb-6 { margin-bottom: var(--space-6); }
+
+.mx-auto {
+
+    margin-left: auto;
+
+    margin-right: auto;
+
+}
+
+
+/*=============================================================================
+    Text Alignment
+=============================================================================*/
+
+.text-left { text-align: left; }
+
+.text-center { text-align: center; }
+
+.text-right { text-align: right; }
+
+
+/*=============================================================================
+    Font Weight
+=============================================================================*/
+
+.font-normal {
+
+    font-weight: var(--font-weight-normal);
+
+}
+
+.font-medium {
+
+    font-weight: var(--font-weight-medium);
+
+}
+
+.font-semibold {
+
+    font-weight: var(--font-weight-semibold);
+
+}
+
+.font-bold {
+
+    font-weight: var(--font-weight-bold);
+
+}
+
+
+/*=============================================================================
+    Text Colors
+=============================================================================*/
+
+.text-primary {
+
+    color: var(--color-text-primary);
+
+}
+
+.text-secondary {
+
+    color: var(--color-text-secondary);
+
+}
+
+.text-muted {
+
+    color: var(--color-text-muted);
+
+}
+
+.text-success {
+
+    color: var(--color-success);
+
+}
+
+.text-warning {
+
+    color: var(--color-warning);
+
+}
+
+.text-blue {
+
+    color: var(--color-primary);
+
+}
+
+
+/*=============================================================================
+    Background
+=============================================================================*/
+
+.bg-primary {
+
+    background:
+
+        var(--color-background-primary);
+
+}
+
+.bg-surface {
+
+    background:
+
+        var(--color-background-surface);
+
+}
+
+.bg-glass {
+
+    background:
+
+        rgba(255,255,255,.03);
+
+}
+
+
+/*=============================================================================
+    Border Radius
+=============================================================================*/
+
+.rounded-sm {
+
+    border-radius:
+
+        var(--radius-small);
+
+}
+
+.rounded {
+
+    border-radius:
+
+        var(--radius-medium);
+
+}
+
+.rounded-lg {
+
+    border-radius:
+
+        var(--radius-large);
+
+}
+
+.rounded-panel {
+
+    border-radius:
+
+        var(--radius-panel);
+
+}
+
+.rounded-full {
+
+    border-radius: 999px;
+
+}
+
+
+/*=============================================================================
+    Border
+=============================================================================*/
+
+.border {
+
+    border:
+
+        1px solid var(--color-border-default);
+
+}
+
+.border-active {
+
+    border-color:
+
+        var(--color-border-active);
+
+}
+
+
+/*=============================================================================
+    Shadow
+=============================================================================*/
+
+.shadow-panel {
+
+    box-shadow:
+
+        var(--shadow-panel);
+
+}
+
+.shadow-glow {
+
+    box-shadow:
+
+        var(--shadow-glow);
+
+}
+
+
+/*=============================================================================
+    Overflow
+=============================================================================*/
+
+.overflow-hidden {
+
+    overflow: hidden;
+
+}
+
+.overflow-auto {
+
+    overflow: auto;
+
+}
+
+.overflow-y-auto {
+
+    overflow-y: auto;
+
+}
+
+
+/*=============================================================================
+    Position
+=============================================================================*/
+
+.relative {
+
+    position: relative;
+
+}
+
+.absolute {
+
+    position: absolute;
+
+}
+
+.fixed {
+
+    position: fixed;
+
+}
+
+
+/*=============================================================================
+    Cursor
+=============================================================================*/
+
+.cursor-pointer {
+
+    cursor: pointer;
+
+}
+
+.cursor-default {
+
+    cursor: default;
+
+}
+
+
+/*=============================================================================
+    Opacity
+=============================================================================*/
+
+.opacity-50 {
+
+    opacity: .5;
+
+}
+
+.opacity-75 {
+
+    opacity: .75;
+
+}
+
+.opacity-100 {
+
+    opacity: 1;
+
+}
+
+
+/*=============================================================================
+    Scientific Helpers
+=============================================================================*/
+
+/*
+    Gradient text for titles.
+*/
+
+.text-gradient {
+
+    background: var(--gradient-primary);
+
+    -webkit-background-clip: text;
+
+    background-clip: text;
+
+    color: transparent;
+    
+}
+
+
+/*
+    Glass effect helper.
+*/
+
+.glass {
+
+    background:
+
+        rgba(255,255,255,.03);
+
+    backdrop-filter:
+
+        blur(16px);
+
+    border:
+
+        1px solid var(--color-border-default);
+
+}
+
+
+/*
+    Scientific grid background.
+*/
+
+.bg-grid {
+
+    background-image:
+
+        linear-gradient(
+
+            rgba(255,255,255,.025) 1px,
+
+            transparent 1px
+
+        ),
+
+        linear-gradient(
+
+            90deg,
+
+            rgba(255,255,255,.025) 1px,
+
+            transparent 1px
+
+        );
+
+    background-size:
+
+        48px 48px;
+
+}
+
+
+/*
+    Thin glowing border.
+*/
+
+.border-glow {
+
+    border:
+
+        1px solid rgba(45,140,255,.25);
+
+}
+
+
+/*
+    Monospace scientific values.
+*/
+
+.mono {
+
+    font-family:
+
+        var(--font-family-mono), monospace;
+
+}
+
+
+/*
+    Prevent text selection where appropriate.
+*/
+
+.no-select {
+
+    user-select: none;
+
+}
+
+
+/*
+    Smooth scrolling.
+*/
+
+.scroll-smooth {
+
+    scroll-behavior: smooth;
+
+}
+
+
+/*=============================================================================
+    Responsive Helpers
+=============================================================================*/
+
+@media (max-width:1024px) {
+
+    .grid-2,
+    .grid-3 {
+
+        grid-template-columns: 1fr;
+
+    }
+
+}
+
+@media (max-width:768px) {
+
+    .hide-tablet {
+
+        display: none;
+
+    }
+
+}
+
+@media (max-width:640px) {
+
+    .hide-mobile {
+
+        display: none;
+
+    }
+
+}
+
+
+/*=============================================================================
+    End of File
+===============================================================================
+
+Utility classes should remain generic and composable.
+
+Application-specific styling belongs in components.css.
+
+The overall CSS architecture is:
+
+    variables.css
+            ↓
+    globals.css
+            ↓
+    animations.css
+            ↓
+    utilities.css
+            ↓
+    components.css
+
+This dependency order ensures that components can build upon the design
+tokens, global defaults, animations, and utilities without creating
+circular dependencies.
+
+=============================================================================*/

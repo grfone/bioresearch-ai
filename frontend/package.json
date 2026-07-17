@@ -1,0 +1,46 @@
+{
+  "name": "bioresearch-ai-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+
+  "description": "Frontend application for BioResearch AI. A scientific research assistant interface built with React, TypeScript, and modern web technologies.",
+
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
+  },
+
+  "dependencies": {
+    "@tanstack/react-query": "^5.0.0",
+    "axios": "^1.7.0",
+    "dompurify": "^3.0.0",
+    "framer-motion": "^11.0.0",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.0",
+    "react-router-dom": "^6.26.0",
+    "remark-gfm": "^4.0.0",
+    "zustand": "^5.0.0"
+  },
+
+  "devDependencies": {
+    "@eslint/js": "^9.8.0",
+    "@tailwindcss/typography": "^0.5.0",
+    "@types/dompurify": "^3.0.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "eslint": "^9.8.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.9",
+    "postcss": "^8.4.40",
+    "tailwindcss": "^3.4.7",
+    "typescript": "^5.5.3",
+    "vite": "^6.4.3"
+  }
+}

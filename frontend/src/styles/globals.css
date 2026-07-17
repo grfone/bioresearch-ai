@@ -1,0 +1,1576 @@
+/*
+===============================================================================
+
+BioResearch AI
+Global Stylesheet
+
+===============================================================================
+
+Purpose
+-------
+Provides the foundational browser styles for the BioResearch AI frontend.
+
+Unlike component-specific styles, this stylesheet defines the visual behavior
+of native HTML elements and establishes a consistent rendering environment
+across browsers.
+
+Responsibilities
+----------------
+
+This stylesheet is responsible for:
+
+• browser normalization
+• application layout foundation
+• typography defaults
+• body styling
+• native element appearance
+• accessibility improvements
+• selection styling
+• scrollbar styling
+• focus management
+• reduced motion support
+
+Non-Responsibilities
+--------------------
+
+This stylesheet intentionally does NOT define:
+
+• reusable cards
+• buttons
+• scientific panels
+• animations
+• utility classes
+
+Those belong to dedicated stylesheets:
+
+    • components.css
+    • animations.css
+    • utilities.css
+
+Architecture
+------------
+
+                 globals.css
+                        │
+        ┌───────────────┼────────────────┐
+        │               │                │
+        ▼               ▼                ▼
+
+ Browser Defaults   HTML Elements   Accessibility
+
+Design Philosophy
+-----------------
+
+The interface should communicate scientific precision rather than visual
+complexity.
+
+The user should feel they are operating an advanced biomedical research
+environment instead of interacting with a generic web application.
+
+Every default style favors:
+
+• readability
+• generous whitespace
+• restrained visual hierarchy
+• subtle contrast
+• consistency
+• accessibility
+
+Author
+------
+Guillermo Ramajo Fernández
+
+===============================================================================
+*/
+
+
+/*=============================================================================
+    Universal Box Model
+=============================================================================*/
+
+/*
+    All elements use the border-box sizing model.
+
+    This ensures that declared widths include borders and padding,
+    simplifying layout calculations throughout the application.
+*/
+
+*,
+*::before,
+*::after {
+
+    box-sizing: border-box;
+
+}
+
+
+/*=============================================================================
+    Root HTML Document
+=============================================================================*/
+
+/*
+    The root document establishes the baseline typography and scrolling
+    behavior for the entire application.
+*/
+
+html {
+
+    font-size: 16px;
+
+    min-height: 100%;
+
+    scroll-behavior: smooth;
+
+    text-size-adjust: 100%;
+
+    -webkit-text-size-adjust: 100%;
+
+}
+
+
+/*=============================================================================
+    Body
+=============================================================================*/
+
+/*
+    The application uses a dark scientific canvas inspired by modern
+    biomedical software rather than a pure black background.
+
+    A subtle radial illumination creates depth without distracting from
+    scientific content.
+*/
+
+body {
+
+    margin: 0;
+
+    min-height: 100vh;
+
+    overflow-x: hidden;
+
+    overflow-y: auto;
+
+    background:
+
+        var(--gradient-radial),
+
+        var(--gradient-background);
+
+    color:
+
+        var(--color-text-primary);
+
+    font-family:
+
+        var(--font-family-sans), sans-serif;
+
+    font-size:
+
+        var(--font-size-md);
+
+    font-weight:
+
+        var(--font-weight-normal);
+
+    line-height:
+
+        var(--line-height-relaxed);
+
+    text-rendering:
+
+        optimizeLegibility;
+
+    -webkit-font-smoothing:
+
+        antialiased;
+
+    -moz-osx-font-smoothing:
+
+        grayscale;
+
+}
+
+
+/*=============================================================================
+    React Root
+=============================================================================*/
+
+/*
+    The React application occupies the complete browser viewport.
+
+    Individual pages can safely assume the root container always fills the
+    available vertical space.
+*/
+
+#root {
+
+    min-height: 100vh;
+
+    display: flex;
+
+    flex-direction: column;
+
+}
+
+
+/*=============================================================================
+    Main Application Container
+=============================================================================*/
+
+/*
+    Native <main> elements represent the primary research workspace of each
+    page.
+
+    Flex sizing allows layouts to naturally occupy remaining viewport height.
+*/
+
+main {
+
+    flex: 1;
+
+}
+
+
+/*=============================================================================
+    Typography Foundation
+=============================================================================*/
+
+/*
+    Headings intentionally use tighter spacing than paragraphs to improve
+    information hierarchy.
+
+    Large headings resemble scientific publication titles rather than
+    marketing copy.
+*/
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+
+    margin: 0;
+
+    color:
+
+        var(--color-text-primary);
+
+    font-weight:
+
+        var(--font-weight-bold);
+
+    line-height:
+
+        var(--line-height-tight);
+
+    letter-spacing:
+
+        -0.03em;
+
+}
+
+
+h1 {
+
+    font-size:
+
+        var(--font-size-4xl);
+
+}
+
+
+h2 {
+
+    font-size:
+
+        var(--font-size-3xl);
+
+}
+
+
+h3 {
+
+    font-size:
+
+        var(--font-size-2xl);
+
+}
+
+
+h4 {
+
+    font-size:
+
+        var(--font-size-xl);
+
+}
+
+
+h5 {
+
+    font-size:
+
+        var(--font-size-lg);
+
+}
+
+
+h6 {
+
+    font-size:
+
+        var(--font-size-md);
+
+}
+
+
+/*=============================================================================
+    Paragraphs
+=============================================================================*/
+
+/*
+    Paragraphs prioritize readability over compactness.
+
+    The slightly relaxed line height is particularly beneficial when reading
+    AI-generated scientific reports.
+*/
+
+p {
+
+    margin:
+
+        0;
+
+    color:
+
+        var(--color-text-secondary);
+
+    line-height:
+
+        var(--line-height-relaxed);
+
+}
+
+
+/*=============================================================================
+    Small Text
+=============================================================================*/
+
+/*
+    Used for metadata such as:
+
+        • publication dates
+        • PMIDs
+        • confidence scores
+        • timestamps
+*/
+
+small {
+
+    color:
+
+        var(--color-text-muted);
+
+    font-size:
+
+        var(--font-size-sm);
+
+}
+
+
+/*=============================================================================
+    Strong Emphasis
+=============================================================================*/
+
+strong {
+
+    font-weight:
+
+        var(--font-weight-semibold);
+
+    color:
+
+        var(--color-text-primary);
+
+}
+
+
+em {
+
+    font-style: italic;
+
+}
+
+
+/*=============================================================================
+    Lists
+=============================================================================*/
+
+ul,
+ol {
+
+    margin:
+
+        0;
+
+    padding-left:
+
+        1.5rem;
+
+}
+
+
+li {
+
+    color:
+
+        var(--color-text-secondary);
+
+    line-height:
+
+        var(--line-height-relaxed);
+
+}
+
+
+/*=============================================================================
+    Horizontal Rules
+=============================================================================*/
+
+/*
+    Dividers remain subtle to avoid visual clutter while still separating
+    scientific sections.
+*/
+
+hr {
+
+    border: none;
+
+    height: 1px;
+
+    background:
+
+        var(--color-border-subtle);
+
+    margin:
+
+        var(--space-8) 0;
+
+}
+
+
+/*=============================================================================
+    Links
+=============================================================================*/
+
+/*
+    Links inherit surrounding typography while using the application's
+    primary scientific blue for interaction feedback.
+*/
+
+a {
+
+    color:
+
+        inherit;
+
+    text-decoration: none;
+
+    transition:
+
+        color var(--duration-normal) var(--ease-standard);
+
+}
+
+
+a:hover {
+
+    color:
+
+        var(--color-primary-light);
+
+}
+
+
+a:active {
+
+    color:
+
+        var(--color-primary-bright);
+
+}
+
+
+/*=============================================================================
+    Images and Media
+=============================================================================*/
+
+/*
+    Images should never overflow their parent containers.
+
+    Scientific figures, journal graphics, and microscopy images should scale
+    naturally while preserving their aspect ratio.
+*/
+
+img,
+picture,
+svg,
+canvas,
+video {
+
+    display: block;
+
+    max-width: 100%;
+
+    height: auto;
+
+}
+
+
+/*
+    SVG illustrations inherit the current text color unless explicitly styled.
+*/
+
+svg {
+
+    fill: none;
+
+}
+
+
+/*=============================================================================
+    Buttons
+=============================================================================*/
+
+/*
+    Native buttons act as the foundation for future reusable button components.
+
+    Visual styling remains intentionally restrained so higher-level components
+    can extend these defaults.
+*/
+
+button {
+
+    font: inherit;
+
+    color: inherit;
+
+    background: transparent;
+
+    border: none;
+
+    padding: 0;
+
+    cursor: pointer;
+
+    user-select: none;
+
+    transition:
+
+        background-color var(--duration-normal) var(--ease-standard),
+
+        border-color var(--duration-normal) var(--ease-standard),
+
+        color var(--duration-normal) var(--ease-standard),
+
+        transform var(--duration-normal) var(--ease-standard),
+
+        box-shadow var(--duration-normal) var(--ease-standard);
+
+}
+
+
+button:disabled {
+
+    opacity:
+
+        var(--opacity-disabled);
+
+    cursor:
+
+        not-allowed;
+
+}
+
+
+/*=============================================================================
+    Forms
+=============================================================================*/
+
+/*
+    Form controls are designed to resemble professional scientific software.
+
+    Inputs should appear calm, readable and trustworthy instead of highly
+    decorative.
+*/
+
+form {
+
+    margin: 0;
+
+}
+
+
+/*=============================================================================
+    Labels
+=============================================================================*/
+
+label {
+
+    display: inline-block;
+
+    margin-bottom:
+
+        var(--space-2);
+
+    color:
+
+        var(--color-text-secondary);
+
+    font-size:
+
+        var(--font-size-sm);
+
+    font-weight:
+
+        var(--font-weight-medium);
+
+}
+
+
+/*=============================================================================
+    Inputs
+=============================================================================*/
+
+input {
+
+    width: 100%;
+
+    padding:
+
+        var(--space-3)
+
+        var(--space-4);
+
+    background:
+
+        rgba(255,255,255,.03);
+
+    color:
+
+        var(--color-text-primary);
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-default);
+
+    border-radius:
+
+        var(--radius-medium);
+
+    outline: none;
+
+    transition:
+
+        border-color var(--duration-normal) var(--ease-standard),
+
+        box-shadow var(--duration-normal) var(--ease-standard),
+
+        background-color var(--duration-normal) var(--ease-standard);
+
+}
+
+
+input:hover {
+
+    border-color:
+
+        rgba(255,255,255,.18);
+
+}
+
+
+input:focus {
+
+    border-color:
+
+        var(--color-border-focus);
+
+    box-shadow:
+
+        0 0 0 3px rgba(45,140,255,.18);
+
+}
+
+
+input:disabled {
+
+    opacity:
+
+        var(--opacity-disabled);
+
+}
+
+
+/*=============================================================================
+    Text areas
+=============================================================================*/
+
+/*
+    Text areas are primarily used for:
+
+        • research questions
+        • notes
+        • report editing
+*/
+
+textarea {
+
+    width: 100%;
+
+    min-height: 120px;
+
+    resize: vertical;
+
+    padding:
+
+        var(--space-4);
+
+    background:
+
+        rgba(255,255,255,.03);
+
+    color:
+
+        var(--color-text-primary);
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-default);
+
+    border-radius:
+
+        var(--radius-medium);
+
+    font: inherit;
+
+    line-height:
+
+        var(--line-height-relaxed);
+
+    outline: none;
+
+    transition:
+
+        border-color var(--duration-normal) var(--ease-standard),
+
+        box-shadow var(--duration-normal) var(--ease-standard);
+
+}
+
+
+textarea:hover {
+
+    border-color:
+
+        rgba(255,255,255,.18);
+
+}
+
+
+textarea:focus {
+
+    border-color:
+
+        var(--color-border-focus);
+
+    box-shadow:
+
+        0 0 0 3px rgba(45,140,255,.18);
+
+}
+
+
+/*=============================================================================
+    Select Elements
+=============================================================================*/
+
+select {
+
+    width: 100%;
+
+    padding:
+
+        var(--space-3)
+
+        var(--space-4);
+
+    background:
+
+        rgba(255,255,255,.03);
+
+    color:
+
+        var(--color-text-primary);
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-default);
+
+    border-radius:
+
+        var(--radius-medium);
+
+    font: inherit;
+
+    outline: none;
+
+    transition:
+
+        border-color var(--duration-normal) var(--ease-standard),
+
+        box-shadow var(--duration-normal) var(--ease-standard);
+
+}
+
+
+select:focus {
+
+    border-color:
+
+        var(--color-border-focus);
+
+    box-shadow:
+
+        0 0 0 3px rgba(45,140,255,.18);
+
+}
+
+
+/*=============================================================================
+    Fieldsets
+=============================================================================*/
+
+fieldset {
+
+    margin: 0;
+
+    padding:
+
+        var(--space-6);
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-default);
+
+    border-radius:
+
+        var(--radius-large);
+
+}
+
+
+legend {
+
+    padding:
+
+        0
+
+        var(--space-2);
+
+    color:
+
+        var(--color-text-secondary);
+
+}
+
+
+/*=============================================================================
+    Placeholder Text
+=============================================================================*/
+
+::placeholder {
+
+    color:
+
+        var(--color-text-muted);
+
+    opacity: 1;
+
+}
+
+
+/*=============================================================================
+    Code
+=============================================================================*/
+
+/*
+    Inline code appears in:
+
+        • API endpoints
+        • PMIDs
+        • commands
+        • configuration snippets
+*/
+
+code {
+
+    font-family:
+
+        var(--font-family-mono), monospace;
+
+    font-size:
+
+        .95em;
+
+    color:
+
+        var(--color-primary-light);
+
+}
+
+
+/*=============================================================================
+    Preformatted Text
+=============================================================================*/
+
+/*
+    Used for:
+
+        • logs
+        • JSON
+        • terminal output
+        • generated code
+*/
+
+pre {
+
+    overflow-x: auto;
+
+    padding:
+
+        var(--space-6);
+
+    border-radius:
+
+        var(--radius-large);
+
+    background:
+
+        rgba(255,255,255,.03);
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-default);
+
+    font-family:
+
+        var(--font-family-mono), monospace;
+
+    line-height:
+
+        1.6;
+
+}
+
+
+pre code {
+
+    color:
+
+        var(--color-text-secondary);
+
+}
+
+
+/*=============================================================================
+    Tables
+=============================================================================*/
+
+/*
+    Scientific tables should prioritize readability.
+
+    Examples include:
+
+        • search results
+        • evidence summaries
+        • benchmark metrics
+        • publication metadata
+*/
+
+table {
+
+    width: 100%;
+
+    border-collapse: collapse;
+
+}
+
+
+thead {
+
+    background:
+
+        rgba(255,255,255,.03);
+
+}
+
+
+th {
+
+    text-align: left;
+
+    padding:
+
+        var(--space-4);
+
+    color:
+
+        var(--color-text-primary);
+
+    font-weight:
+
+        var(--font-weight-semibold);
+
+    border-bottom:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-default);
+
+}
+
+
+td {
+
+    padding:
+
+        var(--space-4);
+
+    color:
+
+        var(--color-text-secondary);
+
+    border-bottom:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-subtle);
+
+}
+
+
+tbody tr {
+
+    transition:
+
+        background-color var(--duration-normal) var(--ease-standard);
+
+}
+
+
+tbody tr:hover {
+
+    background:
+
+        rgba(255,255,255,.025);
+
+}
+
+
+/*=============================================================================
+    Text Selection
+=============================================================================*/
+
+/*
+    Selected text adopts the application's primary scientific blue.
+
+    This provides a subtle but recognizable interaction cue while maintaining
+    excellent readability.
+*/
+
+::selection {
+
+    background:
+
+        rgba(45,140,255,.35);
+
+    color:
+
+        var(--color-text-primary);
+
+}
+
+
+/*=============================================================================
+    List Markers
+=============================================================================*/
+
+/*
+    Bullet markers adopt the application's muted typography color to reduce
+    unnecessary visual emphasis.
+*/
+
+::marker {
+
+    color:
+
+        var(--color-text-muted);
+
+}
+
+
+/*=============================================================================
+    Horizontal Scrolling
+=============================================================================*/
+
+/*
+    Prevent accidental horizontal scrolling caused by oversized scientific
+    visualizations or third-party components.
+*/
+
+body,
+main {
+
+    overflow-x: hidden;
+
+}
+
+
+/*=============================================================================
+    Scrollbars
+=============================================================================*/
+
+/*
+    Scrollbars are intentionally understated.
+
+    The goal is to preserve focus on scientific content while still providing
+    sufficient visual feedback for interaction.
+
+    WebKit browsers
+*/
+
+::-webkit-scrollbar {
+
+    width: 12px;
+
+    height: 12px;
+
+}
+
+
+::-webkit-scrollbar-track {
+
+    background:
+
+        var(--color-background-primary);
+
+}
+
+
+::-webkit-scrollbar-thumb {
+
+    background:
+
+        rgba(255,255,255,.10);
+
+    border-radius:
+
+        var(--radius-round);
+
+    border:
+
+        3px solid var(--color-background-primary);
+
+}
+
+
+::-webkit-scrollbar-thumb:hover {
+
+    background:
+
+        rgba(45,140,255,.40);
+
+}
+
+
+::-webkit-scrollbar-corner {
+
+    background:
+
+        transparent;
+
+}
+
+
+/*=============================================================================
+    Firefox Scrollbars
+=============================================================================*/
+
+* {
+
+    scrollbar-width: thin;
+
+    scrollbar-color:
+
+        rgba(255,255,255,.18)
+
+        var(--color-background-primary);
+
+}
+
+
+/*=============================================================================
+    Focus Visibility
+=============================================================================*/
+
+/*
+    Accessible keyboard navigation is a first-class design goal.
+
+    Focus indicators intentionally remain visible and should never be removed.
+
+    Reusable components may customize the appearance while preserving this
+    behavior.
+*/
+
+:focus-visible {
+
+    outline:
+
+        2px solid var(--color-primary);
+
+    outline-offset:
+
+        3px;
+
+}
+
+
+/*=============================================================================
+    Disabled Elements
+=============================================================================*/
+
+/*
+    Disabled controls remain readable while clearly communicating that they
+    cannot currently be interacted with.
+*/
+
+:disabled {
+
+    cursor:
+
+        not-allowed;
+
+}
+
+
+/*=============================================================================
+    Hidden Attribute
+=============================================================================*/
+
+/*
+    Native hidden elements should never participate in layout.
+*/
+
+[hidden] {
+
+    display: none !important;
+
+}
+
+
+/*=============================================================================
+    Scientific Workspace Background
+=============================================================================*/
+
+/*
+    Utility class applied to the application's highest layout container.
+
+    Provides the subtle grid often seen in scientific visualization software
+    and AI operations dashboards.
+
+    The grid remains intentionally restrained so it never competes with the
+    primary content.
+*/
+
+.scientific-workspace {
+
+    position: relative;
+
+    isolation: isolate;
+
+}
+
+
+.scientific-workspace::before {
+
+    content: "";
+
+    position: fixed;
+
+    inset: 0;
+
+    pointer-events: none;
+
+    z-index:
+
+        var(--z-base);
+
+    background-image:
+
+        linear-gradient(
+
+            rgba(255,255,255,.025) 1px,
+
+            transparent 1px
+
+        ),
+
+        linear-gradient(
+
+            90deg,
+
+            rgba(255,255,255,.025) 1px,
+
+            transparent 1px
+
+        );
+
+    background-size:
+
+        72px 72px;
+
+    opacity:
+
+        .18;
+
+}
+
+
+/*=============================================================================
+    Native Text Highlighting
+=============================================================================*/
+
+/*
+    Prevent iOS tap highlights from introducing bright flashes that conflict
+    with the application's dark appearance.
+*/
+
+* {
+
+    -webkit-tap-highlight-color:
+
+        transparent;
+
+}
+
+
+/*=============================================================================
+    Embedded Content
+=============================================================================*/
+
+/*
+    Embedded scientific viewers, notebooks and external visualizations should
+    never display borders by default.
+*/
+
+iframe {
+
+    border: none;
+
+}
+
+
+/*=============================================================================
+    Browser Autofill
+=============================================================================*/
+
+/*
+    Prevent browser autofill from introducing bright backgrounds that clash
+    with the scientific dark theme.
+*/
+
+input:-webkit-autofill,
+
+input:-webkit-autofill:hover,
+
+input:-webkit-autofill:focus,
+
+textarea:-webkit-autofill,
+
+select:-webkit-autofill {
+
+    -webkit-text-fill-color:
+
+        var(--color-text-primary);
+
+    transition:
+
+        background-color 99999s;
+
+}
+
+
+/*=============================================================================
+    Reduced Motion
+=============================================================================*/
+
+/*
+    Respect users that prefer reduced motion.
+
+    Scientific interfaces should remain calm and comfortable for prolonged
+    research sessions.
+*/
+
+@media (prefers-reduced-motion: reduce) {
+
+    html {
+
+        scroll-behavior: auto;
+
+    }
+
+    *,
+
+    *::before,
+
+    *::after {
+
+        animation-duration:
+
+            .01ms !important;
+
+        animation-iteration-count:
+
+            1 !important;
+
+        transition-duration:
+
+            .01ms !important;
+
+        scroll-behavior:
+
+            auto !important;
+
+    }
+
+}
+
+
+/*=============================================================================
+    Print Styles
+=============================================================================*/
+
+/*
+    Reports should print cleanly without dark backgrounds or decorative
+    interface elements.
+
+    Only the scientific content should remain visible.
+*/
+
+@media print {
+
+    html,
+
+    body {
+
+        background:
+
+            white !important;
+
+        color:
+
+            black !important;
+
+    }
+
+    .scientific-workspace::before {
+
+        display: none;
+
+    }
+
+    nav,
+
+    aside,
+
+    footer,
+
+    button {
+
+        display: none !important;
+
+    }
+
+    a {
+
+        color:
+
+            black;
+
+        text-decoration:
+
+            underline;
+
+    }
+
+}
+
+
+/*=============================================================================
+    End of File
+=============================================================================*/
+
+/*
+    This stylesheet intentionally contains only browser-level styling.
+
+    Reusable visual primitives such as:
+
+        • ScientificCard
+        • GlassPanel
+        • PrimaryButton
+        • Badge
+        • MetricCard
+        • Panel
+        • StatusIndicator
+
+    are implemented in:
+
+        components.css
+
+    Motion primitives are implemented in:
+
+        animations.css
+
+    Layout helpers are implemented in:
+
+        utilities.css
+
+    This separation follows the same architectural principles as the backend,
+    where each module has a single, clearly defined responsibility.
+*/

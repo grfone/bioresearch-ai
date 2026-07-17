@@ -1,0 +1,65 @@
+/******************************************************************************
+ *
+ * index.css
+ *
+ * BioResearch AI
+ * Scientific Research Workstation
+ *
+ *******************************************************************************
+ *
+ * Purpose
+ * -------
+ * Central stylesheet entry point for the BioResearch AI frontend.
+ *
+ * This file composes the complete design system by importing each stylesheet
+ * in dependency order.
+ *
+ * Import Order
+ * ------------
+ *
+ * 1. Tailwind CSS
+ *    Provides utility generation.
+ *
+ * 2. Design Tokens
+ *    Colors, typography, spacing, shadows.
+ *
+ * 3. Global Styles
+ *    Browser reset and HTML defaults.
+ *
+ * 4. Animation Primitives
+ *    Reusable motion definitions.
+ *
+ * 5. Utility Classes
+ *    Generic layout and helper utilities.
+ *
+ * 6. Components
+ *    Application-specific UI components.
+ *
+ * Architecture
+ * ------------
+ *
+ *                 index.css
+ *                     │
+ *     ┌───────────────┼───────────────┐
+ *     │               │               │
+ * tailwind.css   variables.css   globals.css
+ *                                     │
+ *                               animations.css
+ *                                     │
+ *                               utilities.css
+ *                                     │
+ *                              components.css
+ *
+ ******************************************************************************/
+
+@import "./tailwind.css";
+
+@import "./variables.css";
+
+@import "./globals.css";
+
+@import "./animations.css";
+
+@import "./utilities.css";
+
+@import "./components.css";

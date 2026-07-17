@@ -1,0 +1,716 @@
+/*=============================================================================
+    animations.css
+
+    BioResearch AI
+    Scientific Research Workstation
+
+===============================================================================
+
+Purpose
+-------
+Defines reusable animation primitives for the BioResearch AI interface.
+
+Animations are intentionally subtle and communicate:
+
+    • system state
+    • workflow progression
+    • scientific activity
+    • interface responsiveness
+
+Design Philosophy
+-----------------
+
+Motion should feel:
+
+    Calm
+    Deliberate
+    Intelligent
+    Scientific
+
+Avoid:
+
+    • bouncing
+    • overshooting
+    • exaggerated scaling
+    • flashy transitions
+
+Animation should reinforce information hierarchy rather than compete with it.
+
+=============================================================================*/
+
+
+
+/*=============================================================================
+    Fade In
+=============================================================================*/
+
+@keyframes fade-in {
+
+    from {
+
+        opacity: 0;
+
+    }
+
+    to {
+
+        opacity: 1;
+
+    }
+
+}
+
+.animate-fade-in {
+
+    animation:
+
+        fade-in
+
+        var(--duration-normal)
+
+        ease;
+
+}
+
+
+
+/*=============================================================================
+    Fade Up
+=============================================================================*/
+
+@keyframes fade-up {
+
+    from {
+
+        opacity: 0;
+
+        transform:
+
+            translateY(16px);
+
+    }
+
+    to {
+
+        opacity: 1;
+
+        transform:
+
+            translateY(0);
+
+    }
+
+}
+
+.animate-fade-up {
+
+    animation:
+
+        fade-up
+
+        var(--duration-normal)
+
+        ease;
+
+}
+
+
+
+/*=============================================================================
+    Fade Down
+=============================================================================*/
+
+@keyframes fade-down {
+
+    from {
+
+        opacity: 0;
+
+        transform:
+
+            translateY(-12px);
+
+    }
+
+    to {
+
+        opacity: 1;
+
+        transform:
+
+            translateY(0);
+
+    }
+
+}
+
+.animate-fade-down {
+
+    animation:
+
+        fade-down
+
+        var(--duration-normal)
+
+        ease;
+
+}
+
+
+
+/*=============================================================================
+    Scale In
+=============================================================================*/
+
+@keyframes scale-in {
+
+    from {
+
+        opacity: 0;
+
+        transform:
+
+            scale(.97);
+
+    }
+
+    to {
+
+        opacity: 1;
+
+        transform:
+
+            scale(1);
+
+    }
+
+}
+
+.animate-scale-in {
+
+    animation:
+
+        scale-in
+
+        var(--duration-normal)
+
+        ease;
+
+}
+
+
+
+/*=============================================================================
+    Glow Pulse
+===============================================================================
+
+Used for
+
+    Active AI agents
+
+    Running workflow nodes
+
+    Live processing
+
+=============================================================================*/
+
+@keyframes glow-pulse {
+
+    0% {
+
+        box-shadow:
+
+            0 0 0 rgba(45,140,255,.18);
+
+    }
+
+    50% {
+
+        box-shadow:
+
+            0 0 22px rgba(45,140,255,.35);
+
+    }
+
+    100% {
+
+        box-shadow:
+
+            0 0 0 rgba(45,140,255,.18);
+
+    }
+
+}
+
+.animate-glow {
+
+    animation:
+
+        glow-pulse
+
+        2.6s
+
+        ease-in-out
+
+        infinite;
+
+}
+
+
+
+/*=============================================================================
+    Scientific Gradient Flow
+===============================================================================
+
+Used on
+
+    Hero titles
+
+    Scientific dividers
+
+    Important metrics
+
+=============================================================================*/
+
+@keyframes gradient-flow {
+
+    0% {
+
+        background-position:
+
+            0 50%;
+
+    }
+
+    100% {
+
+        background-position:
+
+            100% 50%;
+
+    }
+
+}
+
+.animate-gradient {
+
+    background-size:
+
+        200%
+
+        200%;
+
+    animation:
+
+        gradient-flow
+
+        8s
+
+        linear
+
+        infinite;
+
+}
+
+
+
+/*=============================================================================
+    Workflow Connection
+===============================================================================
+
+Creates the impression of information flowing between AI agents.
+
+=============================================================================*/
+
+@keyframes data-flow {
+
+    from {
+
+        background-position:
+
+            0 0;
+
+    }
+
+    to {
+
+        background-position:
+
+            120px 0;
+
+    }
+
+}
+
+.animate-data-flow {
+
+    background-image:
+
+        linear-gradient(
+
+            90deg,
+
+            transparent,
+
+            rgba(45,140,255,.55),
+
+            transparent
+
+        );
+
+    background-size:
+
+        120px
+
+        100%;
+
+    animation:
+
+        data-flow
+
+        2.2s
+
+        linear
+
+        infinite;
+
+}
+
+
+
+/*=============================================================================
+    Scientific Spinner
+=============================================================================*/
+
+@keyframes scientific-spin {
+
+    from {
+
+        transform:
+
+            rotate(0deg);
+
+    }
+
+    to {
+
+        transform:
+
+            rotate(360deg);
+
+    }
+
+}
+
+.animate-spin {
+
+    animation:
+
+        scientific-spin
+
+        1s
+
+        linear
+
+        infinite;
+
+}
+
+
+
+/*=============================================================================
+    Shimmer
+===============================================================================
+
+Skeleton loading animation.
+
+=============================================================================*/
+
+@keyframes shimmer {
+
+    from {
+
+        transform:
+
+            translateX(-100%);
+
+    }
+
+    to {
+
+        transform:
+
+            translateX(100%);
+
+    }
+
+}
+
+.animate-shimmer::after {
+
+    content: "";
+
+    position: absolute;
+
+    inset: 0;
+
+    background:
+
+        linear-gradient(
+
+            90deg,
+
+            transparent,
+
+            rgba(255,255,255,.08),
+
+            transparent
+
+        );
+
+    animation:
+
+        shimmer
+
+        1.8s
+
+        infinite;
+
+}
+
+
+
+/*=============================================================================
+    Floating
+===============================================================================
+
+Very subtle elevation.
+
+Used for
+
+    Scientific illustrations
+
+    DNA icons
+
+    AI agent graphics
+
+=============================================================================*/
+
+@keyframes floating {
+
+    0% {
+
+        transform:
+
+            translateY(0);
+
+    }
+
+    50% {
+
+        transform:
+
+            translateY(-5px);
+
+    }
+
+    100% {
+
+        transform:
+
+            translateY(0);
+
+    }
+
+}
+
+.animate-floating {
+
+    animation:
+
+        floating
+
+        5s
+
+        ease-in-out
+
+        infinite;
+
+}
+
+
+
+/*=============================================================================
+    Reveal
+===============================================================================
+
+Progressive appearance of generated content.
+
+=============================================================================*/
+
+@keyframes reveal {
+
+    from {
+
+        opacity: 0;
+
+        clip-path:
+
+            inset(0 0 100% 0);
+
+    }
+
+    to {
+
+        opacity: 1;
+
+        clip-path:
+
+            inset(0);
+
+    }
+
+}
+
+.animate-reveal {
+
+    animation:
+
+        reveal
+
+        .8s
+
+        ease;
+
+}
+
+
+
+/*=============================================================================
+    Attention Pulse
+===============================================================================
+
+Reserved for
+
+    Human review
+
+    Validation required
+
+    Important warnings
+
+Use sparingly.
+
+=============================================================================*/
+
+@keyframes attention {
+
+    0% {
+
+        opacity: 1;
+
+    }
+
+    50% {
+
+        opacity: .65;
+
+    }
+
+    100% {
+
+        opacity: 1;
+
+    }
+
+}
+
+.animate-attention {
+
+    animation:
+
+        attention
+
+        1.8s
+
+        ease-in-out
+
+        infinite;
+
+}
+
+
+
+/*=============================================================================
+    Hover Lift
+===============================================================================
+
+Applied through a utility class instead of inline styles.
+
+=============================================================================*/
+
+.animate-hover-lift {
+
+    transition:
+
+        transform
+
+        var(--duration-normal),
+
+        box-shadow
+
+        var(--duration-normal);
+
+}
+
+.animate-hover-lift:hover {
+
+    transform:
+
+        translateY(-4px);
+
+}
+
+
+
+/*=============================================================================
+    Reduced Motion Support
+
+    Accessibility is a first-class design principle.
+
+=============================================================================*/
+
+@media (prefers-reduced-motion: reduce) {
+
+    *,
+
+    *::before,
+
+    *::after {
+
+        animation-duration: .01ms !important;
+
+        animation-iteration-count: 1 !important;
+
+        transition-duration: .01ms !important;
+
+        scroll-behavior: auto !important;
+
+    }
+
+}
+
+
+
+/*=============================================================================
+    End of File
+
+    Motion Principles
+
+        Slow
+        Predictable
+        Functional
+        Scientific
+
+    Motion communicates system intelligence rather than visual excitement.
+
+=============================================================================*/

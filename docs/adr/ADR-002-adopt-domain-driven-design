@@ -1,0 +1,86 @@
+# ADR-002: Adopt Domain-Driven Design (DDD)
+
+## Status
+
+Accepted
+
+---
+
+## Context
+
+BioResearch AI models a complex biomedical research workflow involving
+research questions, scientific publications, evidence synthesis, reports,
+citations, and persistent workspaces.
+
+As the platform evolves to support additional literature sources,
+biological databases, AI agents, and scientific workflows, the business
+logic will become increasingly sophisticated.
+
+A simple data-centric design would couple business rules to infrastructure
+and make the domain difficult to evolve and maintain.
+
+---
+
+## Decision
+
+The project will adopt Domain-Driven Design (DDD) to organize the core
+business logic around domain concepts rather than technical concerns.
+
+The Domain layer will define:
+
+- Entities
+- Value Objects
+- Domain Interfaces
+- Domain Services (when necessary)
+
+Application services will orchestrate use cases while Infrastructure
+provides concrete implementations of external dependencies.
+
+The Domain must remain independent of frameworks, databases, APIs,
+and AI providers.
+
+---
+
+## Alternatives Considered
+
+### Anemic Domain Model
+
+Simple to implement but places business logic in services rather than
+the domain model.
+
+### Transaction Script
+
+Suitable for CRUD applications but becomes difficult to maintain as
+business complexity grows.
+
+### Domain-Driven Design (DDD)
+
+Encapsulates business rules within domain models, improves maintainability,
+and aligns naturally with complex scientific workflows.
+
+Chosen.
+
+---
+
+## Consequences
+
+Advantages
+
+- Clear representation of biomedical research concepts
+- Strong separation between business logic and infrastructure
+- Easier testing of domain behavior
+- Improved extensibility as new workflows are introduced
+- Better alignment between code and scientific processes
+
+Disadvantages
+
+- Additional design effort
+- More abstractions than simpler architectures
+- Requires familiarity with DDD principles
+
+Future considerations
+
+As BioResearch AI evolves toward multi-agent scientific reasoning,
+knowledge graph construction, and integration with additional biomedical
+databases, the domain model can grow without requiring significant changes
+to application or infrastructure layers.

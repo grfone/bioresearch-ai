@@ -1,0 +1,4170 @@
+/*
+===============================================================================
+
+BioResearch AI
+Component Library
+
+Part 1 — Layout Containers
+
+===============================================================================
+
+Purpose
+-------
+Defines the reusable layout primitives used throughout the BioResearch AI
+frontend.
+
+These components provide the structural foundation of the interface while
+remaining independent of any specific business workflow.
+
+Responsibilities
+----------------
+
+This stylesheet defines:
+
+• page containers
+• sections
+• scientific surfaces
+• glass panels
+• scientific cards
+• panel headers
+• titles
+• descriptions
+• dividers
+
+These components intentionally contain no application logic.
+
+They should be composed by React components such as:
+
+    Navigation
+
+    PaperList
+
+    EvidencePanel
+
+    ReportPanel
+
+    ReferencesPanel
+
+Architecture
+------------
+
+Every visual element in the application should ultimately be composed from
+these primitives.
+
+Example:
+
+    Workspace
+
+        Page
+
+            Section
+
+                GlassPanel
+
+                    PanelHeader
+
+                    ScientificCard
+
+                        ...
+
+Design Philosophy
+-----------------
+
+The interface should resemble a scientific operating system.
+
+The user should perceive organized research spaces rather than isolated web
+widgets.
+
+Components emphasize:
+
+• generous whitespace
+
+• restrained borders
+
+• subtle elevation
+
+• calm visual hierarchy
+
+• minimal decoration
+
+Author
+------
+Guillermo Ramajo Fernández
+
+===============================================================================
+*/
+
+
+/*=============================================================================
+    Page Container
+=============================================================================*/
+
+/*
+    Primary layout container.
+
+    Centers application content while preserving generous margins on
+    ultra-wide monitors.
+
+    Typical usage:
+
+        <main class="page">
+*/
+
+.page {
+
+    width:
+
+        min(
+            var(--layout-page-width),
+            92vw
+        );
+
+    margin:
+
+        0 auto;
+
+}
+
+
+/*=============================================================================
+    Section
+=============================================================================*/
+
+/*
+    Vertical spacing between major research areas.
+
+    Examples:
+
+        Search
+
+        Literature
+
+        Evidence
+
+        Report
+*/
+
+.section {
+
+    padding:
+
+        var(--space-12)
+
+        0;
+
+}
+
+
+/*=============================================================================
+    Scientific Surface
+=============================================================================*/
+
+/*
+    Base surface used beneath cards and panels.
+
+    Surfaces create depth while remaining almost flat.
+
+    This should be preferred over hardcoded backgrounds.
+*/
+
+.surface {
+
+    background:
+
+        var(--color-background-surface);
+
+}
+
+
+/*=============================================================================
+    Glass Panel
+=============================================================================*/
+
+/*
+    Primary workspace container.
+
+    Used for:
+
+        Evidence Panel
+
+        Report Panel
+
+        References
+
+        Agent Console
+
+    The glass effect remains intentionally subtle to preserve readability.
+*/
+
+.glass-panel {
+
+    background:
+
+        var(--glass-background);
+
+    backdrop-filter:
+
+        blur(
+            var(--glass-blur)
+        );
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--glass-border);
+
+    border-radius:
+
+        var(--radius-panel);
+
+    box-shadow:
+
+        var(--shadow-panel);
+
+    padding:
+
+        var(--space-8);
+
+}
+
+
+/*=============================================================================
+    Scientific Card
+=============================================================================*/
+
+/*
+    Fundamental reusable card component.
+
+    Nearly every object in the application derives from this element.
+
+    Examples:
+
+        Paper Card
+
+        Citation
+
+        Metric
+
+        Agent
+
+        Dataset
+
+        Search Result
+*/
+
+.scientific-card {
+
+    position:
+
+        relative;
+
+    background:
+
+        rgba(17,24,39,.82);
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-default);
+
+    border-radius:
+
+        var(--radius-large);
+
+    padding:
+
+        var(--space-6);
+
+    transition:
+
+        transform
+
+        var(--duration-normal)
+
+        var(--ease-standard),
+
+        border-color
+
+        var(--duration-normal)
+
+        var(--ease-standard),
+
+        box-shadow
+
+        var(--duration-normal)
+
+        var(--ease-standard);
+
+}
+
+
+/*
+    Hover State
+
+    Cards gently rise to communicate interactivity.
+
+    Motion remains restrained.
+
+    No dramatic scaling.
+*/
+
+.scientific-card:hover {
+
+    transform:
+
+        translateY(-3px);
+
+    border-color:
+
+        var(--color-border-active);
+
+    box-shadow:
+
+        var(--shadow-glow);
+
+}
+
+
+/*=============================================================================
+    Interactive Card
+=============================================================================*/
+
+/*
+    Cards representing selectable research entities.
+
+    Examples:
+
+        Papers
+
+        Reports
+
+        Workspaces
+*/
+
+.scientific-card-interactive {
+
+    cursor:
+
+        pointer;
+
+}
+
+
+.scientific-card-interactive:active {
+
+    transform:
+
+        translateY(-1px);
+
+}
+
+
+/*=============================================================================
+    Panel Header
+=============================================================================*/
+
+/*
+    Standard header used across every workspace panel.
+
+    Structure:
+
+        Title
+
+        Description
+
+        Toolbar (optional)
+*/
+
+.panel-header {
+
+    display:
+
+        flex;
+
+    justify-content:
+
+        space-between;
+
+    align-items:
+
+        flex-start;
+
+    gap:
+
+        var(--space-6);
+
+    margin-bottom:
+
+        var(--space-6);
+
+}
+
+
+/*=============================================================================
+    Panel Header Content
+=============================================================================*/
+
+.panel-header-content {
+
+    display:
+
+        flex;
+
+    flex-direction:
+
+        column;
+
+    gap:
+
+        var(--space-2);
+
+}
+
+
+/*=============================================================================
+    Panel Title
+=============================================================================*/
+
+/*
+    Examples:
+
+        Evidence
+
+        Literature
+
+        Report
+
+        References
+*/
+
+.panel-title {
+
+    margin:
+
+        0;
+
+    color:
+
+        var(--color-text-primary);
+
+    font-size:
+
+        var(--font-size-xl);
+
+    font-weight:
+
+        var(--font-weight-bold);
+
+    letter-spacing:
+
+        -.02em;
+
+}
+
+
+/*=============================================================================
+    Panel Description
+=============================================================================*/
+
+/*
+    Secondary explanation beneath the title.
+
+    Examples:
+
+        "Evidence extracted from selected papers."
+
+        "Generated scientific report."
+*/
+
+.panel-description {
+
+    color:
+
+        var(--color-text-muted);
+
+    font-size:
+
+        var(--font-size-sm);
+
+    line-height:
+
+        var(--line-height-normal);
+
+}
+
+
+/*=============================================================================
+    Panel Toolbar
+=============================================================================*/
+
+/*
+    Right-aligned action container.
+
+    Examples:
+
+        Export
+
+        Refresh
+
+        Filter
+
+        Settings
+*/
+
+.panel-toolbar {
+
+    display:
+
+        flex;
+
+    align-items:
+
+        center;
+
+    gap:
+
+        var(--space-3);
+
+}
+
+
+/*=============================================================================
+    Divider
+=============================================================================*/
+
+/*
+    Reusable separator.
+
+    Should be preferred over <hr> inside reusable components.
+*/
+
+.divider {
+
+    width:
+
+        100%;
+
+    height:
+
+        1px;
+
+    background:
+
+        var(--color-border-subtle);
+
+}
+
+
+/*=============================================================================
+    Vertical Divider
+=============================================================================*/
+
+.divider-vertical {
+
+    width:
+
+        1px;
+
+    align-self:
+
+        stretch;
+
+    background:
+
+        var(--color-border-subtle);
+
+}
+
+
+/*=============================================================================
+    Elevated Surface
+=============================================================================*/
+
+/*
+    Used for nested panels inside larger workspaces.
+
+    Provides a subtle increase in elevation while maintaining the overall
+    minimalist aesthetic.
+*/
+
+.surface-elevated {
+
+    background:
+
+        var(--color-background-elevated);
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-subtle);
+
+    border-radius:
+
+        var(--radius-large);
+
+}
+
+
+/*=============================================================================
+    Content Stack
+=============================================================================*/
+
+/*
+    Utility component for vertically stacking child elements with consistent
+    spacing.
+
+    Preferred over repeatedly adding margins between children.
+*/
+
+.stack {
+
+    display:
+
+        flex;
+
+    flex-direction:
+
+        column;
+
+    gap:
+
+        var(--space-6);
+
+}
+
+
+/*=============================================================================
+    Inline Group
+=============================================================================*/
+
+/*
+    Horizontal grouping container.
+
+    Used for badges, actions, metadata and compact controls.
+*/
+
+.inline-group {
+
+    display:
+
+        flex;
+
+    align-items:
+
+        center;
+
+    gap:
+
+        var(--space-3);
+
+    flex-wrap:
+
+        wrap;
+
+}
+
+
+/*=============================================================================
+    Buttons & Interactive Controls
+
+    Part 2
+
+=============================================================================*/
+
+/*
+    Buttons communicate actions without overwhelming the interface.
+
+    The styling follows the application's guiding principles:
+
+        • minimal
+        • scientific
+        • calm
+        • trustworthy
+
+    Motion is intentionally restrained.
+*/
+
+
+/*=============================================================================
+    Base Button
+=============================================================================*/
+
+/*
+    Foundation for every button.
+
+    Specialized buttons extend this class rather than redefining styles.
+*/
+
+.btn {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: var(--space-3);
+
+    padding:
+
+        var(--space-3)
+
+        var(--space-6);
+
+    min-height: 44px;
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        transparent;
+
+    border-radius:
+
+        var(--radius-medium);
+
+    font-size:
+
+        var(--font-size-sm);
+
+    font-weight:
+
+        var(--font-weight-semibold);
+
+    line-height: 1;
+
+    cursor: pointer;
+
+    user-select: none;
+
+    white-space: nowrap;
+
+    transition:
+
+        background-color var(--duration-normal) var(--ease-standard),
+
+        border-color var(--duration-normal) var(--ease-standard),
+
+        color var(--duration-normal) var(--ease-standard),
+
+        transform var(--duration-normal) var(--ease-standard),
+
+        box-shadow var(--duration-normal) var(--ease-standard);
+
+}
+
+
+/*
+    Hover
+
+    Buttons rise only slightly.
+
+    The application should never feel playful.
+*/
+
+.btn:hover {
+
+    transform:
+
+        translateY(-2px);
+
+}
+
+
+/*
+    Active
+
+    Small downward movement provides tactile feedback.
+*/
+
+.btn:active {
+
+    transform:
+
+        translateY(0);
+
+}
+
+
+/*
+    Disabled
+
+    Used while AI agents are processing requests.
+*/
+
+.btn:disabled {
+
+    opacity:
+
+        var(--opacity-disabled);
+
+    cursor:
+
+        not-allowed;
+
+    transform:
+
+        none;
+
+}
+
+
+/*=============================================================================
+    Primary Button
+=============================================================================*/
+
+/*
+    Highest emphasis action.
+
+    Examples
+
+        Start Research
+
+        Generate Report
+
+        Search Literature
+*/
+
+.btn-primary {
+
+    background:
+
+        var(--color-primary);
+
+    color:
+
+        var(--color-white);
+
+    box-shadow:
+
+        0 0 18px rgba(45,140,255,.18);
+
+}
+
+
+.btn-primary:hover {
+
+    background:
+
+        var(--color-primary-light);
+
+    box-shadow:
+
+        var(--shadow-glow);
+
+}
+
+
+/*=============================================================================
+    Secondary Button
+=============================================================================*/
+
+/*
+    Lower emphasis.
+
+    Used for actions that should remain visible without competing with the
+    primary workflow.
+*/
+
+.btn-secondary {
+
+    background:
+
+        rgba(255,255,255,.04);
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-default);
+
+    color:
+
+        var(--color-text-primary);
+
+}
+
+
+.btn-secondary:hover {
+
+    border-color:
+
+        var(--color-border-active);
+
+    background:
+
+        rgba(255,255,255,.06);
+
+}
+
+
+/*=============================================================================
+    Outline Button
+=============================================================================*/
+
+/*
+    Transparent scientific action.
+
+    Appropriate for
+
+        Export
+
+        Filter
+
+        View Details
+*/
+
+.btn-outline {
+
+    background:
+
+        transparent;
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-active);
+
+    color:
+
+        var(--color-primary-light);
+
+}
+
+
+.btn-outline:hover {
+
+    background:
+
+        rgba(45,140,255,.08);
+
+}
+
+
+/*=============================================================================
+    Ghost Button
+=============================================================================*/
+
+/*
+    Minimal action.
+
+    Used inside toolbars.
+*/
+
+.btn-ghost {
+
+    background:
+
+        transparent;
+
+    color:
+
+        var(--color-text-secondary);
+
+}
+
+
+.btn-ghost:hover {
+
+    background:
+
+        rgba(255,255,255,.04);
+
+    color:
+
+        var(--color-text-primary);
+
+}
+
+
+/*=============================================================================
+    Icon Button
+=============================================================================*/
+
+/*
+    Square button containing only an icon.
+
+    Typical size:
+
+        40×40 px
+*/
+
+.icon-button {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    width: 40px;
+
+    height: 40px;
+
+    border-radius:
+
+        var(--radius-medium);
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-default);
+
+    background:
+
+        rgba(255,255,255,.03);
+
+    transition:
+
+        all
+
+        var(--duration-normal)
+
+        var(--ease-standard);
+
+}
+
+
+.icon-button:hover {
+
+    border-color:
+
+        var(--color-border-active);
+
+    box-shadow:
+
+        var(--shadow-glow);
+
+}
+
+
+/*=============================================================================
+    Input Group
+=============================================================================*/
+
+/*
+    Groups inputs with buttons.
+
+    Example
+
+    +---------------------------------------------+
+    | Search papers...              | Search |
+    +---------------------------------------------+
+*/
+
+.input-group {
+
+    display: flex;
+
+    align-items: stretch;
+
+    gap:
+
+        var(--space-3);
+
+}
+
+
+/*=============================================================================
+    Scientific Input
+=============================================================================*/
+
+/*
+    Primary text input.
+
+    Used throughout the application for
+
+        Research questions
+
+        Search
+
+        Filtering
+
+        Metadata
+*/
+
+.input {
+
+    width: 100%;
+
+    min-height: 48px;
+
+    padding:
+
+        var(--space-3)
+
+        var(--space-5);
+
+    border-radius:
+
+        var(--radius-medium);
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-default);
+
+    background:
+
+        rgba(255,255,255,.03);
+
+    color:
+
+        var(--color-text-primary);
+
+    transition:
+
+        border-color
+
+        var(--duration-normal)
+
+        var(--ease-standard),
+
+        box-shadow
+
+        var(--duration-normal)
+
+        var(--ease-standard),
+
+        background-color
+
+        var(--duration-normal)
+
+        var(--ease-standard);
+
+}
+
+
+.input:hover {
+
+    border-color:
+
+        rgba(255,255,255,.18);
+
+}
+
+
+.input:focus {
+
+    border-color:
+
+        var(--color-border-focus);
+
+    box-shadow:
+
+        0 0 0 3px rgba(45,140,255,.18);
+
+}
+
+
+/*=============================================================================
+    Search Input
+=============================================================================*/
+
+/*
+    Specialized research search field.
+*/
+
+.search-input {
+
+    position: relative;
+
+    width: 100%;
+
+}
+
+
+.search-input input {
+
+    padding-left:
+
+        3rem;
+
+}
+
+
+/*
+    Search icon.
+
+    Typically rendered using Lucide Search.
+*/
+
+.search-input-icon {
+
+    position: absolute;
+
+    left:
+
+        var(--space-4);
+
+    top: 50%;
+
+    transform:
+
+        translateY(-50%);
+
+    color:
+
+        var(--color-text-muted);
+
+    pointer-events: none;
+
+}
+
+
+/*=============================================================================
+    Textarea
+=============================================================================*/
+
+/*
+    Used for
+
+        Research questions
+
+        Notes
+
+        Report editing
+*/
+
+.textarea {
+
+    min-height: 180px;
+
+    resize: vertical;
+
+}
+
+
+/*=============================================================================
+    Input Label
+=============================================================================*/
+
+/*
+    Consistent field labels throughout the application.
+*/
+
+.field-label {
+
+    display: block;
+
+    margin-bottom:
+
+        var(--space-2);
+
+    color:
+
+        var(--color-text-secondary);
+
+    font-size:
+
+        var(--font-size-sm);
+
+    font-weight:
+
+        var(--font-weight-medium);
+
+}
+
+
+/*=============================================================================
+    Input Hint
+=============================================================================*/
+
+/*
+    Secondary explanation beneath a control.
+
+    Example
+
+        Enter a biomedical research question.
+*/
+
+.field-hint {
+
+    margin-top:
+
+        var(--space-2);
+
+    color:
+
+        var(--color-text-muted);
+
+    font-size:
+
+        var(--font-size-xs);
+
+}
+
+
+/*=============================================================================
+    Input Error
+=============================================================================*/
+
+/*
+    Validation feedback.
+
+    Reserved for user input errors.
+
+    AI reasoning errors should instead be displayed using dedicated status
+    components.
+*/
+
+.field-error {
+
+    margin-top:
+
+        var(--space-2);
+
+    color:
+
+        var(--color-error);
+
+    font-size:
+
+        var(--font-size-xs);
+
+}
+
+
+/*=============================================================================
+    Command Bar
+=============================================================================*/
+
+/*
+    Large search interface used on the application's landing page.
+
+    Inspired by modern AI research environments.
+
+    Example
+
+    +------------------------------------------------------------+
+    | Ask a biomedical research question...                      |
+    +------------------------------------------------------------+
+*/
+
+.command-bar {
+
+    display: flex;
+
+    align-items: center;
+
+    gap:
+
+        var(--space-4);
+
+    padding:
+
+        var(--space-4);
+
+    background:
+
+        rgba(255,255,255,.03);
+
+    border:
+
+        var(--border-width-thin)
+
+        solid
+
+        var(--color-border-default);
+
+    border-radius:
+
+        var(--radius-panel);
+
+    transition:
+
+        border-color
+
+        var(--duration-normal)
+
+        var(--ease-standard),
+
+        box-shadow
+
+        var(--duration-normal)
+
+        var(--ease-standard);
+
+}
+
+
+.command-bar:focus-within {
+
+    border-color:
+
+        var(--color-border-focus);
+
+    box-shadow:
+
+        var(--shadow-glow);
+
+}
+
+
+/*=============================================================================
+    Status Components
+
+    Part 3
+
+===============================================================================
+
+Purpose
+-------
+Provides reusable visual components for communicating scientific state,
+confidence, progress and evidence quality.
+
+Unlike generic web dashboards, BioResearch AI presents research information.
+These components are intentionally restrained and data-centric.
+
+Examples
+
+    • AI Agent Status
+    • Validation Status
+    • Confidence Scores
+    • Evidence Strength
+    • Search Progress
+    • Research Metrics
+
+=============================================================================*/
+
+
+/*=============================================================================
+    Badge
+=============================================================================*/
+
+/*
+    Small status label.
+
+    Used for:
+
+        PubMed
+
+        Open Access
+
+        Reviewed
+
+        Experimental
+
+        Clinical Trial
+*/
+
+.badge {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: var(--space-2);
+
+    padding:
+
+        .35rem
+        .75rem;
+
+    border-radius:
+
+        var(--radius-round);
+
+    font-size:
+
+        var(--font-size-xs);
+
+    font-weight:
+
+        var(--font-weight-semibold);
+
+    letter-spacing:
+
+        .02em;
+
+    border:
+
+        1px solid transparent;
+
+}
+
+
+/*=============================================================================
+    Information Badge
+=============================================================================*/
+
+.badge-info {
+
+    background:
+
+        rgba(45,140,255,.12);
+
+    color:
+
+        var(--color-primary-light);
+
+    border-color:
+
+        rgba(45,140,255,.30);
+
+}
+
+
+/*=============================================================================
+    Success Badge
+=============================================================================*/
+
+.badge-success {
+
+    background:
+
+        rgba(52,211,153,.12);
+
+    color:
+
+        var(--color-success);
+
+    border-color:
+
+        rgba(52,211,153,.30);
+
+}
+
+
+/*=============================================================================
+    Warning Badge
+=============================================================================*/
+
+.badge-warning {
+
+    background:
+
+        rgba(251,191,36,.12);
+
+    color:
+
+        var(--color-warning);
+
+    border-color:
+
+        rgba(251,191,36,.35);
+
+}
+
+
+/*=============================================================================
+    Neutral Badge
+=============================================================================*/
+
+.badge-neutral {
+
+    background:
+
+        rgba(255,255,255,.04);
+
+    color:
+
+        var(--color-text-secondary);
+
+    border-color:
+
+        var(--color-border-default);
+
+}
+
+
+/*=============================================================================
+    Status Indicator
+=============================================================================*/
+
+/*
+    Small colored indicator.
+
+    Used beside
+
+        AI Agents
+
+        Pipelines
+
+        Databases
+
+        Tasks
+*/
+
+.status-indicator {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    gap: var(--space-2);
+
+}
+
+
+/*=============================================================================
+    Status Dot
+=============================================================================*/
+
+.status-dot {
+
+    width: 10px;
+
+    height: 10px;
+
+    border-radius: 999px;
+
+}
+
+
+/* Running */
+
+.status-running .status-dot {
+
+    background:
+
+        var(--color-primary);
+
+    box-shadow:
+
+        0 0 12px rgba(45,140,255,.60);
+
+}
+
+
+/* Success */
+
+.status-success .status-dot {
+
+    background:
+
+        var(--color-success);
+
+    box-shadow:
+
+        0 0 12px rgba(52,211,153,.50);
+
+}
+
+
+/* Warning */
+
+.status-warning .status-dot {
+
+    background:
+
+        var(--color-warning);
+
+}
+
+
+/* Idle */
+
+.status-idle .status-dot {
+
+    background:
+
+        rgba(255,255,255,.20);
+
+}
+
+
+/*=============================================================================
+    Metric Card
+=============================================================================*/
+
+/*
+    Compact scientific metric.
+
+    Examples
+
+        Papers
+
+        Citations
+
+        Evidence
+
+        Confidence
+*/
+
+.metric-card {
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: var(--space-2);
+
+    padding:
+
+        var(--space-5);
+
+    border-radius:
+
+        var(--radius-large);
+
+    background:
+
+        rgba(255,255,255,.025);
+
+    border:
+
+        1px solid var(--color-border-subtle);
+
+    transition:
+
+        transform var(--duration-normal),
+
+        border-color var(--duration-normal);
+
+}
+
+
+.metric-card:hover {
+
+    transform:
+
+        translateY(-2px);
+
+    border-color:
+
+        var(--color-border-active);
+
+}
+
+
+/*=============================================================================
+    Metric Value
+=============================================================================*/
+
+.metric-value {
+
+    font-size:
+
+        2rem;
+
+    font-weight:
+
+        var(--font-weight-bold);
+
+    color:
+
+        var(--color-text-primary);
+
+    line-height: 1;
+
+}
+
+
+/*=============================================================================
+    Metric Label
+=============================================================================*/
+
+.metric-label {
+
+    color:
+
+        var(--color-text-muted);
+
+    font-size:
+
+        var(--font-size-sm);
+
+}
+
+
+/*=============================================================================
+    Metric Change
+=============================================================================*/
+
+/*
+    Displays
+
+        +24%
+
+        +5 papers
+
+        −3 duplicates
+*/
+
+.metric-change {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    gap: var(--space-2);
+
+    font-size:
+
+        var(--font-size-xs);
+
+}
+
+
+.metric-change-positive {
+
+    color:
+
+        var(--color-success);
+
+}
+
+
+.metric-change-negative {
+
+    color:
+
+        #F87171;
+
+}
+
+
+/*=============================================================================
+    Confidence Bar
+=============================================================================*/
+
+/*
+    Represents AI confidence.
+
+    Example
+
+    Confidence
+
+    █████████░ 91%
+*/
+
+.confidence-bar {
+
+    width: 100%;
+
+    height: 8px;
+
+    overflow: hidden;
+
+    border-radius:
+
+        999px;
+
+    background:
+
+        rgba(255,255,255,.06);
+
+}
+
+
+.confidence-bar-fill {
+
+    height: 100%;
+
+    border-radius: inherit;
+
+    background:
+
+        linear-gradient(
+
+            90deg,
+
+            var(--color-primary),
+
+            var(--color-gradient-purple)
+
+        );
+
+}
+
+
+/*=============================================================================
+    Progress Bar
+=============================================================================*/
+
+/*
+    Pipeline progress.
+
+    Used while
+
+        Searching
+
+        Ranking
+
+        Summarizing
+
+        Generating report
+*/
+
+.progress {
+
+    width: 100%;
+
+    height: 6px;
+
+    overflow: hidden;
+
+    border-radius: 999px;
+
+    background:
+
+        rgba(255,255,255,.05);
+
+}
+
+
+.progress-fill {
+
+    height: 100%;
+
+    border-radius: inherit;
+
+    background:
+
+        linear-gradient(
+
+            90deg,
+
+            var(--color-primary),
+
+            var(--color-gradient-purple)
+
+        );
+
+}
+
+
+/*=============================================================================
+    Statistic Grid
+=============================================================================*/
+
+/*
+    Responsive dashboard metrics.
+*/
+
+.metric-grid {
+
+    display: grid;
+
+    grid-template-columns:
+
+        repeat(
+
+            auto-fit,
+
+            minmax(180px,1fr)
+
+        );
+
+    gap:
+
+        var(--space-5);
+
+}
+
+
+/*=============================================================================
+    Information Block
+=============================================================================*/
+
+/*
+    Lightweight content container.
+
+    Example
+
+        PMID
+
+        DOI
+
+        Journal
+
+        Publication Date
+*/
+
+.info-block {
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: var(--space-1);
+
+}
+
+
+.info-label {
+
+    color:
+
+        var(--color-text-muted);
+
+    font-size:
+
+        var(--font-size-xs);
+
+    text-transform: uppercase;
+
+    letter-spacing: .08em;
+
+}
+
+
+.info-value {
+
+    color:
+
+        var(--color-text-primary);
+
+    font-weight:
+
+        var(--font-weight-medium);
+
+}
+
+
+/*=============================================================================
+    Scientific Tag
+=============================================================================*/
+
+/*
+    Research domain tag.
+
+    Examples
+
+        Oncology
+
+        CRISPR
+
+        Alzheimer's
+
+        Proteomics
+*/
+
+.scientific-tag {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    padding:
+
+        .30rem
+
+        .70rem;
+
+    border-radius:
+
+        999px;
+
+    background:
+
+        rgba(34,211,238,.10);
+
+    color:
+
+        var(--color-biology);
+
+    font-size:
+
+        var(--font-size-xs);
+
+    font-weight:
+
+        var(--font-weight-medium);
+
+}
+
+
+/*=============================================================================
+    Divider Label
+=============================================================================*/
+
+/*
+    Small centered title used between workflow sections.
+*/
+
+.divider-label {
+
+    display: flex;
+
+    align-items: center;
+
+    gap:
+
+        var(--space-4);
+
+    color:
+
+        var(--color-text-muted);
+
+    font-size:
+
+        var(--font-size-xs);
+
+    text-transform: uppercase;
+
+    letter-spacing:
+
+        .08em;
+
+}
+
+
+.divider-label::before,
+
+.divider-label::after {
+
+    content: "";
+
+    flex: 1;
+
+    height: 1px;
+
+    background:
+
+        var(--color-border-subtle);
+
+}
+
+
+/*=============================================================================
+    Scientific Components
+
+    Part 4
+
+===============================================================================
+
+Purpose
+-------
+Defines the reusable scientific components that distinguish BioResearch AI
+from a conventional dashboard.
+
+These components represent real research artifacts rather than generic UI.
+
+Examples
+
+    • Scientific papers
+    • Evidence
+    • Citations
+    • AI agents
+    • Workflow nodes
+    • Knowledge graph entities
+
+Design Philosophy
+-----------------
+
+These components should make users feel they are orchestrating an AI research
+team.
+
+The interface should resemble scientific software rather than a chat
+application.
+
+=============================================================================*/
+
+
+/*=============================================================================
+    Paper Card
+=============================================================================*/
+
+/*
+    Primary representation of a scientific publication.
+
+    Used in:
+
+        Literature search
+
+        Workspace
+
+        Search history
+
+        Related papers
+*/
+
+.paper-card {
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: var(--space-5);
+
+    padding: var(--space-6);
+
+    border-radius: var(--radius-large);
+
+    background: rgba(17,24,39,.82);
+
+    border: 1px solid var(--color-border-default);
+
+    transition:
+        transform var(--duration-normal),
+        border-color var(--duration-normal),
+        box-shadow var(--duration-normal);
+
+}
+
+.paper-card:hover {
+
+    transform: translateY(-3px);
+
+    border-color: var(--color-border-active);
+
+    box-shadow: var(--shadow-glow);
+
+}
+
+
+/*=============================================================================
+    Paper Header
+=============================================================================*/
+
+.paper-header {
+
+    display: flex;
+
+    justify-content: space-between;
+
+    align-items: flex-start;
+
+    gap: var(--space-4);
+
+}
+
+.paper-title {
+
+    color: var(--color-text-primary);
+
+    font-size: var(--font-size-lg);
+
+    font-weight: var(--font-weight-bold);
+
+    line-height: 1.35;
+
+}
+
+.paper-authors {
+
+    color: var(--color-text-secondary);
+
+    font-size: var(--font-size-sm);
+
+}
+
+.paper-journal {
+
+    color: var(--color-primary-light);
+
+    font-size: var(--font-size-sm);
+
+    font-weight: var(--font-weight-medium);
+
+}
+
+.paper-abstract {
+
+    color: var(--color-text-secondary);
+
+    line-height: var(--line-height-relaxed);
+
+}
+
+
+/*=============================================================================
+    Citation Card
+=============================================================================*/
+
+/*
+    Displays individual references.
+*/
+
+.citation-card {
+
+    padding: var(--space-5);
+
+    border-left: 3px solid var(--color-primary);
+
+    background: rgba(255,255,255,.025);
+
+    border-radius: var(--radius-medium);
+
+}
+
+.citation-title {
+
+    color: var(--color-text-primary);
+
+    font-weight: var(--font-weight-semibold);
+
+}
+
+.citation-meta {
+
+    margin-top: var(--space-2);
+
+    color: var(--color-text-muted);
+
+    font-size: var(--font-size-sm);
+
+}
+
+
+/*=============================================================================
+    Evidence Card
+=============================================================================*/
+
+/*
+    Represents extracted evidence supporting conclusions.
+
+    Each evidence block links back to its originating publication.
+*/
+
+.evidence-card {
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: var(--space-4);
+
+    padding: var(--space-6);
+
+    border-left: 4px solid var(--color-success);
+
+    background: rgba(52,211,153,.04);
+
+    border-radius: var(--radius-large);
+
+}
+
+.evidence-title {
+
+    color: var(--color-text-primary);
+
+    font-weight: var(--font-weight-semibold);
+
+}
+
+.evidence-summary {
+
+    color: var(--color-text-secondary);
+
+    line-height: var(--line-height-relaxed);
+
+}
+
+.evidence-source {
+
+    color: var(--color-primary-light);
+
+    font-size: var(--font-size-sm);
+
+}
+
+
+/*=============================================================================
+    Confidence Indicator
+=============================================================================*/
+
+.evidence-confidence {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: var(--space-3);
+
+}
+
+.evidence-score {
+
+    color: var(--color-success);
+
+    font-weight: var(--font-weight-bold);
+
+}
+
+
+/*=============================================================================
+    Workflow Canvas
+=============================================================================*/
+
+/*
+    Container holding AI workflow nodes.
+*/
+
+.workflow {
+
+    display: flex;
+
+    flex-wrap: wrap;
+
+    align-items: center;
+
+    gap: var(--space-8);
+
+}
+
+
+/*=============================================================================
+    Workflow Node
+=============================================================================*/
+
+/*
+    Represents one AI agent or processing stage.
+*/
+
+.workflow-node {
+
+    display: flex;
+
+    flex-direction: column;
+
+    align-items: center;
+
+    gap: var(--space-3);
+
+    min-width: 160px;
+
+    padding: var(--space-6);
+
+    border-radius: var(--radius-large);
+
+    background: rgba(255,255,255,.03);
+
+    border: 1px solid var(--color-border-default);
+
+    transition:
+        transform var(--duration-normal),
+        border-color var(--duration-normal);
+
+}
+
+.workflow-node:hover {
+
+    transform: translateY(-2px);
+
+    border-color: var(--color-border-active);
+
+}
+
+
+/*=============================================================================
+    Workflow Connection
+=============================================================================*/
+
+/*
+    Thin glowing connector between workflow stages.
+*/
+
+.workflow-connection {
+
+    flex: 1;
+
+    min-width: 40px;
+
+    height: 2px;
+
+    background: linear-gradient(
+        90deg,
+        var(--color-primary),
+        var(--color-gradient-purple)
+    );
+
+    opacity: .65;
+
+}
+
+
+/*=============================================================================
+    Agent Card
+=============================================================================*/
+
+/*
+    Represents an autonomous AI researcher.
+
+    Examples
+
+        Literature Agent
+
+        Evidence Agent
+
+        Report Agent
+
+        Citation Agent
+*/
+
+.agent-card {
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: var(--space-4);
+
+    padding: var(--space-6);
+
+    background: rgba(255,255,255,.025);
+
+    border: 1px solid var(--color-border-default);
+
+    border-radius: var(--radius-large);
+
+}
+
+.agent-header {
+
+    display: flex;
+
+    justify-content: space-between;
+
+    align-items: center;
+
+}
+
+.agent-name {
+
+    color: var(--color-text-primary);
+
+    font-weight: var(--font-weight-semibold);
+
+}
+
+.agent-description {
+
+    color: var(--color-text-muted);
+
+    line-height: var(--line-height-normal);
+
+}
+
+
+/*=============================================================================
+    Knowledge Node
+=============================================================================*/
+
+/*
+    Used inside future knowledge graph visualizations.
+*/
+
+.knowledge-node {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    min-width: 120px;
+
+    min-height: 52px;
+
+    padding:
+        var(--space-3)
+        var(--space-5);
+
+    border-radius: 999px;
+
+    border: 1px solid rgba(45,140,255,.35);
+
+    background: rgba(45,140,255,.08);
+
+    color: var(--color-text-primary);
+
+    transition:
+        transform var(--duration-normal),
+        box-shadow var(--duration-normal);
+
+}
+
+.knowledge-node:hover {
+
+    transform: scale(1.03);
+
+    box-shadow: var(--shadow-glow);
+
+}
+
+
+/*=============================================================================
+    Knowledge Edge
+=============================================================================*/
+
+/*
+    Connection line between knowledge nodes.
+*/
+
+.knowledge-edge {
+
+    height: 2px;
+
+    background:
+
+        linear-gradient(
+            90deg,
+            rgba(45,140,255,.25),
+            rgba(99,102,241,.45)
+        );
+
+}
+
+
+/*=============================================================================
+    Research Timeline
+=============================================================================*/
+
+/*
+    Future experiment history and workspace chronology.
+*/
+
+.timeline {
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: var(--space-6);
+
+}
+
+.timeline-item {
+
+    position: relative;
+
+    padding-left: var(--space-8);
+
+}
+
+.timeline-item::before {
+
+    content: "";
+
+    position: absolute;
+
+    left: 0;
+
+    top: .45rem;
+
+    width: 10px;
+
+    height: 10px;
+
+    border-radius: 999px;
+
+    background: var(--color-primary);
+
+    box-shadow: 0 0 10px rgba(45,140,255,.5);
+
+}
+
+.timeline-item::after {
+
+    content: "";
+
+    position: absolute;
+
+    left: 4px;
+
+    top: 1rem;
+
+    bottom: -2rem;
+
+    width: 2px;
+
+    background: var(--color-border-subtle);
+
+}
+
+.timeline-item:last-child::after {
+
+    display: none;
+
+}
+
+
+/*=============================================================================
+    Figure Caption
+=============================================================================*/
+
+/*
+    Used beneath scientific plots and visualizations.
+*/
+
+.figure-caption {
+
+    margin-top: var(--space-3);
+
+    color: var(--color-text-muted);
+
+    font-size: var(--font-size-sm);
+
+    text-align: center;
+
+}
+
+
+/*=============================================================================
+    Navigation & Application Shell
+
+    Part 5
+
+===============================================================================
+
+Purpose
+-------
+Defines the persistent application shell used throughout BioResearch AI.
+
+These components create the visual identity of the workstation:
+
+    • Navigation
+    • Sidebar
+    • Toolbar
+    • Tabs
+    • Breadcrumbs
+    • Workspace Header
+
+The shell should remain visually quiet while providing strong orientation.
+
+Design Philosophy
+-----------------
+
+The navigation should feel like laboratory software or scientific operating
+systems rather than a marketing website.
+
+The content—not the navigation—should remain the center of attention.
+
+=============================================================================*/
+
+
+/*=============================================================================
+    Application Shell
+=============================================================================*/
+
+.app-shell {
+
+    display: grid;
+
+    grid-template-columns: 280px 1fr;
+
+    min-height: 100vh;
+
+}
+
+
+/*=============================================================================
+    Sidebar
+=============================================================================*/
+
+/*
+    Persistent navigation.
+
+    Contains
+
+        Dashboard
+
+        Workspace
+
+        Reports
+
+        History
+
+        Settings
+*/
+
+.sidebar {
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: var(--space-8);
+
+    padding: var(--space-8);
+
+    background:
+
+        rgba(11,16,32,.94);
+
+    border-right:
+
+        1px solid var(--color-border-default);
+
+    backdrop-filter:
+
+        blur(20px);
+
+}
+
+
+/*=============================================================================
+    Sidebar Logo
+=============================================================================*/
+
+.sidebar-logo {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: var(--space-4);
+
+}
+
+.sidebar-logo-icon {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    width: 44px;
+
+    height: 44px;
+
+    border-radius: var(--radius-medium);
+
+    background:
+
+        linear-gradient(
+            135deg,
+            var(--color-primary),
+            var(--color-gradient-purple)
+        );
+
+    color: white;
+
+}
+
+.sidebar-logo-text {
+
+    display: flex;
+
+    flex-direction: column;
+
+}
+
+.sidebar-title {
+
+    color: var(--color-text-primary);
+
+    font-weight: var(--font-weight-bold);
+
+}
+
+.sidebar-subtitle {
+
+    color: var(--color-text-muted);
+
+    font-size: var(--font-size-xs);
+
+}
+
+
+/*=============================================================================
+    Navigation List
+=============================================================================*/
+
+.nav-list {
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: var(--space-2);
+
+}
+
+
+/*=============================================================================
+    Navigation Item
+=============================================================================*/
+
+.nav-item {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: var(--space-4);
+
+    padding:
+
+        var(--space-3)
+
+        var(--space-4);
+
+    border-radius:
+
+        var(--radius-medium);
+
+    color:
+
+        var(--color-text-secondary);
+
+    transition:
+
+        background-color var(--duration-normal),
+
+        color var(--duration-normal),
+
+        transform var(--duration-normal);
+
+}
+
+
+.nav-item:hover {
+
+    background:
+
+        rgba(255,255,255,.04);
+
+    color:
+
+        var(--color-text-primary);
+
+}
+
+
+/*=============================================================================
+    Active Navigation
+=============================================================================*/
+
+.nav-item-active {
+
+    background:
+
+        rgba(45,140,255,.10);
+
+    color:
+
+        var(--color-primary-light);
+
+    border:
+
+        1px solid rgba(45,140,255,.25);
+
+}
+
+
+/*=============================================================================
+    Main Content
+=============================================================================*/
+
+.main-content {
+
+    display: flex;
+
+    flex-direction: column;
+
+    min-width: 0;
+
+}
+
+
+/*=============================================================================
+    Workspace Header
+=============================================================================*/
+
+/*
+    Persistent header.
+
+    Contains
+
+        Search
+
+        Notifications
+
+        User
+
+        Actions
+*/
+
+.workspace-header {
+
+    display: flex;
+
+    justify-content: space-between;
+
+    align-items: center;
+
+    gap: var(--space-6);
+
+    padding:
+
+        var(--space-6)
+
+        var(--space-8);
+
+    border-bottom:
+
+        1px solid var(--color-border-default);
+
+    background:
+
+        rgba(8,17,31,.82);
+
+    backdrop-filter:
+
+        blur(18px);
+
+}
+
+
+/*=============================================================================
+    Header Title
+=============================================================================*/
+
+.workspace-title {
+
+    color:
+
+        var(--color-text-primary);
+
+    font-size:
+
+        var(--font-size-2xl);
+
+    font-weight:
+
+        var(--font-weight-bold);
+
+}
+
+.workspace-subtitle {
+
+    color:
+
+        var(--color-text-muted);
+
+    margin-top:
+
+        var(--space-1);
+
+}
+
+
+/*=============================================================================
+    Header Actions
+=============================================================================*/
+
+.header-actions {
+
+    display: flex;
+
+    align-items: center;
+
+    gap:
+
+        var(--space-3);
+
+}
+
+
+/*=============================================================================
+    Toolbar
+=============================================================================*/
+
+/*
+    Compact action container.
+*/
+
+.toolbar {
+
+    display: flex;
+
+    align-items: center;
+
+    gap:
+
+        var(--space-3);
+
+}
+
+
+/*=============================================================================
+    Breadcrumbs
+=============================================================================*/
+
+.breadcrumbs {
+
+    display: flex;
+
+    align-items: center;
+
+    gap:
+
+        var(--space-2);
+
+    color:
+
+        var(--color-text-muted);
+
+    font-size:
+
+        var(--font-size-sm);
+
+}
+
+.breadcrumb-separator {
+
+    opacity:
+
+        .45;
+
+}
+
+.breadcrumb-current {
+
+    color:
+
+        var(--color-text-primary);
+
+}
+
+
+/*=============================================================================
+    Tab Bar
+=============================================================================*/
+
+/*
+    Used inside
+
+        Workspace
+
+        Report
+
+        Evidence
+
+        References
+*/
+
+.tab-bar {
+
+    display: flex;
+
+    align-items: center;
+
+    gap:
+
+        var(--space-2);
+
+    border-bottom:
+
+        1px solid var(--color-border-default);
+
+}
+
+
+/*=============================================================================
+    Tab
+=============================================================================*/
+
+.tab {
+
+    position: relative;
+
+    padding:
+
+        var(--space-4)
+
+        var(--space-5);
+
+    color:
+
+        var(--color-text-secondary);
+
+    transition:
+
+        color var(--duration-normal);
+
+}
+
+
+.tab:hover {
+
+    color:
+
+        var(--color-text-primary);
+
+}
+
+
+/*=============================================================================
+    Active Tab
+=============================================================================*/
+
+.tab-active {
+
+    color:
+
+        var(--color-primary-light);
+
+}
+
+.tab-active::after {
+
+    content: "";
+
+    position: absolute;
+
+    left: 0;
+
+    right: 0;
+
+    bottom: -1px;
+
+    height: 2px;
+
+    background:
+
+        linear-gradient(
+
+            90deg,
+
+            var(--color-primary),
+
+            var(--color-gradient-purple)
+
+        );
+
+}
+
+
+/*=============================================================================
+    Search Toolbar
+=============================================================================*/
+
+/*
+    Global research search.
+*/
+
+.global-search {
+
+    width:
+
+        min(560px,100%);
+
+}
+
+
+/*=============================================================================
+    Workspace Grid
+=============================================================================*/
+
+/*
+    Standard research layout.
+
+    +----------------------+-------------------------+
+    |                      |                         |
+    | Evidence             | Report                  |
+    |                      |                         |
+    +----------------------+-------------------------+
+
+*/
+
+.workspace-grid {
+
+    display: grid;
+
+    grid-template-columns:
+
+        420px
+
+        1fr;
+
+    gap:
+
+        var(--space-8);
+
+    padding:
+
+        var(--space-8);
+
+}
+
+
+/*=============================================================================
+    Three Panel Layout
+=============================================================================*/
+
+.workspace-grid-three {
+
+    display: grid;
+
+    grid-template-columns:
+
+        320px
+
+        1fr
+
+        340px;
+
+    gap:
+
+        var(--space-6);
+
+}
+
+
+/*=============================================================================
+    Floating Action Group
+=============================================================================*/
+
+/*
+    Used for
+
+        Export
+
+        Generate
+
+        Save
+
+        Share
+*/
+
+.floating-actions {
+
+    position: fixed;
+
+    right:
+
+        var(--space-8);
+
+    bottom:
+
+        var(--space-8);
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap:
+
+        var(--space-3);
+
+}
+
+
+/*=============================================================================
+    Responsive Layout
+=============================================================================*/
+
+@media (max-width:1200px) {
+
+    .workspace-grid {
+
+        grid-template-columns: 1fr;
+
+    }
+
+    .workspace-grid-three {
+
+        grid-template-columns: 1fr;
+
+    }
+
+}
+
+
+@media (max-width:960px) {
+
+    .app-shell {
+
+        grid-template-columns: 1fr;
+
+    }
+
+    .sidebar {
+
+        display: none;
+
+    }
+
+    .workspace-header {
+
+        padding:
+
+            var(--space-5);
+
+    }
+
+}
+
+
+@media (max-width:640px) {
+
+    .workspace-header {
+
+        flex-direction: column;
+
+        align-items: stretch;
+
+    }
+
+    .header-actions {
+
+        justify-content: flex-end;
+
+    }
+
+    .toolbar {
+
+        flex-wrap: wrap;
+
+    }
+
+}
+
+
+/*=============================================================================
+    Polish Components
+
+    Part 6
+
+===============================================================================
+
+Purpose
+-------
+Provides the finishing layer of the BioResearch AI design system.
+
+These components improve perceived quality by handling transitional states
+rather than primary workflows.
+
+Includes
+
+    • Empty states
+    • Loading skeletons
+    • Spinners
+    • Notifications
+    • Tooltips
+    • Dialogs
+    • Overlays
+    • Helper components
+
+=============================================================================*/
+
+
+/*=============================================================================
+    Empty State
+=============================================================================*/
+
+/*
+    Displayed whenever no scientific content is available.
+
+    Examples
+
+        No papers
+
+        No evidence
+
+        Empty workspace
+
+        No generated report
+*/
+
+.empty-state {
+
+    display: flex;
+
+    flex-direction: column;
+
+    align-items: center;
+
+    justify-content: center;
+
+    text-align: center;
+
+    gap: var(--space-5);
+
+    padding:
+
+        var(--space-16);
+
+}
+
+
+.empty-state-icon {
+
+    color:
+
+        var(--color-primary-light);
+
+    opacity: .65;
+
+}
+
+
+.empty-state-title {
+
+    color:
+
+        var(--color-text-primary);
+
+    font-size:
+
+        var(--font-size-xl);
+
+    font-weight:
+
+        var(--font-weight-bold);
+
+}
+
+
+.empty-state-description {
+
+    max-width: 540px;
+
+    color:
+
+        var(--color-text-muted);
+
+    line-height:
+
+        var(--line-height-relaxed);
+
+}
+
+
+/*=============================================================================
+    Loading Spinner
+=============================================================================*/
+
+.spinner {
+
+    width: 28px;
+
+    height: 28px;
+
+    border-radius: 999px;
+
+    border: 3px solid rgba(255,255,255,.08);
+
+    border-top-color: var(--color-primary);
+
+    animation:
+
+        spin 1s linear infinite;
+
+}
+
+
+@keyframes spin {
+
+    to {
+
+        transform: rotate(360deg);
+
+    }
+
+}
+
+
+/*=============================================================================
+    Skeleton Loader
+=============================================================================*/
+
+/*
+    Used while AI agents retrieve literature or generate reports.
+*/
+
+.skeleton {
+
+    position: relative;
+
+    overflow: hidden;
+
+    background:
+
+        rgba(255,255,255,.04);
+
+    border-radius:
+
+        var(--radius-medium);
+
+}
+
+
+.skeleton::after {
+
+    content: "";
+
+    position: absolute;
+
+    inset: 0;
+
+    transform:
+
+        translateX(-100%);
+
+    background:
+
+        linear-gradient(
+
+            90deg,
+
+            transparent,
+
+            rgba(255,255,255,.08),
+
+            transparent
+
+        );
+
+    animation:
+
+        shimmer 1.8s infinite;
+
+}
+
+
+@keyframes shimmer {
+
+    100% {
+
+        transform: translateX(100%);
+
+    }
+
+}
+
+
+.skeleton-text {
+
+    height: 1rem;
+
+}
+
+
+.skeleton-title {
+
+    height: 1.5rem;
+
+    width: 60%;
+
+}
+
+
+.skeleton-card {
+
+    height: 180px;
+
+}
+
+
+/*=============================================================================
+    Toast Notification
+=============================================================================*/
+
+.toast {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: var(--space-4);
+
+    min-width: 320px;
+
+    padding:
+
+        var(--space-4)
+
+        var(--space-5);
+
+    background:
+
+        rgba(17,24,39,.96);
+
+    border:
+
+        1px solid var(--color-border-default);
+
+    border-radius:
+
+        var(--radius-large);
+
+    box-shadow:
+
+        var(--shadow-panel);
+
+}
+
+
+.toast-success {
+
+    border-left:
+
+        4px solid var(--color-success);
+
+}
+
+
+.toast-warning {
+
+    border-left:
+
+        4px solid var(--color-warning);
+
+}
+
+
+.toast-info {
+
+    border-left:
+
+        4px solid var(--color-primary);
+
+}
+
+
+/*=============================================================================
+    Tooltip
+=============================================================================*/
+
+.tooltip {
+
+    position: relative;
+
+}
+
+
+.tooltip-content {
+
+    position: absolute;
+
+    left: 50%;
+
+    bottom: calc(100% + 10px);
+
+    transform:
+
+        translateX(-50%);
+
+    min-width: 180px;
+
+    padding:
+
+        var(--space-3)
+
+        var(--space-4);
+
+    background:
+
+        rgba(8,17,31,.96);
+
+    color:
+
+        var(--color-text-secondary);
+
+    border:
+
+        1px solid var(--color-border-default);
+
+    border-radius:
+
+        var(--radius-medium);
+
+    font-size:
+
+        var(--font-size-xs);
+
+    opacity: 0;
+
+    pointer-events: none;
+
+    transition:
+
+        opacity var(--duration-fast);
+
+}
+
+
+.tooltip:hover .tooltip-content {
+
+    opacity: 1;
+
+}
+
+
+/*=============================================================================
+    Overlay
+=============================================================================*/
+
+.overlay {
+
+    position: fixed;
+
+    inset: 0;
+
+    background:
+
+        rgba(8,17,31,.72);
+
+    backdrop-filter:
+
+        blur(10px);
+
+    display: flex;
+
+    justify-content: center;
+
+    align-items: center;
+
+    z-index:
+
+        var(--z-modal);
+
+}
+
+
+/*=============================================================================
+    Dialog
+=============================================================================*/
+
+.dialog {
+
+    width:
+
+        min(720px,92vw);
+
+    background:
+
+        var(--color-background-surface);
+
+    border:
+
+        1px solid var(--color-border-default);
+
+    border-radius:
+
+        var(--radius-panel);
+
+    padding:
+
+        var(--space-8);
+
+    box-shadow:
+
+        var(--shadow-panel);
+
+}
+
+
+.dialog-header {
+
+    margin-bottom:
+
+        var(--space-6);
+
+}
+
+
+.dialog-title {
+
+    color:
+
+        var(--color-text-primary);
+
+    font-size:
+
+        var(--font-size-xl);
+
+    font-weight:
+
+        var(--font-weight-bold);
+
+}
+
+
+.dialog-footer {
+
+    display: flex;
+
+    justify-content: flex-end;
+
+    gap:
+
+        var(--space-3);
+
+    margin-top:
+
+        var(--space-8);
+
+}
+
+
+/*=============================================================================
+    Scrollable Panel
+=============================================================================*/
+
+.scroll-panel {
+
+    overflow-y: auto;
+
+    max-height: 100%;
+
+}
+
+
+/*=============================================================================
+    Glass Separator
+=============================================================================*/
+
+.glass-separator {
+
+    height: 1px;
+
+    background:
+
+        linear-gradient(
+
+            90deg,
+
+            transparent,
+
+            rgba(255,255,255,.18),
+
+            transparent
+
+        );
+
+}
+
+
+/*=============================================================================
+    Monospace Data
+=============================================================================*/
+
+/*
+    PMIDs
+
+    DOIs
+
+    UUIDs
+
+    Hashes
+
+    API IDs
+*/
+
+.data-mono {
+
+    font-family:
+
+        var(--font-family-mono),
+
+        monospace;
+
+    color:
+
+        var(--color-primary-light);
+
+}
+
+
+/*=============================================================================
+    Glow Utility
+=============================================================================*/
+
+/*
+    Reserved for important research milestones.
+
+    Should be used sparingly.
+*/
+
+.glow {
+
+    box-shadow:
+
+        var(--shadow-glow);
+
+}
+
+
+/*=============================================================================
+    Fade Utility
+=============================================================================*/
+
+.fade {
+
+    opacity: .65;
+
+}
+
+
+/*=============================================================================
+    Responsive Helpers
+=============================================================================*/
+
+.hide-mobile {
+
+    display: inherit;
+
+}
+
+
+@media (max-width:768px) {
+
+    .hide-mobile {
+
+        display: none;
+
+    }
+
+}
+
+
+.hide-desktop {
+
+    display: none;
+
+}
+
+
+@media (max-width:768px) {
+
+    .hide-desktop {
+
+        display: inherit;
+
+    }
+
+}
+
+
+/*=============================================================================
+    Accessibility
+=============================================================================*/
+
+/*
+    Utility class for screen-reader-only content.
+*/
+
+.sr-only {
+
+    position: absolute;
+
+    width: 1px;
+
+    height: 1px;
+
+    padding: 0;
+
+    margin: -1px;
+
+    overflow: hidden;
+
+    clip: rect(0,0,0,0);
+
+    white-space: nowrap;
+
+    border: 0;
+
+}
+
+/*=============================================================================
+    Report-hero
+=============================================================================*/
+
+/*
+    Formatting Executive Report.
+*/
+
+.report-hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+
+    gap: var(--space-8);
+
+    padding-bottom: var(--space-8);
+
+    margin-bottom: var(--space-8);
+
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.report-hero-content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.report-eyebrow {
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+}
+
+.report-title {
+    font-size: clamp(2.5rem, 4vw, 3.75rem);
+    font-weight: var(--font-weight-bold);
+    line-height: 1.1;
+    color: var(--color-text-primary);
+}
+
+.report-meta {
+    display: flex;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+.report-actions {
+    display: flex;
+    gap: var(--space-3);
+}
+
+
+
+
+
+/*=============================================================================
+    End of File
+===============================================================================
+
+The BioResearch AI component library follows a layered architecture.
+
+Foundation
+----------
+variables.css
+
+Browser defaults
+----------------
+globals.css
+
+Reusable components
+-------------------
+components.css
+
+Animations
+----------
+animations.css
+
+Utilities
+---------
+utilities.css
+
+React components should compose these CSS primitives rather than redefining
+visual styles. This keeps the interface consistent, maintainable, and aligned
+with the project's Clean Architecture principles.
+
+=============================================================================*/

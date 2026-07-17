@@ -1,0 +1,57 @@
+/*
+===============================================================================
+
+BioResearch AI
+Tailwind CSS Entry Point
+
+===============================================================================
+
+Purpose
+-------
+This stylesheet serves as the integration point between Tailwind CSS and the
+custom BioResearch AI design system.
+
+Responsibilities
+----------------
+
+This file is intentionally minimal.
+
+Its sole responsibility is to import the three Tailwind layers in the correct
+order:
+
+• Base
+• Components
+• Utilities
+
+Additional application styling is implemented through dedicated stylesheets:
+
+    • variables.css
+    • globals.css
+    • components.css
+    • animations.css
+    • utilities.css
+
+Keeping this file isolated prevents framework concerns from mixing with the
+application's visual language.
+
+Architecture
+------------
+
+                tailwind.css
+                      │
+      ┌───────────────┼────────────────┐
+      │               │                │
+      ▼               ▼                ▼
+
+   Tailwind Base   Tailwind Components   Tailwind Utilities
+
+Author
+------
+Guillermo Ramajo Fernández
+
+===============================================================================
+*/
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
