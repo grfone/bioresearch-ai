@@ -1,0 +1,34 @@
+#
+# Minimal backend dependencies for the BioResearch AI Docker image.
+#
+# This is the runtime footprint for the default (slim) image. It
+# ships only the packages the FastAPI backend actually imports at
+# runtime. The full ML stack (torch, transformers, scikit-learn,
+# rdkit, etc.) lives in ``environment.yaml`` and is only installed
+# when the user picks ``local`` in the bootstrap GUI.
+#
+# If you find yourself adding a dependency here, ask: is it used by
+# the FastAPI backend at runtime, or is it a research-script dep?
+# The latter belongs in ``environment.yaml``, not here.
+#
+
+# --- Web framework ---
+# FastAPI plus its required runtime deps. We pin the major version
+# so upgrades don't silently break the FSM / typing assumptions.
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30,<0.40
+starlette>=0.40,<0.50
+pydantic>=2.9,<3.0
+pydantic-settings>=2.5,<3.0
+
+# --- HTTP client used by the OpenAI-compat providers and the probe ---
+httpx>=0.27,<0.30
+
+# --- .env file loading (used by the LLM and PubMed settings) ---
+python-dotenv>=1.0,<2.0
+
+# --- PubMed (NCBI Entrez) client ---
+biopython>=1.83,<2.0
+
+# --- OpenAI Python client (used by every OpenAI-compat LLM provider) ---
+openai>=1.40,<2.0
