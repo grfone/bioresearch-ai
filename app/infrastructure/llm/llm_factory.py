@@ -23,18 +23,14 @@ Using a factory provides several advantages:
 The factory relies on the ``LLMProviderEnum`` enumeration instead of raw
 strings, improving type safety and preventing typographical errors.
 
-Supported Providers
--------------------
-Current
-    - OpenAI
-
-Planned
-    - Anthropic
-    - Gemini
-    - Ollama
-    - Azure OpenAI
-    - DeepSeek
-    - Additional providers listed in ``LLMProviderEnum``.
+Architectural choice
+--------------------
+The vast majority of providers in the catalog are thin subclasses of
+:class:`~app.infrastructure.llm._openai_compatible.OpenAICompatibleProvider`.
+This module imports them all and registers them in the
+``PROVIDERS`` dictionary. The two bespoke providers (``minimax``,
+which uses Anthropic's /v1/messages format, and ``AzureOpenAI``,
+which has a deployment-specific URL) keep their custom classes.
 
 Author
 ------
@@ -52,20 +48,23 @@ from app.infrastructure.llm.azure_openai_provider import AzureOpenAIProvider
 from app.infrastructure.llm.baichuan_provider import BaichuanProvider
 from app.infrastructure.llm.baidu_provider import BaiduProvider
 from app.infrastructure.llm.bytedance_provider import BytedanceProvider
+from app.infrastructure.llm.cohere_provider import CohereProvider
 from app.infrastructure.llm.deepseek_provider import DeepSeekProvider
 from app.infrastructure.llm.gemini_provider import GeminiProvider
 from app.infrastructure.llm.huawei_provider import HuaweiProvider
 from app.infrastructure.llm.iflytek_provider import IflytekProvider
 from app.infrastructure.llm.minimax_provider import MinimaxProvider
+from app.infrastructure.llm.mistral_provider import MistralProvider
 from app.infrastructure.llm.moonshot_provider import MoonshotProvider
 from app.infrastructure.llm.ollama_provider import OllamaProvider
 from app.infrastructure.llm.openai_provider import OpenAIProvider
+from app.infrastructure.llm.perplexity_provider import PerplexityProvider
 from app.infrastructure.llm.sensetime_provider import SensetimeProvider
 from app.infrastructure.llm.step_fun_provider import StepFunProvider
 from app.infrastructure.llm.tencent_provider import TencentProvider
+from app.infrastructure.llm.xai_provider import XaiProvider
 from app.infrastructure.llm.yi_provider import YiProvider
 from app.infrastructure.llm.zhipu_provider import ZhipuProvider
-
 
 
 class LLMFactory:
@@ -81,40 +80,49 @@ class LLMFactory:
 
     Notes
     -----
-    New providers can be added simply by:
+    Adding a new provider requires:
 
-    1. Creating a new implementation of ``LLMProvider``.
-    2. Registering it in the ``PROVIDERS`` dictionary.
+    1. Adding a new entry to
+       :class:`app.application.services.llm_provider_catalog.CATALOG`.
+    2. Creating a thin subclass of
+       :class:`app.infrastructure.llm._openai_compatible.OpenAICompatibleProvider`
+       (or a bespoke class for non-OpenAI-compatible providers).
+    3. Registering the class here, in the ``PROVIDERS`` dictionary.
 
     No changes should be required elsewhere in the application.
     """
 
     #: Registry of supported provider implementations.
     PROVIDERS: dict[LLMProviderEnum, type[LLMProvider]] = {
-        LLMProviderEnum.OPENAI: OpenAIProvider,
-        # ``LOCAL`` is the user-facing alias for self-hosted Ollama.
-        # Both ``LLMProviderEnum.LOCAL`` and ``LLMProviderEnum.OLLAMA``
-        # map to the same provider so existing code that picks OLLAMA
-        # keeps working.
+        # Local (self-hosted Ollama). LOCAL is the user-facing alias
+        # for OLLAMA.
         LLMProviderEnum.LOCAL: OllamaProvider,
+        LLMProviderEnum.OLLAMA: OllamaProvider,
+        # US tier.
+        LLMProviderEnum.OPENAI: OpenAIProvider,
         LLMProviderEnum.ANTHROPIC: AnthropicProvider,
         LLMProviderEnum.GEMINI: GeminiProvider,
-        LLMProviderEnum.OLLAMA: OllamaProvider,
         LLMProviderEnum.AZURE_OPENAI: AzureOpenAIProvider,
+        LLMProviderEnum.XAI: XaiProvider,
+        LLMProviderEnum.PERPLEXITY: PerplexityProvider,
+        # EU / CA.
+        LLMProviderEnum.MISTRAL: MistralProvider,
+        LLMProviderEnum.COHERE: CohereProvider,
+        # CN tier.
         LLMProviderEnum.DEEPSEEK: DeepSeekProvider,
-        LLMProviderEnum.ALIBABA: AlibabaProvider,
-        LLMProviderEnum.BAICHUAN: BaichuanProvider,
-        LLMProviderEnum.BAIDU: BaiduProvider,
-        LLMProviderEnum.BYTEDANCE: BytedanceProvider,
-        LLMProviderEnum.HUAWEI: HuaweiProvider,
-        LLMProviderEnum.IFLYTEK: IflytekProvider,
         LLMProviderEnum.MINIMAX: MinimaxProvider,
         LLMProviderEnum.MOONSHOT: MoonshotProvider,
-        LLMProviderEnum.SENSETIME: SensetimeProvider,
-        LLMProviderEnum.STEP_FUN: StepFunProvider,
-        LLMProviderEnum.TENCENT: TencentProvider,
-        LLMProviderEnum.YI: YiProvider,
         LLMProviderEnum.ZHIPU: ZhipuProvider,
+        LLMProviderEnum.ALIBABA: AlibabaProvider,
+        LLMProviderEnum.BAIDU: BaiduProvider,
+        LLMProviderEnum.TENCENT: TencentProvider,
+        LLMProviderEnum.BYTEDANCE: BytedanceProvider,
+        LLMProviderEnum.BAICHUAN: BaichuanProvider,
+        LLMProviderEnum.YI: YiProvider,
+        LLMProviderEnum.SENSETIME: SensetimeProvider,
+        LLMProviderEnum.IFLYTEK: IflytekProvider,
+        LLMProviderEnum.STEP_FUN: StepFunProvider,
+        LLMProviderEnum.HUAWEI: HuaweiProvider,
     }
 
     @classmethod
@@ -164,13 +172,13 @@ class LLMFactory:
         Returns
         -------
         list[LLMProviderEnum]
-            Alphabetically sorted provider enumeration values.
+            Providers in the canonical catalog order.
         """
+        from app.application.services.llm_provider_catalog import all_slugs
 
-        return sorted(
-            cls.PROVIDERS.keys(),
-            key=lambda provider: provider.value,
-        )
+        # Filter to providers that are actually registered.
+        registered = set(cls.PROVIDERS.keys())
+        return [s for s in all_slugs() if s in registered]
 
     @classmethod
     def register(
