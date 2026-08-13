@@ -91,6 +91,17 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Added
 
+* **Slim Docker image by default.** The Dockerfile now ships two
+  build targets: `bioresearch-ai:latest` (slim, ~250 MB, no
+  conda, no Node.js, no ML libraries) and `bioresearch-ai:local`
+  (heavy, ~3 GB, with the full ML stack via conda). The default
+  is the slim image. Users pick the heavy image by passing
+  `--local` to bootstrap.py. The slim image uses
+  `python:3.12-slim` and only installs the 7 backend runtime
+  packages the FastAPI app actually imports. The local image
+  keeps the previous conda-based build for users who want to
+  run the original research scripts.
+
 * **Conda channel mirror.** The Dockerfile defaults to
   `https://conda.anaconda.org/conda-forge` (the only conda-forge
   URL that reliably returns 200 today) and accepts a

@@ -166,6 +166,35 @@ the bootstrap at a mirror:
 python3 bootstrap.py --mirror https://mirrors.tuna.tsinghua.edu.cn/conda-forge
 ```
 
+## Build profiles
+
+The Docker image ships in two flavours:
+
+- **Slim (default)** — `bioresearch-ai:latest` is a Python-only image
+  built atop `python:3.12-slim`. It contains the FastAPI backend
+  and the prebuilt React frontend. No conda, no Node.js, no
+  ML libraries. ~250 MB. This is the default for users who pick
+  any cloud LLM (OpenAI, Anthropic, DeepSeek, etc.).
+- **Local** — `bioresearch-ai:local` includes the full ML stack
+  (torch, transformers, scikit-learn, rdkit, pandas, scipy, etc.)
+  installed via conda. ~3 GB. Required for users who want to run
+  the original research scripts or the offline LLM experiments.
+
+The slim image is the default. Pass `--local` to bootstrap.py to
+build the heavy image:
+
+```bash
+python3 bootstrap.py --local
+```
+
+When you pick the `Local` (self-hosted Ollama) provider in the
+GUI, the bootstrap detects this and tells you to rerun with
+`--local` if you want the heavy ML stack. The Ollama runtime
+itself works with the slim image (Ollama is a separate sidecar
+container).
+
+## Network resilience
+
 The default channel is `https://conda.anaconda.org/conda-forge`.
 That is the only conda-forge URL that reliably returns 200 today;
 other candidates (the `conda-forge.org` website, the
