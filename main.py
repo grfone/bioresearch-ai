@@ -86,6 +86,7 @@ from app.api.routes import papers
 from app.api.routes import report
 from app.api.routes import search
 from app.api.routes import workspace
+from app.api.routes import workspace_actions
 from app.api.routes import health
 
 
@@ -213,6 +214,10 @@ def create_application() -> FastAPI:
 
     application.include_router(
         workspace.router,
+    )
+
+    application.include_router(
+        workspace_actions.router,
     )
 
 

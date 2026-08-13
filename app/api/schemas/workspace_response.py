@@ -117,14 +117,41 @@ class WorkspaceResponse(BaseModel):
         description="Original biomedical research question."
     )
 
-    status: str = Field(
-        description="Current workspace state.",
+    state: str = Field(
+        description="Current FSM state of the workspace.",
         examples=[
-            "Created",
-            "Searching",
-            "Summarizing",
-            "Completed"
-        ]
+            "CREATED",
+            "PAPERS_RETRIEVED",
+            "SUMMARIZED",
+            "COMPARED",
+            "REPORTED",
+            "COMPLETED",
+        ],
+    )
+
+    status: str = Field(
+        description=(
+            "Backwards-compatible status string. Always matches the "
+            "FSM state value. New clients should prefer 'state'."
+        ),
+        examples=["CREATED", "SUMMARIZED", "REPORTED"],
+    )
+
+    allowed_actions: list[str] = Field(
+        default_factory=list,
+        description="Legal next actions, sorted alphabetically.",
+    )
+
+    progress: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Coarse progress indicator in [0.0, 1.0].",
+    )
+
+    last_error: str | None = Field(
+        default=None,
+        description="Last error message if the workspace is in ERROR.",
     )
 
     papers: list[PaperResponse] = Field(
@@ -140,6 +167,11 @@ class WorkspaceResponse(BaseModel):
     summary: str | None = Field(
         default=None,
         description="Current evidence synthesis."
+    )
+
+    has_evidence_comparison: bool = Field(
+        default=False,
+        description="Whether a cross-paper evidence comparison exists.",
     )
 
     report_available: bool = Field(
@@ -264,19 +296,49 @@ class WorkspaceResponse(BaseModel):
         total_papers = len(papers)
         paper_responses = [PaperResponse.from_domain(p) for p in papers]
 
-        # Status: handle Enum or string
-        status = getattr(session, "status", "Created")
-        if hasattr(status, "value"):
-            status = status.value
-        if not isinstance(status, str):
-            status = str(status)
+        # State: prefer the FSM state if present, otherwise fall back
+        # to the legacy ``status`` attribute.
+        state = getattr(session, "state", None)
+        if state is not None and hasattr(state, "value"):
+            state_value = state.value
+        else:
+            legacy_status = getattr(session, "status", "CREATED")
+            state_value = str(legacy_status).upper()
+
+        # Status mirror (backwards-compatible).
+        status_value = state_value
+
+        # Allowed actions
+        allowed_actions_method = getattr(session, "allowed_actions", None)
+        if callable(allowed_actions_method):
+            allowed_actions = [
+                a.value for a in allowed_actions_method()
+            ]
+        else:
+            allowed_actions = []
+
+        # Progress
+        progress = float(getattr(session, "progress", 0.0))
 
         # Summary
         summary = getattr(session, "summary", None)
+        summary_text = None
+        if summary is not None and hasattr(summary, "text"):
+            summary_text = summary.text
+        elif isinstance(summary, str):
+            summary_text = summary
+
+        # Evidence comparison
+        has_evidence_comparison = bool(
+            getattr(session, "evidence_comparison", None)
+        )
 
         # Report availability
         report = getattr(session, "report", None)
         report_available = report is not None
+
+        # Last error
+        last_error = getattr(session, "last_error", None)
 
         # Timestamps
         created_at = getattr(session, "created_at", None)
@@ -289,10 +351,15 @@ class WorkspaceResponse(BaseModel):
         return cls(
             workspace_id=str(workspace_id),
             question=question_text,
-            status=status,
+            state=state_value,
+            status=status_value,
+            allowed_actions=allowed_actions,
+            progress=progress,
+            last_error=last_error,
             papers=paper_responses,
             total_papers=total_papers,
-            summary=summary,
+            summary=summary_text,
+            has_evidence_comparison=has_evidence_comparison,
             report_available=report_available,
             created_at=created_at,
             updated_at=updated_at,
