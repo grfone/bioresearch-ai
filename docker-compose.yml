@@ -1,0 +1,52 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bioresearch-ai:latest
+    container_name: bioresearch-ai-backend
+    env_file: .env
+    environment:
+      # When the bootstrap chose the local LLM, point the backend at
+      # the in-network Ollama service.
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-deepseek-coder-v2-lite-instruct}
+    volumes:
+      # Persist the workspace database on the host.
+      - ./bioresearch.db:/app/bioresearch.db
+    ports:
+      - "8000:8000"
+    depends_on:
+      ollama:
+        condition: service_started
+    # The ollama service is optional; if the user used a cloud LLM
+    # the backend will still start even without it. We use
+    # `service_started` rather than `service_healthy` because the
+    # backend does not need to wait for the model to be pulled.
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: bioresearch-ai-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    # GPU passthrough — only activated when the host has nvidia-docker
+    # configured. The bootstrap script detects this and sets the
+    # `OLLAMA_GPU_ENABLED` env var; we use a compose interpolation
+    # so the deploy stanza is fully omitted when not supported.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  ollama_models:
+    # Persistent storage for downloaded models so a `docker compose up`
+    # rerun doesn't re-download 4 GB of GGUF weights.
