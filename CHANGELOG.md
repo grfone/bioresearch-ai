@@ -101,9 +101,12 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   so a wrong channel URL doesn't waste 30 seconds of retrying.
 
 * **BuildKit (buildx) by default.** The bootstrap installs
-  `docker-buildx` alongside `docker.io` on Linux and calls
+  `docker-buildx` on Linux as a **separate step** after the Docker
+  check, so users with an existing Docker install also get
+  buildx added on the first run. The build then calls
   `docker buildx build` instead of the deprecated `docker build`.
-  macOS and Windows Docker Desktop users already have buildx.
+  macOS and Windows Docker Desktop users already have buildx
+  (the bootstrap symlinks it on PATH if it isn't already).
   The bootstrap falls back to the legacy builder if buildx is
   not available, with a clear warning.
 
