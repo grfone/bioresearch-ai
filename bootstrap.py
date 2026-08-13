@@ -65,6 +65,19 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+# Catalog of LLM providers — single source of truth for the GUI picker.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from app.application.services.llm_provider_catalog import (
+        CATALOG as LLM_PROVIDER_CATALOG,
+        ProviderMeta as LLMCatalogEntry,
+        grouped_by_region as llm_grouped_by_region,
+    )
+except Exception:  # pragma: no cover — fallback when running outside the project
+    LLM_PROVIDER_CATALOG = ()
+    llm_grouped_by_region = lambda: {}  # type: ignore
+    LLMCatalogEntry = None  # type: ignore
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -552,22 +565,55 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
         justify="left",
     ).grid(row=1, column=0, columnspan=2, sticky="w", **pad)
 
-    # LLM provider
+    # LLM provider — catalog-driven regional picker.
     row = 2
+
+    # Build the dropdown options. Format: "<region> — <display_name>"
+    # so the user can pick visually while the value stored is the
+    # enum slug.
+    region_groups = llm_grouped_by_region()
+    provider_options: list[str] = []
+    provider_lookup: dict[str, LLMCatalogEntry] = {}
+    for region_name, entries in region_groups.items():
+        for entry in entries:
+            label = f"{entry.display_name}  [{region_name}]"
+            provider_options.append(label)
+            provider_lookup[label] = entry
+
+    # Default to OpenAI for convenience.
+    default_label = next(
+        (lbl for lbl in provider_options if "OpenAI" in lbl and "Azure" not in lbl),
+        provider_options[0] if provider_options else "OpenAI  [US]",
+    )
+
     ttk.Label(root, text="LLM provider").grid(row=row, column=0, sticky="w", **pad)
-    provider_var = tk.StringVar(value="openai")
+    provider_var = tk.StringVar(value=default_label)
     provider_combo = ttk.Combobox(
         root,
         textvariable=provider_var,
-        values=("openai", "local"),
+        values=provider_options,
         state="readonly",
-        width=20,
+        width=40,
     )
     provider_combo.grid(row=row, column=1, sticky="ew", **pad)
 
+    # Hint label that shows the env var the user should set,
+    # e.g. "Set OPENAI_API_KEY in your environment or paste
+    # the key below."
+    row += 1
+    provider_hint_var = tk.StringVar(value="")
+    ttk.Label(
+        root,
+        textvariable=provider_hint_var,
+        foreground="gray",
+        wraplength=420,
+        justify="left",
+    ).grid(row=row, column=0, columnspan=2, sticky="w", **pad)
+
     # API key
     row += 1
-    ttk.Label(root, text="API key").grid(row=row, column=0, sticky="w", **pad)
+    api_key_label = ttk.Label(root, text="API key")
+    api_key_label.grid(row=row, column=0, sticky="w", **pad)
     api_key_var = tk.StringVar()
     api_key_entry = ttk.Entry(root, textvariable=api_key_var, show="*", width=40)
     api_key_entry.grid(row=row, column=1, sticky="ew", **pad)
@@ -576,24 +622,27 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
     row += 1
     ttk.Label(root, text="Base URL").grid(row=row, column=0, sticky="w", **pad)
     base_url_var = tk.StringVar(value="https://api.openai.com/v1")
-    ttk.Entry(root, textvariable=base_url_var).grid(
-        row=row, column=1, sticky="ew", **pad
-    )
+    base_url_entry = ttk.Entry(root, textvariable=base_url_var)
+    base_url_entry.grid(row=row, column=1, sticky="ew", **pad)
 
     # Model
     row += 1
     ttk.Label(root, text="Model").grid(row=row, column=0, sticky="w", **pad)
     model_var = tk.StringVar(value="gpt-4.1-mini")
-    model_combo = ttk.Combobox(
+    model_entry = ttk.Entry(root, textvariable=model_var)
+    model_entry.grid(row=row, column=1, sticky="ew", **pad)
+    model_hint_var = tk.StringVar(value="")
+    ttk.Label(
         root,
-        textvariable=model_var,
-        values=("gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o",
-                "claude-3-5-sonnet", "deepseek-chat"),
-        width=40,
-    )
-    model_combo.grid(row=row, column=1, sticky="ew", **pad)
+        textvariable=model_hint_var,
+        foreground="gray",
+        wraplength=420,
+        justify="left",
+    ).grid(row=row + 1, column=0, columnspan=2, sticky="w", **pad)
+    row += 1
 
-    # Local model
+    # Local model — only enabled when the user picks the Local
+    # provider.
     row += 1
     ttk.Label(root, text="Local model (only if provider=local)").grid(
         row=row, column=0, sticky="w", **pad
@@ -655,27 +704,57 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
     button_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=12)
 
     def on_provider_change(*_):
-        is_local = provider_var.get() == "local"
+        """Update hints, base URL, and model when the provider changes."""
+        label = provider_var.get()
+        entry = provider_lookup.get(label)
+        if entry is None:
+            return
+        is_local = entry.slug.value == "local"
         if is_local:
+            api_key_label.configure(text="API key (not required for Local)")
             api_key_entry.configure(state="disabled")
+            api_key_var.set("")
             base_url_var.set("http://host.docker.internal:11434/v1")
             model_var.set("local")
-            model_combo.configure(state="disabled")
+            model_entry.configure(state="disabled")
             local_model_combo.configure(state="readonly")
+            provider_hint_var.set(
+                "Self-hosted. No API key required. The bootstrap script "
+                "will pull a quantized model sized for your hardware."
+            )
+            model_hint_var.set("")
         else:
+            api_key_label.configure(text=f"API key ({entry.api_key_env})")
             api_key_entry.configure(state="normal")
-            model_combo.configure(state="normal")
+            model_entry.configure(state="normal")
             local_model_combo.configure(state="disabled")
+            # Reset to the catalog defaults when the user picks a
+            # different provider. We don't touch existing values if
+            # they were already entered.
+            if entry.base_url:
+                base_url_var.set(entry.base_url)
+            if entry.default_model:
+                model_var.set(entry.default_model)
+            provider_hint_var.set(
+                f"Set {entry.api_key_env} in your environment, or paste "
+                f"the key directly below. {entry.notes}"
+            ).strip()
+            model_hint_var.set(
+                "Suggested models: " + entry.model_hint
+            )
 
     provider_combo.bind("<<ComboboxSelected>>", on_provider_change)
 
     def on_test():
         status_var.set("Probing…")
+        entry = provider_lookup.get(provider_var.get())
+        slug = entry.slug.value if entry else "openai"
+        is_local = slug == "local"
         probe_cmd = [
             sys.executable,
             str(REPO_ROOT / "scripts" / "probe_credentials.py"),
             "--llm",
-            "local" if provider_var.get() == "local" else "openai",
+            "local" if is_local else "openai",
             "--api-key",
             api_key_var.get(),
             "--base-url",
@@ -688,8 +767,14 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
             pubmed_api_key_var.get(),
         ]
         env = os.environ.copy()
-        if provider_var.get() == "local":
+        if is_local:
             env["OLLAMA_BASE_URL"] = base_url_var.get().replace("/v1", "")
+        else:
+            # Make the catalog-derived env var name available so
+            # the probe can use the right key when the user supplies
+            # one through the GUI.
+            if entry is not None and entry.api_key_env and api_key_var.get():
+                env[entry.api_key_env] = api_key_var.get()
         try:
             proc = subprocess.run(
                 probe_cmd,
@@ -730,21 +815,28 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
                 "PubMed email is required. NCBI rejects anonymous requests.",
             )
             return
-        if provider_var.get() == "openai" and not api_key_var.get().strip():
+        entry = provider_lookup.get(provider_var.get())
+        if entry is None:
             messagebox.showerror(
-                "Required", "API key is required for the OpenAI provider."
+                "Required", "Pick a provider from the list."
             )
             return
-        config.llm_provider = provider_var.get()
+        is_local = entry.slug.value == "local"
+        if not is_local and not api_key_var.get().strip():
+            messagebox.showerror(
+                "Required",
+                f"API key is required for {entry.display_name}. "
+                f"Set {entry.api_key_env} or paste the key.",
+            )
+            return
+        config.llm_provider = entry.slug.value
         config.api_key = api_key_var.get().strip()
         config.base_url = base_url_var.get().strip()
         config.model = model_var.get().strip()
         config.pubmed_email = pubmed_email_var.get().strip()
         config.pubmed_api_key = pubmed_api_key_var.get().strip()
         config.selected_local_model = (
-            local_model_var.get().strip()
-            if provider_var.get() == "local"
-            else None
+            local_model_var.get().strip() if is_local else None
         )
         config.proceed = True
         root.destroy()
@@ -779,7 +871,14 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
 
 
 def write_env_file(config: GuiConfig) -> None:
-    """Persist the configuration to .env so next runs are silent."""
+    """Persist the configuration to .env so next runs are silent.
+
+    The file always writes the short ``API_KEY`` value because the
+    project composition root expects it. The provider's
+    class-level ``api_key_env`` is also written when the catalog
+    exposes a different name (e.g. ``DEEPSEEK_API_KEY``,
+    ``XAI_API_KEY``) so the provider can fall back to either.
+    """
     lines = [
         "# Generated by bootstrap.py. Re-run bootstrap.py to edit.",
         "APP_ENVIRONMENT=development",
@@ -791,14 +890,42 @@ def write_env_file(config: GuiConfig) -> None:
         "API_KEY=" + (config.api_key or ""),
         f"BASE_URL={config.base_url or ''}",
         "",
-        "# PubMed",
-        f"PUBMED_EMAIL={config.pubmed_email}",
-        f"PUBMED_API_KEY={config.pubmed_api_key}",
-        "",
-        "# Database",
-        "DATABASE_URL=sqlite:///./bioresearch.db",
-        "",
     ]
+
+    # Map the chosen provider to its catalog metadata and write the
+    # provider-specific env var so the user can also set the key via
+    # the environment directly.
+    try:
+        from app.core.enums.llm_provider import LLMProviderEnum
+        from app.application.services.llm_provider_catalog import (
+            get_provider_meta,
+        )
+
+        meta = get_provider_meta(
+            LLMProviderEnum(config.llm_provider)
+        )
+        if meta.api_key_env and meta.api_key_env != "API_KEY" and config.api_key:
+            lines.append(f"{meta.api_key_env}={config.api_key}")
+        if meta.requires_extra_headers:
+            # Baidu Qianfan needs a Content-Type hint.
+            lines.append("QIANFAN_EXTRA_HEADERS=Content-Type:application/json")
+    except Exception:
+        # Catalog may not be importable in standalone runs; fall back
+        # to the legacy single-key behaviour.
+        pass
+
+    lines.extend(
+        [
+            "",
+            "# PubMed",
+            f"PUBMED_EMAIL={config.pubmed_email}",
+            f"PUBMED_API_KEY={config.pubmed_api_key}",
+            "",
+            "# Database",
+            "DATABASE_URL=sqlite:///./bioresearch.db",
+            "",
+        ]
+    )
     if config.llm_provider == "local" and config.selected_local_model:
         lines.extend(
             [
@@ -925,7 +1052,15 @@ def main() -> int:
     if args.skip_gui and have_env:
         log_info(f"Using existing {ENV_FILE}")
         config = GuiConfig()
-        # Parse the existing .env so we know what to log.
+        # Build an env-var fallback list per provider so we pick up
+        # the right key no matter which provider was selected.
+        from app.core.enums.llm_provider import LLMProviderEnum
+        from app.application.services.llm_provider_catalog import (
+            get_provider_meta,
+        )
+
+        # Parse the .env into a dict for easy lookup.
+        env_values: dict[str, str] = {}
         for raw in ENV_FILE.read_text().splitlines():
             line = raw.strip()
             if not line or line.startswith("#"):
@@ -933,22 +1068,22 @@ def main() -> int:
             if "=" not in line:
                 continue
             k, _, v = line.partition("=")
-            k = k.strip()
-            v = v.strip()
-            if k == "DEFAULT_LLM_PROVIDER":
-                config.llm_provider = v
-            elif k == "API_KEY":
-                config.api_key = v
-            elif k == "BASE_URL":
-                config.base_url = v
-            elif k == "DEFAULT_LLM_MODEL":
-                config.model = v
-            elif k == "PUBMED_EMAIL":
-                config.pubmed_email = v
-            elif k == "PUBMED_API_KEY":
-                config.pubmed_api_key = v
-            elif k == "OLLAMA_MODEL":
-                config.selected_local_model = v
+            env_values[k.strip()] = v.strip()
+
+        slug = env_values.get("DEFAULT_LLM_PROVIDER", "openai")
+        config.llm_provider = slug
+        config.api_key = env_values.get("API_KEY", "")
+        # If the provider has a more specific env var, prefer it.
+        try:
+            meta = get_provider_meta(LLMProviderEnum(slug))
+            config.api_key = env_values.get(meta.api_key_env, config.api_key)
+        except Exception:
+            pass
+        config.base_url = env_values.get("BASE_URL", "")
+        config.model = env_values.get("DEFAULT_LLM_MODEL", "")
+        config.pubmed_email = env_values.get("PUBMED_EMAIL", "")
+        config.pubmed_api_key = env_values.get("PUBMED_API_KEY", "")
+        config.selected_local_model = env_values.get("OLLAMA_MODEL")
     else:
         config = _gui_collect_config(hw)
         write_env_file(config)
