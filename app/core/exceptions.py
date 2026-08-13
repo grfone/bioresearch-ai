@@ -108,6 +108,46 @@ class ApplicationError(BioResearchAIError):
     """
 
 
+class IllegalWorkspaceActionError(ApplicationError):
+    """
+    Raised when an action is requested from a state that does not allow it.
+
+    This is the primary guard against the workspace being advanced
+    illegitimately — even by bugs or by a future refactor that bypasses
+    the orchestrator. The error carries the offending state, the
+    rejected action, and the list of actions that would have been legal
+    from that state, so the caller (typically a FastAPI handler) can
+    return a useful 409 Conflict with the allowed next moves.
+    """
+
+    def __init__(
+        self,
+        current_state: str,
+        action: str,
+        allowed: list[str],
+    ) -> None:
+        self.current_state = current_state
+        self.action = action
+        self.allowed = allowed
+        super().__init__(
+            f"Action '{action}' is not allowed from state '{current_state}'. "
+            f"Allowed actions: {allowed}"
+        )
+
+
+class CitationValidationError(DomainError):
+    """
+    Raised when an AI-generated artefact references papers that were
+    not part of the input set.
+
+    This is the anti-fabrication guard. The LLM is given a closed set
+    of papers and instructed to cite only those papers. If the parsed
+    output cites a paper ID that was not in the input set, the
+    citation is rejected and this exception is raised so the caller
+    can retry, log, or surface the failure to the user.
+    """
+
+
 # ---------------------------------------------------------------------
 # Infrastructure Layer
 # ---------------------------------------------------------------------
