@@ -92,6 +92,11 @@ class LLMFactory:
     #: Registry of supported provider implementations.
     PROVIDERS: dict[LLMProviderEnum, type[LLMProvider]] = {
         LLMProviderEnum.OPENAI: OpenAIProvider,
+        # ``LOCAL`` is the user-facing alias for self-hosted Ollama.
+        # Both ``LLMProviderEnum.LOCAL`` and ``LLMProviderEnum.OLLAMA``
+        # map to the same provider so existing code that picks OLLAMA
+        # keeps working.
+        LLMProviderEnum.LOCAL: OllamaProvider,
         LLMProviderEnum.ANTHROPIC: AnthropicProvider,
         LLMProviderEnum.GEMINI: GeminiProvider,
         LLMProviderEnum.OLLAMA: OllamaProvider,

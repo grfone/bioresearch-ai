@@ -36,6 +36,7 @@ class LLMProviderEnum(StrEnum):
     ANTHROPIC = "anthropic"
     GEMINI = "gemini"
     OLLAMA = "ollama"
+    LOCAL = "local"  # alias for OLLAMA used by the bootstrap GUI
     AZURE_OPENAI = "azure_openai"
     BAIDU = "baidu"
     ALIBABA = "alibaba"
