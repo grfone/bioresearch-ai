@@ -166,14 +166,30 @@ the bootstrap at a mirror:
 python3 bootstrap.py --mirror https://mirrors.tuna.tsinghua.edu.cn/conda-forge
 ```
 
-Popular mirrors:
+The default channel is `https://conda.anaconda.org/conda-forge`.
+That is the only conda-forge URL that reliably returns 200 today;
+other candidates (the `conda-forge.org` website, the
+`conda.anaconda.cloud` mirror) return 404 or are unreachable from
+typical build environments.
 
-- `https://conda.anaconda.cloud/conda-forge` (default; conda-forge's
-  canonical host as of the 2026 transition)
-- `https://mirrors.tuna.tsinghua.edu.cn/conda-forge` (China: TUNA)
-- `https://mirrors.aliyun.com/conda-forge` (China: Aliyun)
-- `https://conda-forge.org/conda-forge` (legacy host, being phased out)
-- `https://conda.anaconda.org/conda-forge` (legacy CDN, being phased out)
+If the default is blocked on your network, you can pass
+`--mirror <url>` to point at a host that works for you. Verify a
+candidate with:
+
+```bash
+curl -sIL --max-time 10 https://YOUR-MIRROR/conda-forge/noarch/repodata.json
+# expect: HTTP/2 200
+```
+
+Common regional mirrors that *some* users have had success with
+(verify they work for you before committing):
+
+- `https://mirrors.tuna.tsinghua.edu.cn/conda-forge` (Tsinghua, China)
+- `https://mirrors.aliyun.com/conda-forge` (Aliyun, China)
+
+The Dockerfile also runs a 404-detection probe inside the retry
+loop, so a wrong channel URL will fail fast instead of using up
+all three attempts.
 
 The choice is saved to `.env` so subsequent runs reuse the same
 mirror. You can also pass the mirror directly to `docker build`:

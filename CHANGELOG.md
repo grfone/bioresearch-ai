@@ -91,18 +91,14 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Added
 
-* **Conda channel mirror.** The Dockerfile now defaults to
-  `https://conda.anaconda.cloud/conda-forge` (the conda-forge
-  canonical host as of the 2026 transition; the legacy
-  `conda-forge.org` and `conda.anaconda.org` URLs are being
-  phased out) and accepts a `CONDA_CHANNEL` build-arg. The
-  bootstrap CLI exposes `--mirror <url>` so users on restrictive
-  networks can point at Tsinghua, Aliyun, or any other mirror.
-  The choice is saved to `.env` so subsequent runs reuse it.
-  The conda install also retries up to three times with a
-  back-off, and the install step is split into download + link
-  so a transient failure doesn't require re-downloading the
-  entire package set.
+* **Conda channel mirror.** The Dockerfile defaults to
+  `https://conda.anaconda.org/conda-forge` (the only conda-forge
+  URL that reliably returns 200 today) and accepts a
+  `CONDA_CHANNEL` build-arg. The bootstrap CLI exposes
+  `--mirror <url>` so users on restrictive networks can point at
+  a working host. The conda install retries up to three times on
+  transient failures and bails out immediately on a 404 response
+  so a wrong channel URL doesn't waste 30 seconds of retrying.
 
 * **BuildKit (buildx) by default.** The bootstrap installs
   `docker-buildx` alongside `docker.io` on Linux and calls
