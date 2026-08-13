@@ -1,11 +1,11 @@
 """
-step_fun_provider.py
+mistral_provider.py
 
-StepFun implementation of the LLMProvider interface.
+Mistral AI implementation of the LLMProvider interface.
 
 This module is a thin specialization of
 :class:`~app.infrastructure.llm._openai_compatible.OpenAICompatibleProvider`.
-The StepFun service exposes an OpenAI-compatible
+The Mistral AI service exposes an OpenAI-compatible
 ``/chat/completions`` endpoint so the only differences are the
 base URL, the default model, and the environment variable that
 holds the API key.
@@ -23,9 +23,9 @@ from app.infrastructure.llm._openai_compatible import (
 )
 
 
-class StepFunProvider(OpenAICompatibleProvider):
+class MistralProvider(OpenAICompatibleProvider):
     """
-    StepFun provider.
+    Mistral AI provider.
 
     Uses the OpenAI-compatible ``/chat/completions`` endpoint. The
     base URL, default model, and API key environment variable are
@@ -35,14 +35,14 @@ class StepFunProvider(OpenAICompatibleProvider):
 
     Environment Variables
     ----------------------
-    ``STEPFUN_API_KEY``
-        Required: StepFun API key.
-    ``STEP_FUN_MODEL``
+    ``MISTRAL_API_KEY``
+        Required: Mistral AI API key.
+    ``MISTRAL_MODEL``
         Optional: model name override. Defaults to
-        ``step-1v-32k``.
+        ``mistral-large-latest``.
     """
 
-    base_url = "https://api.stepfun.com/v1"
-    default_model = "step-1v-32k"
-    api_key_env = "STEPFUN_API_KEY"
-    model_env = "STEP_FUN_MODEL"
+    base_url = "https://api.mistral.ai/v1"
+    default_model = "mistral-large-latest"
+    api_key_env = "MISTRAL_API_KEY"
+    model_env = "MISTRAL_MODEL"

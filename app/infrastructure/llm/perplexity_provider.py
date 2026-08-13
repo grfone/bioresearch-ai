@@ -1,11 +1,11 @@
 """
-step_fun_provider.py
+perplexity_provider.py
 
-StepFun implementation of the LLMProvider interface.
+Perplexity implementation of the LLMProvider interface.
 
 This module is a thin specialization of
 :class:`~app.infrastructure.llm._openai_compatible.OpenAICompatibleProvider`.
-The StepFun service exposes an OpenAI-compatible
+The Perplexity service exposes an OpenAI-compatible
 ``/chat/completions`` endpoint so the only differences are the
 base URL, the default model, and the environment variable that
 holds the API key.
@@ -23,9 +23,9 @@ from app.infrastructure.llm._openai_compatible import (
 )
 
 
-class StepFunProvider(OpenAICompatibleProvider):
+class PerplexityProvider(OpenAICompatibleProvider):
     """
-    StepFun provider.
+    Perplexity provider.
 
     Uses the OpenAI-compatible ``/chat/completions`` endpoint. The
     base URL, default model, and API key environment variable are
@@ -35,14 +35,14 @@ class StepFunProvider(OpenAICompatibleProvider):
 
     Environment Variables
     ----------------------
-    ``STEPFUN_API_KEY``
-        Required: StepFun API key.
-    ``STEP_FUN_MODEL``
+    ``PERPLEXITY_API_KEY``
+        Required: Perplexity API key.
+    ``PERPLEXITY_MODEL``
         Optional: model name override. Defaults to
-        ``step-1v-32k``.
+        ``llama-3.1-sonar-large-128k-online``.
     """
 
-    base_url = "https://api.stepfun.com/v1"
-    default_model = "step-1v-32k"
-    api_key_env = "STEPFUN_API_KEY"
-    model_env = "STEP_FUN_MODEL"
+    base_url = "https://api.perplexity.ai/v1"
+    default_model = "llama-3.1-sonar-large-128k-online"
+    api_key_env = "PERPLEXITY_API_KEY"
+    model_env = "PERPLEXITY_MODEL"

@@ -1,11 +1,11 @@
 """
-step_fun_provider.py
+cohere_provider.py
 
-StepFun implementation of the LLMProvider interface.
+Cohere implementation of the LLMProvider interface.
 
 This module is a thin specialization of
 :class:`~app.infrastructure.llm._openai_compatible.OpenAICompatibleProvider`.
-The StepFun service exposes an OpenAI-compatible
+The Cohere service exposes an OpenAI-compatible
 ``/chat/completions`` endpoint so the only differences are the
 base URL, the default model, and the environment variable that
 holds the API key.
@@ -23,9 +23,9 @@ from app.infrastructure.llm._openai_compatible import (
 )
 
 
-class StepFunProvider(OpenAICompatibleProvider):
+class CohereProvider(OpenAICompatibleProvider):
     """
-    StepFun provider.
+    Cohere provider.
 
     Uses the OpenAI-compatible ``/chat/completions`` endpoint. The
     base URL, default model, and API key environment variable are
@@ -35,14 +35,14 @@ class StepFunProvider(OpenAICompatibleProvider):
 
     Environment Variables
     ----------------------
-    ``STEPFUN_API_KEY``
-        Required: StepFun API key.
-    ``STEP_FUN_MODEL``
+    ``COHERE_API_KEY``
+        Required: Cohere API key.
+    ``COHERE_MODEL``
         Optional: model name override. Defaults to
-        ``step-1v-32k``.
+        ``command-r-plus``.
     """
 
-    base_url = "https://api.stepfun.com/v1"
-    default_model = "step-1v-32k"
-    api_key_env = "STEPFUN_API_KEY"
-    model_env = "STEP_FUN_MODEL"
+    base_url = "https://api.cohere.ai/compatibility/v1"
+    default_model = "command-r-plus"
+    api_key_env = "COHERE_API_KEY"
+    model_env = "COHERE_MODEL"

@@ -3,42 +3,46 @@ openai_provider.py
 
 OpenAI implementation of the LLMProvider interface.
 
-Purpose
--------
-This module implements the adapter responsible for communicating with
-OpenAI language models.
-
-The implementation isolates all OpenAI-specific logic from the rest of
-the application, ensuring that the application layer depends only on the
-abstract LLMProvider interface.
-
-Current Status
---------------
-Skeleton implementation.
-
-The API integration will be implemented in a future milestone.
+This module is a thin specialization of
+:class:`~app.infrastructure.llm._openai_compatible.OpenAICompatibleProvider`.
+The OpenAI service exposes an OpenAI-compatible
+``/chat/completions`` endpoint so the only differences are the
+base URL, the default model, and the environment variable that
+holds the API key.
 
 Author
 ------
 Guillermo Ramajo Fernández
 """
 
-from app.domain.models.prompt import Prompt
-from app.domain.models.llm_response import LLMResponse
 
-from app.infrastructure.llm.base_provider import BaseLLMProvider
+from __future__ import annotations
+
+from app.infrastructure.llm._openai_compatible import (
+    OpenAICompatibleProvider,
+)
 
 
-class OpenAIProvider(BaseLLMProvider):
+class OpenAIProvider(OpenAICompatibleProvider):
     """
-    OpenAI implementation of the LLM provider.
+    OpenAI provider.
+
+    Uses the OpenAI-compatible ``/chat/completions`` endpoint. The
+    base URL, default model, and API key environment variable are
+    configured here. The catalog
+    (``app.application.services.llm_provider_catalog``) is the
+    canonical source of these values for the GUI.
+
+    Environment Variables
+    ----------------------
+    ``OPENAI_API_KEY``
+        Required: OpenAI API key.
+    ``OPENAI_MODEL``
+        Optional: model name override. Defaults to
+        ``gpt-4.1-mini``.
     """
 
-    def generate(
-        self,
-        prompt: Prompt,
-    ) -> LLMResponse:
-        """
-        Generate a completion using an OpenAI model.
-        """
-        raise NotImplementedError
+    base_url = "https://api.openai.com/v1"
+    default_model = "gpt-4.1-mini"
+    api_key_env = "OPENAI_API_KEY"
+    model_env = "OPENAI_MODEL"

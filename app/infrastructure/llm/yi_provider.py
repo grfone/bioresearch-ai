@@ -1,61 +1,48 @@
 """
 yi_provider.py
 
-Yi implementation of the LLMProvider interface.
+01.AI Yi implementation of the LLMProvider interface.
 
-Purpose
--------
-This module implements the infrastructure adapter responsible for
-communicating with Yi language models.
-
-The implementation isolates all provider-specific communication from the
-rest of the application, ensuring that business logic depends only on
-the abstract ``LLMProvider`` interface.
-
-Current Status
---------------
-Skeleton implementation.
-
-The API integration will be implemented in a future milestone.
+This module is a thin specialization of
+:class:`~app.infrastructure.llm._openai_compatible.OpenAICompatibleProvider`.
+The 01.AI Yi service exposes an OpenAI-compatible
+``/chat/completions`` endpoint so the only differences are the
+base URL, the default model, and the environment variable that
+holds the API key.
 
 Author
 ------
 Guillermo Ramajo Fernández
 """
 
-from app.domain.models.prompt import Prompt
-from app.domain.models.llm_response import LLMResponse
 
-from app.infrastructure.llm.base_provider import BaseLLMProvider
+from __future__ import annotations
+
+from app.infrastructure.llm._openai_compatible import (
+    OpenAICompatibleProvider,
+)
 
 
-class YiProvider(BaseLLMProvider):
+class YiProvider(OpenAICompatibleProvider):
     """
-    Yi implementation of the LLM provider.
+    01.AI Yi provider.
+
+    Uses the OpenAI-compatible ``/chat/completions`` endpoint. The
+    base URL, default model, and API key environment variable are
+    configured here. The catalog
+    (``app.application.services.llm_provider_catalog``) is the
+    canonical source of these values for the GUI.
+
+    Environment Variables
+    ----------------------
+    ``YI_API_KEY``
+        Required: 01.AI Yi API key.
+    ``YI_MODEL``
+        Optional: model name override. Defaults to
+        ``yi-large``.
     """
 
-    def generate(
-        self,
-        prompt: Prompt,
-    ) -> LLMResponse:
-        """
-        Generate a completion using Yi.
-
-        Parameters
-        ----------
-        prompt
-            Structured prompt describing the task.
-
-        Returns
-        -------
-        LLMResponse
-            Normalized response independent of the provider.
-
-        Raises
-        ------
-        NotImplementedError
-            Raised until the provider implementation is completed.
-        """
-        raise NotImplementedError(
-            "YiProvider.generate() has not been implemented yet."
-        )
+    base_url = "https://api.01.ai/v1"
+    default_model = "yi-large"
+    api_key_env = "YI_API_KEY"
+    model_env = "YI_MODEL"

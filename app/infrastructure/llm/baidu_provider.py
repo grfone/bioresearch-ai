@@ -1,61 +1,48 @@
 """
 baidu_provider.py
 
-Baidu implementation of the LLMProvider interface.
+Baidu Qianfan implementation of the LLMProvider interface.
 
-Purpose
--------
-This module implements the infrastructure adapter responsible for
-communicating with Baidu language models.
-
-The implementation isolates all provider-specific communication from the
-rest of the application, ensuring that business logic depends only on
-the abstract ``LLMProvider`` interface.
-
-Current Status
---------------
-Skeleton implementation.
-
-The API integration will be implemented in a future milestone.
+This module is a thin specialization of
+:class:`~app.infrastructure.llm._openai_compatible.OpenAICompatibleProvider`.
+The Baidu Qianfan service exposes an OpenAI-compatible
+``/chat/completions`` endpoint so the only differences are the
+base URL, the default model, and the environment variable that
+holds the API key.
 
 Author
 ------
 Guillermo Ramajo Fernández
 """
 
-from app.domain.models.prompt import Prompt
-from app.domain.models.llm_response import LLMResponse
 
-from app.infrastructure.llm.base_provider import BaseLLMProvider
+from __future__ import annotations
+
+from app.infrastructure.llm._openai_compatible import (
+    OpenAICompatibleProvider,
+)
 
 
-class BaiduProvider(BaseLLMProvider):
+class BaiduProvider(OpenAICompatibleProvider):
     """
-    Baidu implementation of the LLM provider.
+    Baidu Qianfan provider.
+
+    Uses the OpenAI-compatible ``/chat/completions`` endpoint. The
+    base URL, default model, and API key environment variable are
+    configured here. The catalog
+    (``app.application.services.llm_provider_catalog``) is the
+    canonical source of these values for the GUI.
+
+    Environment Variables
+    ----------------------
+    ``QIANFAN_API_KEY``
+        Required: Baidu Qianfan API key.
+    ``BAIDU_MODEL``
+        Optional: model name override. Defaults to
+        ``ernie-4.0-8k``.
     """
 
-    def generate(
-        self,
-        prompt: Prompt,
-    ) -> LLMResponse:
-        """
-        Generate a completion using Baidu.
-
-        Parameters
-        ----------
-        prompt
-            Structured prompt describing the task.
-
-        Returns
-        -------
-        LLMResponse
-            Normalized response independent of the provider.
-
-        Raises
-        ------
-        NotImplementedError
-            Raised until the provider implementation is completed.
-        """
-        raise NotImplementedError(
-            "BaiduProvider.generate() has not been implemented yet."
-        )
+    base_url = "https://qianfan.baidubce.com/v2"
+    default_model = "ernie-4.0-8k"
+    api_key_env = "QIANFAN_API_KEY"
+    model_env = "BAIDU_MODEL"

@@ -1,11 +1,11 @@
 """
-step_fun_provider.py
+xai_provider.py
 
-StepFun implementation of the LLMProvider interface.
+xAI Grok implementation of the LLMProvider interface.
 
 This module is a thin specialization of
 :class:`~app.infrastructure.llm._openai_compatible.OpenAICompatibleProvider`.
-The StepFun service exposes an OpenAI-compatible
+The xAI Grok service exposes an OpenAI-compatible
 ``/chat/completions`` endpoint so the only differences are the
 base URL, the default model, and the environment variable that
 holds the API key.
@@ -23,9 +23,9 @@ from app.infrastructure.llm._openai_compatible import (
 )
 
 
-class StepFunProvider(OpenAICompatibleProvider):
+class XaiProvider(OpenAICompatibleProvider):
     """
-    StepFun provider.
+    xAI Grok provider.
 
     Uses the OpenAI-compatible ``/chat/completions`` endpoint. The
     base URL, default model, and API key environment variable are
@@ -35,14 +35,14 @@ class StepFunProvider(OpenAICompatibleProvider):
 
     Environment Variables
     ----------------------
-    ``STEPFUN_API_KEY``
-        Required: StepFun API key.
-    ``STEP_FUN_MODEL``
+    ``XAI_API_KEY``
+        Required: xAI Grok API key.
+    ``XAI_MODEL``
         Optional: model name override. Defaults to
-        ``step-1v-32k``.
+        ``grok-3-mini``.
     """
 
-    base_url = "https://api.stepfun.com/v1"
-    default_model = "step-1v-32k"
-    api_key_env = "STEPFUN_API_KEY"
-    model_env = "STEP_FUN_MODEL"
+    base_url = "https://api.x.ai/v1"
+    default_model = "grok-3-mini"
+    api_key_env = "XAI_API_KEY"
+    model_env = "XAI_MODEL"

@@ -1,61 +1,48 @@
 """
 iflytek_provider.py
 
-Iflytek implementation of the LLMProvider interface.
+iFlytek Spark implementation of the LLMProvider interface.
 
-Purpose
--------
-This module implements the infrastructure adapter responsible for
-communicating with Iflytek language models.
-
-The implementation isolates all provider-specific communication from the
-rest of the application, ensuring that business logic depends only on
-the abstract ``LLMProvider`` interface.
-
-Current Status
---------------
-Skeleton implementation.
-
-The API integration will be implemented in a future milestone.
+This module is a thin specialization of
+:class:`~app.infrastructure.llm._openai_compatible.OpenAICompatibleProvider`.
+The iFlytek Spark service exposes an OpenAI-compatible
+``/chat/completions`` endpoint so the only differences are the
+base URL, the default model, and the environment variable that
+holds the API key.
 
 Author
 ------
 Guillermo Ramajo Fernández
 """
 
-from app.domain.models.prompt import Prompt
-from app.domain.models.llm_response import LLMResponse
 
-from app.infrastructure.llm.base_provider import BaseLLMProvider
+from __future__ import annotations
+
+from app.infrastructure.llm._openai_compatible import (
+    OpenAICompatibleProvider,
+)
 
 
-class IflytekProvider(BaseLLMProvider):
+class IflytekProvider(OpenAICompatibleProvider):
     """
-    Iflytek implementation of the LLM provider.
+    iFlytek Spark provider.
+
+    Uses the OpenAI-compatible ``/chat/completions`` endpoint. The
+    base URL, default model, and API key environment variable are
+    configured here. The catalog
+    (``app.application.services.llm_provider_catalog``) is the
+    canonical source of these values for the GUI.
+
+    Environment Variables
+    ----------------------
+    ``IFLYTEK_API_KEY``
+        Required: iFlytek Spark API key.
+    ``IFLYTEK_MODEL``
+        Optional: model name override. Defaults to
+        ``generalv3.5``.
     """
 
-    def generate(
-        self,
-        prompt: Prompt,
-    ) -> LLMResponse:
-        """
-        Generate a completion using Iflytek.
-
-        Parameters
-        ----------
-        prompt
-            Structured prompt describing the task.
-
-        Returns
-        -------
-        LLMResponse
-            Normalized response independent of the provider.
-
-        Raises
-        ------
-        NotImplementedError
-            Raised until the provider implementation is completed.
-        """
-        raise NotImplementedError(
-            "IflytekProvider.generate() has not been implemented yet."
-        )
+    base_url = "https://spark-api-open.xf-yun.com/v1"
+    default_model = "generalv3.5"
+    api_key_env = "IFLYTEK_API_KEY"
+    model_env = "IFLYTEK_MODEL"

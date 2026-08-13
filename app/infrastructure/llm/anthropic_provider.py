@@ -3,38 +3,42 @@ anthropic_provider.py
 
 Anthropic implementation of the LLMProvider interface.
 
-Purpose
--------
-This module implements the infrastructure adapter responsible for
-communicating with Anthropic Claude models.
-
-The application layer remains completely independent of Anthropic APIs.
-
-Current Status
---------------
-Skeleton implementation.
+Anthropic exposes an OpenAI-compatible ``/chat/completions`` endpoint
+at https://api.anthropic.com/v1 starting with the 2024-10-22 release.
+This module is a thin specialization of
+:class:`~app.infrastructure.llm._openai_compatible.OpenAICompatibleProvider`.
 
 Author
 ------
 Guillermo Ramajo Fernández
 """
 
-from app.domain.models.prompt import Prompt
-from app.domain.models.llm_response import LLMResponse
 
-from app.infrastructure.llm.base_provider import BaseLLMProvider
+from __future__ import annotations
+
+from app.infrastructure.llm._openai_compatible import (
+    OpenAICompatibleProvider,
+)
 
 
-class AnthropicProvider(BaseLLMProvider):
+class AnthropicProvider(OpenAICompatibleProvider):
     """
-    Anthropic Claude implementation of the LLM provider.
+    Anthropic provider.
+
+    Uses the OpenAI-compatible endpoint at
+    ``https://api.anthropic.com/v1``. API key is read from
+    ``ANTHROPIC_API_KEY``. The model defaults to
+    ``claude-3-5-sonnet-latest``.
+
+    Environment Variables
+    ----------------------
+    ``ANTHROPIC_API_KEY``
+        Required: Anthropic API key.
+    ``ANTHROPIC_MODEL``
+        Optional: model name override.
     """
 
-    def generate(
-        self,
-        prompt: Prompt,
-    ) -> LLMResponse:
-        """
-        Generate a completion using an Anthropic model.
-        """
-        raise NotImplementedError
+    base_url = "https://api.anthropic.com/v1"
+    default_model = "claude-3-5-sonnet-latest"
+    api_key_env = "ANTHROPIC_API_KEY"
+    model_env = "ANTHROPIC_MODEL"

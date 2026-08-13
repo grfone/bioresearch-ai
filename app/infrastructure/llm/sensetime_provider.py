@@ -1,61 +1,48 @@
 """
 sensetime_provider.py
 
-Sensetime implementation of the LLMProvider interface.
+SenseTime implementation of the LLMProvider interface.
 
-Purpose
--------
-This module implements the infrastructure adapter responsible for
-communicating with Sensetime language models.
-
-The implementation isolates all provider-specific communication from the
-rest of the application, ensuring that business logic depends only on
-the abstract ``LLMProvider`` interface.
-
-Current Status
---------------
-Skeleton implementation.
-
-The API integration will be implemented in a future milestone.
+This module is a thin specialization of
+:class:`~app.infrastructure.llm._openai_compatible.OpenAICompatibleProvider`.
+The SenseTime service exposes an OpenAI-compatible
+``/chat/completions`` endpoint so the only differences are the
+base URL, the default model, and the environment variable that
+holds the API key.
 
 Author
 ------
 Guillermo Ramajo Fernández
 """
 
-from app.domain.models.prompt import Prompt
-from app.domain.models.llm_response import LLMResponse
 
-from app.infrastructure.llm.base_provider import BaseLLMProvider
+from __future__ import annotations
+
+from app.infrastructure.llm._openai_compatible import (
+    OpenAICompatibleProvider,
+)
 
 
-class SensetimeProvider(BaseLLMProvider):
+class SensetimeProvider(OpenAICompatibleProvider):
     """
-    Sensetime implementation of the LLM provider.
+    SenseTime provider.
+
+    Uses the OpenAI-compatible ``/chat/completions`` endpoint. The
+    base URL, default model, and API key environment variable are
+    configured here. The catalog
+    (``app.application.services.llm_provider_catalog``) is the
+    canonical source of these values for the GUI.
+
+    Environment Variables
+    ----------------------
+    ``SENSENOVA_API_KEY``
+        Required: SenseTime API key.
+    ``SENSETIME_MODEL``
+        Optional: model name override. Defaults to
+        ``SenseChat-5``.
     """
 
-    def generate(
-        self,
-        prompt: Prompt,
-    ) -> LLMResponse:
-        """
-        Generate a completion using Sensetime.
-
-        Parameters
-        ----------
-        prompt
-            Structured prompt describing the task.
-
-        Returns
-        -------
-        LLMResponse
-            Normalized response independent of the provider.
-
-        Raises
-        ------
-        NotImplementedError
-            Raised until the provider implementation is completed.
-        """
-        raise NotImplementedError(
-            "SensetimeProvider.generate() has not been implemented yet."
-        )
+    base_url = "https://api.sensenova.cn/compatible-mode/v1"
+    default_model = "SenseChat-5"
+    api_key_env = "SENSENOVA_API_KEY"
+    model_env = "SENSETIME_MODEL"
