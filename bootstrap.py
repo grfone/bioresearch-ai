@@ -354,12 +354,6 @@ def install_docker(hw: HardwareInfo) -> None:
                     "docker.io",
                     "docker-compose-v2",
                     "docker-compose-plugin",
-                    # BuildKit is the new Docker build engine. The
-                    # legacy ``docker build`` is deprecated as of
-                    # Docker 25 and will be removed in a future
-                    # release; the bootstrap script calls
-                    # ``docker buildx build`` instead.
-                    "docker-buildx",
                 ],
                 check=False,
             )
@@ -372,6 +366,7 @@ def install_docker(hw: HardwareInfo) -> None:
                     "-y",
                     "docker",
                     "docker-compose",
+                    "docker-buildx",
                 ],
                 check=False,
             )
@@ -384,6 +379,7 @@ def install_docker(hw: HardwareInfo) -> None:
                     "--noconfirm",
                     "docker",
                     "docker-compose",
+                    "docker-buildx",
                 ],
                 check=False,
             )
@@ -458,6 +454,123 @@ def _detect_buildx() -> bool:
         return r.returncode == 0
     except Exception:
         return False
+
+
+def ensure_buildx(hw: HardwareInfo) -> None:
+    """Install ``docker buildx`` if it is not already on PATH.
+
+    BuildKit is the modern Docker build engine and the legacy
+    ``docker build`` is deprecated as of Docker 25. The bootstrap
+    uses ``docker buildx build`` so the deprecation warning
+    never appears in the user's build output.
+
+    This function is called after ``install_docker`` so users with
+    an existing Docker install still get buildx installed the
+    first time they run the bootstrap. On macOS and Windows,
+    buildx is bundled with Docker Desktop and no extra install is
+    required — we only verify.
+
+    On Linux we install via the OS package manager:
+    - Debian / Ubuntu: ``docker-buildx``
+    - Fedora / RHEL: ``docker-buildx``
+    - Arch:          ``docker-buildx``
+
+    On macOS the buildx binary lives inside the Docker Desktop
+    bundle. If ``docker buildx`` is not on PATH, we symlink it
+    from the standard install location.
+    """
+    if _detect_buildx():
+        try:
+            version = subprocess.check_output(
+                ["docker", "buildx", "version"],
+                text=True,
+                timeout=10,
+            ).strip()
+        except Exception:
+            version = "installed"
+        log_ok(f"docker buildx available ({version[:80]})")
+        return
+
+    log_info("docker buildx is not installed; installing…")
+
+    if hw.os == "Linux":
+        if shutil.which("apt-get"):
+            run(
+                ["sudo", "apt-get", "install", "-y", "docker-buildx"],
+                check=False,
+            )
+        elif shutil.which("dnf"):
+            run(
+                ["sudo", "dnf", "install", "-y", "docker-buildx"],
+                check=False,
+            )
+        elif shutil.which("pacman"):
+            run(
+                ["sudo", "pacman", "-S", "--noconfirm", "docker-buildx"],
+                check=False,
+            )
+        else:
+            log_warn(
+                "Could not detect the package manager to install "
+                "docker-buildx. The build will use the legacy "
+                "builder (deprecated). Install docker-buildx "
+                "manually to suppress the warning."
+            )
+            return
+    elif hw.os == "Darwin":
+        # Docker Desktop on macOS bundles buildx at this path.
+        # Some installs don't expose it on PATH, so we symlink it.
+        candidates = [
+            Path("/Applications/Docker.app/Contents/Resources/bin/docker-buildx"),
+            Path("/usr/local/bin/docker-buildx"),
+            Path.home()
+            / "Applications"
+            / "Docker.app"
+            / "Contents"
+            / "Resources"
+            / "bin"
+            / "docker-buildx",
+        ]
+        for cand in candidates:
+            if cand.is_file():
+                link = Path("/usr/local/bin/docker-buildx")
+                if not link.exists():
+                    run(
+                        ["sudo", "ln", "-s", str(cand), str(link)],
+                        check=False,
+                    )
+                break
+        else:
+            log_warn(
+                "Could not find docker-buildx inside Docker Desktop. "
+                "Reinstall Docker Desktop or update it to the latest "
+                "version."
+            )
+            return
+    elif hw.os == "Windows":
+        # WSL2 path: buildx is bundled with Docker Desktop. If the
+        # user is on stock Windows (not WSL), bootstrap already
+        # raised in install_docker so we never get here.
+        return
+    else:
+        log_warn(
+            f"buildx install is not implemented for {hw.os}. "
+            "The build will use the legacy builder (deprecated)."
+        )
+        return
+
+    # Verify the install worked. The first ``docker buildx`` invocation
+    # right after a fresh install can sometimes fail because the
+    # shell has cached the PATH — ``shutil.which`` only re-reads the
+    # cache on certain conditions. We force a fresh lookup.
+    if _detect_buildx():
+        log_ok("docker buildx installed")
+    else:
+        log_warn(
+            "docker-buildx was installed but the binary is not on "
+            "PATH in this shell. Open a new terminal and re-run, or "
+            "check that /usr/bin is in PATH."
+        )
 
 
 def _build_command(extra_args: list[str]) -> list[str]:
@@ -1178,6 +1291,15 @@ def main() -> int:
     install_docker(hw)
     # Re-detect after install.
     hw.has_docker, hw.docker_version = _detect_docker()
+    print()
+
+    # 2b. Install buildx if needed. Docker 25+ deprecates the
+    # legacy ``docker build`` builder; we always use buildx. The
+    # install is independent of whether Docker itself was just
+    # installed, so users with an existing Docker install still
+    # get buildx added on the first bootstrap run.
+    if hw.has_docker:
+        ensure_buildx(hw)
     print()
 
     # 3. Build the image
