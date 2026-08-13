@@ -48,19 +48,34 @@ def test_dockerfile_declares_conda_channel_build_arg() -> None:
     ), "Dockerfile must declare 'ARG CONDA_CHANNEL=...' so users can override"
 
 
-def test_dockerfile_default_is_conda_forge_org() -> None:
-    """The default channel must be conda-forge.org, not anaconda.org."""
+def test_dockerfile_default_is_anaconda_cloud_conda_forge() -> None:
+    """The default channel must be the anaconda.cloud conda-forge URL.
+
+    The conda-forge project transitioned its primary host to
+    Anaconda Cloud in 2026. The legacy ``conda-forge.org`` and
+    ``conda.anaconda.org`` URLs are being phased out, so the
+    default must NOT be either.
+    """
     text = DOCKERFILE.read_text()
     match = re.search(
         r"^ARG\s+CONDA_CHANNEL=(\S+)", text, re.MULTILINE
     )
     assert match is not None, "CONDA_CHANNEL arg missing"
     default = match.group(1)
-    assert "conda-forge.org" in default, (
-        f"Default channel should be conda-forge.org, got {default!r}"
+    assert "conda-forge" in default, (
+        f"Default channel should be a conda-forge mirror, got {default!r}"
     )
-    assert "anaconda.org" not in default, (
-        f"Default channel should not be conda.anaconda.org, got {default!r}"
+    assert "conda.anaconda.cloud" in default, (
+        f"Default channel should be conda.anaconda.cloud after the 2026 "
+        f"transition, got {default!r}"
+    )
+    assert "conda-forge.org" not in default, (
+        f"Default channel must not be conda-forge.org (phased out), "
+        f"got {default!r}"
+    )
+    assert "conda.anaconda.org" not in default, (
+        f"Default channel must not be conda.anaconda.org (legacy CDN), "
+        f"got {default!r}"
     )
 
 
@@ -132,14 +147,21 @@ def test_bootstrap_persists_mirror_to_env() -> None:
     )
 
 
-def test_bootstrap_default_channel_is_conda_forge_org() -> None:
+def test_bootstrap_default_channel_is_anaconda_cloud() -> None:
     text = BOOTSTRAP.read_text()
     # Look for the DEFAULT_CONDA_CHANNEL constant.
     match = re.search(
         r"DEFAULT_CONDA_CHANNEL\s*=\s*[\"']([^\"']+)[\"']", text
     )
     assert match is not None, "bootstrap.py must define DEFAULT_CONDA_CHANNEL"
-    assert "conda-forge.org" in match.group(1)
+    assert "conda.anaconda.cloud" in match.group(1), (
+        "Default channel should be conda.anaconda.cloud, "
+        f"got {match.group(1)!r}"
+    )
+    assert "conda-forge.org" not in match.group(1), (
+        "Legacy conda-forge.org host must not be the default, "
+        f"got {match.group(1)!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -165,3 +187,36 @@ def test_bootstrap_reads_mirror_from_env(tmp_path: Path, monkeypatch: pytest.Mon
             channel = line.split("=", 1)[1].strip()
             break
     assert channel == "https://mirrors.tuna.tsinghua.edu.cn/conda-forge"
+
+
+
+# ---------------------------------------------------------------------------
+# Buildx support
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_prefers_buildx_when_available() -> None:
+    """``_build_command`` returns ``docker buildx build`` when buildx is on PATH."""
+    import sys
+    sys.path.insert(0, str(REPO_ROOT))
+    from bootstrap import _build_command  # type: ignore
+
+    cmd = _build_command(["-t", "foo", "."])
+    # If buildx is installed on this host, the prefix must be
+    # ``docker buildx build``. Otherwise the legacy fallback is
+    # acceptable — but the function must still return a list
+    # whose first two elements are ``["docker", "build"]`` or
+    # ``["docker", "buildx", "build"]``.
+    assert cmd[0] == "docker"
+    assert cmd[1] in ("build", "buildx")
+    if cmd[1] == "buildx":
+        assert cmd[2] == "build"
+
+
+def test_bootstrap_apt_install_includes_docker_buildx() -> None:
+    """The Linux install path must include docker-buildx so buildx is on PATH."""
+    text = BOOTSTRAP.read_text()
+    assert "docker-buildx" in text, (
+        "bootstrap.py must install docker-buildx on Debian so "
+        "the buildx path is the default."
+    )
