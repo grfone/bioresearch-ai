@@ -38,12 +38,15 @@ FROM mambaorg/micromamba:1.5.6
 # ``--build-arg CONDA_CHANNEL=<url>`` when you need a mirror.
 #
 # The default is the conda-forge channel hosted on Anaconda's
-# cloud (the canonical, currently-maintained URL as of
-# conda-forge's 2026 transition). The legacy host
-# ``conda-forge.org/conda-forge`` is being phased out and
-# ``conda.anaconda.org/conda-forge`` is the legacy CDN; the
-# cloud-hosted channel is the recommended one for new builds.
-ARG CONDA_CHANNEL=https://conda.anaconda.cloud/conda-forge
+# CDN (`conda.anaconda.org/conda-forge`). This is the URL that
+# actually returns a 200 today for the conda-forge channel.
+#
+# We deliberately do NOT default to ``conda-forge.org/conda-forge``
+# (returns 404) or ``conda.anaconda.cloud/conda-forge`` (often
+# unreachable from the build environment). The --mirror flag
+# in bootstrap.py lets users override at build time if they have
+# a different working host.
+ARG CONDA_CHANNEL=https://conda.anaconda.org/conda-forge
 
 # Persist the channel choice into the runtime so any later commands
 # (e.g. ``micromamba install`` at runtime) reuse the same mirror.
@@ -83,16 +86,24 @@ RUN mkdir -p /root/.conda && \
 # lets us inspect the return code of micromamba while keeping the
 # surrounding script's error handling off.
 COPY --chown=$MAMBA_USER:$MAMBA_USER environment.yaml /app/environment.yaml
+# Retry loop. Three attempts on transient failures (SSL handshake
+# timeout, connection reset, DNS hiccup). A 404 response is a hard
+# failure because the channel URL is wrong — no amount of retrying
+# will fix it — so we bail out immediately and surface the error.
 RUN set +e && \
     for attempt in 1 2 3; do \
         echo ">>> conda install attempt ${attempt}/3 from ${CONDA_CHANNEL}"; \
-        micromamba install -y -n base \
-            --channel "${CONDA_CHANNEL}" \
-            --download-only \
-            -f /app/environment.yaml && break; \
-        rc=$?; \
-        echo ">>> micromamba install failed with rc=${rc}"; \
-        if [ "${attempt}" = "3" ]; then exit "${rc}"; fi; \
+        if micromamba install -y -n base \
+                --channel "${CONDA_CHANNEL}" \
+                --download-only \
+                -f /app/environment.yaml; then break; fi; \
+        echo ">>> micromamba install failed"; \
+        if curl -sIL --max-time 10 "${CONDA_CHANNEL}/noarch/repodata.json" | grep -q " 404 "; then \
+            echo ">>> FATAL: channel ${CONDA_CHANNEL} returned 404. The URL is wrong."; \
+            echo ">>> Re-run with --mirror <url>. See INSTALL.md for known working mirrors."; \
+            exit 1; \
+        fi; \
+        if [ "${attempt}" = "3" ]; then exit 1; fi; \
         echo ">>> sleeping 10s before retry..."; \
         sleep 10; \
     done
