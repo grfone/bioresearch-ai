@@ -94,29 +94,55 @@ The goal is **not to replace scientists**, but to help them navigate biomedical 
 </p>
 
 
-BioResearch AI assists researchers throughout the scientific discovery process:
+BioResearch AI assists researchers throughout the scientific discovery process. The workspace evolves through a deterministic finite state machine:
 
 ```text
 Research Question
         │
         ▼
-Literature Search
+[ FSM: CREATED ]
+        │  search
+        ▼
+[ FSM: SEARCHING ]
         │
         ▼
-Paper Retrieval
+Literature Search → Paper Retrieval
+        │
+        ▼
+[ FSM: PAPERS_RETRIEVED ]
+        │  summarize
+        ▼
+[ FSM: SUMMARIZING ]
         │
         ▼
 AI Summaries
         │
         ▼
-Evidence Synthesis
+[ FSM: SUMMARIZED ]
+        │  compare
+        ▼
+[ FSM: COMPARING ]
+        │
+        ▼
+Evidence Comparison (consensus, contradictions, gaps)
+        │
+        ▼
+[ FSM: COMPARED ]
+        │  report
+        ▼
+[ FSM: REPORTING ]
         │
         ▼
 Executive Report
         │
         ▼
-Citation Validation
+[ FSM: REPORTED → COMPLETED ]
+        │
+        ▼
+Citation Validation (every paper ID is verified against the workspace)
 ```
+
+The FSM is the single source of truth for what can happen next. Illegal actions are rejected with HTTP 409 including the list of legal alternatives.
 
 ---
 
@@ -268,15 +294,25 @@ The frontend will start with hot reloading enabled.
 
 # Current Capabilities
 
+Research workflow:
 - ✅ Biomedical literature search
 - ✅ Paper retrieval from PubMed
 - ✅ AI-powered paper summarization
+- ✅ Cross-paper evidence comparison (consensus, contradictions, gaps, future directions, side-by-side matrix)
 - ✅ Citation-aware executive reports
+- ✅ Anti-fabrication guard: every citation is checked against the workspace’s paper set
+
+Platform:
 - ✅ Persistent research workspaces
+- ✅ Deterministic finite state machine (FSM) lifecycle: `CREATED → SEARCHING → PAPERS_RETRIEVED → SUMMARIZING → SUMMARIZED → COMPARING → COMPARED → REPORTING → REPORTED → COMPLETED`
+- ✅ Illegal action rejection (HTTP 409) with the list of legal next actions
+- ✅ LangGraph workflow topology (in `app/application/workflows/research_workflow.py`)
+- ✅ Lab-bench UI: state, progress, action availability, transition history
 - ✅ Modern React frontend
 - ✅ FastAPI REST API
 - ✅ Modular LLM providers
 - ✅ Clean Architecture implementation
+- ✅ 57 unit + integration tests passing
 
 ---
 
@@ -291,9 +327,9 @@ The long-term vision is to build an AI platform capable of supporting the comple
 | ✅ | AI Paper Summaries |
 | ✅ | Executive Reports |
 | ✅ | React Frontend |
-| 🚧 | Evidence Comparison |
-| 🚧 | LangGraph Workflows |
-| 🚧 | Workspace Management |
+| ✅ | **Evidence Comparison** — cross-paper consensus, contradictions, gaps, and a side-by-side matrix |
+| ✅ | **LangGraph Workflows** — deterministic FSM topology + `WorkspaceOrchestrator` runtime |
+| ✅ | **Workspace Management** — lab-bench UI with state, allowed actions, progress, and history |
 | 🔜 | Biological Knowledge Integration |
 | 🔜 | Multi-Agent Collaboration |
 | 🔜 | Long-Term Memory |

@@ -36,3 +36,12 @@ dist/
 
 #Frontend
 node_modules/
+# SQLite database (BioResearch AI workspace storage)
+bioresearch.db
+bioresearch.db-journal
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Hermes agent sandbox (not project code)
+.hermes/
