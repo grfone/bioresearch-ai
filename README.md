@@ -11,6 +11,10 @@ An AI-powered research assistant for biomedical literature discovery, evidence s
 </p>
 
 <p align="center">
+<strong>One-command install:</strong> <code>git clone && python3 bootstrap.py</code> &middot; see <a href="./INSTALL.md">INSTALL.md</a>
+</p>
+
+<p align="center">
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green)
@@ -212,17 +216,29 @@ Adding a new LLM provider or biomedical database requires implementing a new ada
 
 # Installation
 
-Clone the repository
+The fastest way to run BioResearch AI on any machine is:
 
 ```bash
 git clone https://github.com/grfone/bioresearch-ai.git
-
 cd bioresearch-ai
+python3 bootstrap.py
 ```
+
+`bootstrap.py` is the single entry point. It detects your OS,
+installs Docker if needed, builds the image, opens a first-run
+GUI that asks for your LLM credentials, probes each one live, and
+finally opens the running app in your default browser.
+
+See [`INSTALL.md`](./INSTALL.md) for the full step-by-step,
+troubleshooting, and the daily workflow.
 
 ---
 
-## Backend
+## Manual installation (advanced)
+
+If you prefer not to use Docker, the legacy workflow is:
+
+### Backend
 
 Create the Conda environment
 

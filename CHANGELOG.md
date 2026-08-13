@@ -89,6 +89,38 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   FSM: the orchestrator's ``report`` action takes the
   workspace as input and uses *its* papers.
 
+### Added
+
+* **One-command install (`bootstrap.py`).** `python3 bootstrap.py`
+  detects the OS, installs Docker, builds the container image,
+  opens a Tkinter first-run GUI that asks for LLM credentials
+  and PubMed, probes each credential live via
+  `scripts/probe_credentials.py`, saves the values to `.env`,
+  and opens the app in the default browser. Re-running is
+  idempotent.
+
+* **Docker image.** New `Dockerfile` (single image, micromamba +
+  Node) and `docker-compose.yml` (backend + optional Ollama
+  service with GPU passthrough). The backend serves the
+  prebuilt React bundle so the entire app is reachable on port
+  8000.
+
+* **Local LLM option.** Real `OllamaProvider` connects to a
+  local Ollama daemon over its OpenAI-compatible endpoint.
+  `LLMProviderEnum.LOCAL` is a user-facing alias for `OLLAMA`.
+  The bootstrap shows a hardware-aware model picker that
+  recommends `deepseek-r1-distill-llama-8b-q4_k_m` for GPUs
+  with ≥ 8 GB VRAM, `deepseek-coder-v2-lite-instruct-q4_k_m`
+  for ≥ 16 GB CPU, and `q3_k_m` for ≥ 8 GB CPU.
+
+* **Static SPA serving.** `main.py` mounts `frontend/dist` at
+  `/` when the build is present; the legacy `/` status endpoint
+  is moved to `/api`.
+
+* **Installation guide.** New `INSTALL.md` documents the
+  one-command flow, the model-tier table, the daily workflow,
+  and troubleshooting.
+
 ### Planned
 
 * Multi-agent collaboration
