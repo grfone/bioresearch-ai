@@ -144,6 +144,25 @@ def _make_state():
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _env(monkeypatch: pytest.MonkeyPatch):
+    """Set the env vars required by the pydantic Settings load.
+
+    The settings classes load their values at module import time so
+    the variables must be present in the environment before any
+    ``app.*`` import. This is why this fixture is autouse — it
+    guarantees the env is set for every test in the module.
+    """
+    monkeypatch.setenv("APP_ENVIRONMENT", "test")
+    monkeypatch.setenv("PUBMED_EMAIL", "test@example.com")
+    monkeypatch.setenv("PUBMED_API_KEY", "")
+    monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("DEFAULT_LLM_MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("API_KEY", "sk-test")
+    monkeypatch.setenv("BASE_URL", "https://api.openai.com/v1")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./bioresearch.db")
+
+
 @pytest.fixture
 def app_with_stubs(monkeypatch: pytest.MonkeyPatch):
     """Build a FastAPI app with stub orchestrator + assistant."""
