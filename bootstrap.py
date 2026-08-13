@@ -93,12 +93,20 @@ GUI_TIMEOUT_SECONDS = 600  # 10 minutes max for the GUI prompt
 
 #: Default conda channel used by the Dockerfile.
 #:
-#: conda-forge transitioned its primary host to Anaconda Cloud in
-#: 2026. The new canonical URL is ``conda.anaconda.cloud/conda-forge``.
-#: The legacy host ``conda-forge.org/conda-forge`` is being phased out
-#: and ``conda.anaconda.org/conda-forge`` is the legacy CDN. The
-#: cloud-hosted channel is the recommended one for new builds.
-DEFAULT_CONDA_CHANNEL = "https://conda.anaconda.cloud/conda-forge"
+#: ``conda.anaconda.org/conda-forge`` is the conda-forge channel
+#: hosted on Anaconda's CDN. This is the URL that returns a 200
+#: today (2026). Other candidates that look plausible do NOT
+#: work:
+#:
+#: - ``conda-forge.org/conda-forge`` → 404 (the website is the
+#:   community docs site, not the channel).
+#: - ``conda.anaconda.cloud/conda-forge`` → routinely unreachable
+#:   from build environments.
+#:
+#: If the default ever stops working, the bootstrap CLI accepts
+#: ``--mirror <url>`` so users can pin a working mirror without
+#: having to rebuild the image.
+DEFAULT_CONDA_CHANNEL = "https://conda.anaconda.org/conda-forge"
 
 
 # ---------------------------------------------------------------------------
@@ -511,7 +519,7 @@ def build_image(conda_channel: str = DEFAULT_CONDA_CHANNEL) -> None:
         raise RuntimeError(
             "Docker build failed; check the output above. "
             "If the failure is a network timeout to "
-            "conda.anaconda.cloud, re-run with --mirror <url> "
+            "conda.anaconda.org, re-run with --mirror <url> "
             "(e.g. https://mirrors.tuna.tsinghua.edu.cn/conda-forge)."
         )
     log_ok("Image built")
@@ -1141,7 +1149,7 @@ def main() -> int:
         default=None,
         help=(
             "Conda channel URL to use when building the Docker image. "
-            "Use this when the default conda.anaconda.cloud host is blocked "
+            "Use this when the default conda.anaconda.org host is blocked "
             "or slow on your network. Examples: "
             "https://mirrors.tuna.tsinghua.edu.cn/conda-forge, "
             "https://mirrors.aliyun.com/conda-forge. "
