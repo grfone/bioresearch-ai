@@ -590,17 +590,27 @@ def _build_command(extra_args: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def build_image(conda_channel: str = DEFAULT_CONDA_CHANNEL) -> None:
-    """Build the bioresearch-ai image.
+def build_image(
+    conda_channel: str = DEFAULT_CONDA_CHANNEL,
+    build_target: str = "minimal",
+) -> None:
+    """Build the BioResearch AI image.
 
     Parameters
     ----------
     conda_channel : str
-        The conda channel URL to use. Defaults to
-        ``https://conda.anaconda.cloud/conda-forge`` (the new
-        conda-forge canonical host as of the 2026 transition). The
-        Dockerfile passes this value as a build-arg so the build is
-        reproducible.
+        The conda channel URL to use. Only consulted when
+        ``build_target="local"``. Defaults to
+        ``https://conda.anaconda.org/conda-forge``.
+
+    build_target : str
+        Either ``"minimal"`` (default) or ``"local"``. The minimal
+        target is a slim Python image with only the backend runtime
+        dependencies — ~250 MB and no conda. The local target pulls
+        in the full ML stack (torch, transformers, scikit-learn,
+        rdkit, etc.) via conda — ~3 GB. The bootstrap passes
+        ``"local"`` automatically when the user picks the Local
+        provider in the GUI.
 
     Notes
     -----
@@ -609,12 +619,21 @@ def build_image(conda_channel: str = DEFAULT_CONDA_CHANNEL) -> None:
     installed. The bootstrap installs ``docker-buildx`` on Linux
     alongside ``docker.io`` so the buildx path is preferred.
     """
+    if build_target not in ("minimal", "local"):
+        raise ValueError(
+            f"build_target must be 'minimal' or 'local', got {build_target!r}"
+        )
+    target_description = {
+        "minimal": "slim Python-only image (~250 MB)",
+        "local": "full image with ML deps (~3 GB)",
+    }[build_target]
     log_info(
         f"Building the BioResearch AI Docker image "
-        f"(conda channel: {conda_channel}, this can take a few minutes)…"
+        f"({target_description}, this can take a few minutes)…"
     )
     extra = [
         "--build-arg", f"CONDA_CHANNEL={conda_channel}",
+        "--build-arg", f"BUILD_TARGET={build_target}",
         "-t", DOCKER_IMAGE,
         ".",
     ]
@@ -752,6 +771,9 @@ class GuiConfig:
     pubmed_email: str = ""
     pubmed_api_key: str = ""
     selected_local_model: Optional[str] = None
+    # Whether the user opted in to the heavy local build target.
+    # When false, the slim image is built (~250 MB).
+    build_target: str = "minimal"
     proceed: bool = False
 
 
@@ -1103,6 +1125,7 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
 def write_env_file(
     config: GuiConfig,
     conda_channel: str = DEFAULT_CONDA_CHANNEL,
+    build_target: str = "minimal",
 ) -> None:
     """Persist the configuration to .env so next runs are silent.
 
@@ -1161,6 +1184,10 @@ def write_env_file(
             "# conda channel used by the Dockerfile. Override with",
             "# ``python3 bootstrap.py --mirror <url>`` to add a custom mirror.",
             f"CONDA_CHANNEL={conda_channel}",
+            "# Build target: 'minimal' (default, slim Python) or 'local'",
+            "# (full ML stack via conda, ~3 GB). Set to 'local' if you want",
+            "# to run local models or use the offline research scripts.",
+            f"BUILD_TARGET={build_target}",
             "",
         ]
     )
@@ -1261,12 +1288,24 @@ def main() -> int:
         "--mirror",
         default=None,
         help=(
-            "Conda channel URL to use when building the Docker image. "
+            "Conda channel URL to use when building the local image. "
             "Use this when the default conda.anaconda.org host is blocked "
             "or slow on your network. Examples: "
             "https://mirrors.tuna.tsinghua.edu.cn/conda-forge, "
             "https://mirrors.aliyun.com/conda-forge. "
             "Saved to .env so subsequent runs remember the choice."
+        ),
+    )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help=(
+            "Build the heavy image with the full ML stack (torch, "
+            "transformers, scikit-learn, rdkit, etc.) via conda. "
+            "Required when the user picks the 'Local' (self-hosted "
+            "Ollama) LLM provider; otherwise the bootstrap builds "
+            "the slim (~250 MB) image. The default is to build the "
+            "slim image."
         ),
     )
     args = parser.parse_args()
@@ -1304,7 +1343,8 @@ def main() -> int:
 
     # 3. Build the image
     # Resolve the conda channel: explicit --mirror flag wins, then
-    # the .env value, then the default.
+    # the .env value, then the default. The channel is only used
+    # by the local (heavy) target.
     conda_channel = args.mirror
     if conda_channel is None and ENV_FILE.is_file():
         for raw in ENV_FILE.read_text().splitlines():
@@ -1314,8 +1354,10 @@ def main() -> int:
                 break
     if conda_channel is None:
         conda_channel = DEFAULT_CONDA_CHANNEL
-    log_info(f"Using conda channel: {conda_channel}")
-    build_image(conda_channel=conda_channel)
+    build_target = "local" if args.local else "minimal"
+    if build_target == "local":
+        log_info(f"Using conda channel: {conda_channel}")
+    build_image(conda_channel=conda_channel, build_target=config.build_target)
     print()
 
     # 4. First-run GUI (unless --skip-gui)
@@ -1358,9 +1400,29 @@ def main() -> int:
         config.pubmed_email = env_values.get("PUBMED_EMAIL", "")
         config.pubmed_api_key = env_values.get("PUBMED_API_KEY", "")
         config.selected_local_model = env_values.get("OLLAMA_MODEL")
+        target = env_values.get("BUILD_TARGET", "minimal")
+        if target in ("minimal", "local"):
+            config.build_target = target
     else:
         config = _gui_collect_config(hw)
-        write_env_file(config, conda_channel=conda_channel)
+        # When the user picks Local, the GUI sets
+        # config.llm_provider == "local" and we want the heavy
+        # image. Persist this so the next run also picks the right
+        # target.
+        local_picked = config.llm_provider == "local"
+        build_target_picked = "local" if local_picked else "minimal"
+        write_env_file(
+            config,
+            conda_channel=conda_channel,
+            build_target=build_target_picked,
+        )
+        if local_picked and build_target != "local":
+            log_info(
+                "You picked Local in the GUI. The slim image does not "
+                "include the heavy ML deps (torch, transformers, etc.). "
+                "Rerun with --local to install them, or accept the slim "
+                "image if you only want the Ollama runtime."
+            )
     print()
 
     # 5. Pull the local model if requested
