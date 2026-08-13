@@ -242,3 +242,45 @@ def test_bootstrap_apt_install_includes_docker_buildx() -> None:
         "bootstrap.py must install docker-buildx on Debian so "
         "the buildx path is the default."
     )
+
+
+
+def test_bootstrap_calls_ensure_buildx_separately() -> None:
+    """``bootstrap.py`` must install docker-buildx as a separate step.
+
+    The previous version of the apt ``install`` block included
+    ``docker-buildx`` but only ran when Docker itself was missing.
+    That meant users with an existing Docker install (the
+    common case) never had buildx installed and the build emitted
+    a deprecation warning. The fix is to call ``ensure_buildx``
+    unconditionally after the Docker check.
+    """
+    text_src = BOOTSTRAP.read_text()
+    assert "ensure_buildx" in text_src, (
+        "bootstrap.py must define and call ensure_buildx()"
+    )
+    # The call must be AFTER install_docker, not inside it.
+    install_docker_pos = text_src.find("def install_docker")
+    ensure_buildx_pos = text_src.find("def ensure_buildx")
+    assert ensure_buildx_pos > install_docker_pos, (
+        "ensure_buildx must be defined after install_docker"
+    )
+    # The main() entry must call ensure_buildx(). We look for the
+    # function definition and assert ensure_buildx(hw) appears
+    # somewhere after it.
+    main_body_start = text_src.find("def main()")
+    assert main_body_start > 0, "main() not found"
+    main_body = text_src[main_body_start:]
+    assert "ensure_buildx(hw)" in main_body, (
+        "main() must call ensure_buildx(hw) so existing Docker "
+        "installs still get buildx added"
+    )
+
+
+def test_bootstrap_apt_install_includes_docker_buildx() -> None:
+    """The Linux install path must include docker-buildx so buildx is on PATH."""
+    text = BOOTSTRAP.read_text()
+    assert "docker-buildx" in text, (
+        "bootstrap.py must install docker-buildx on Debian so "
+        "the buildx path is the default."
+    )
