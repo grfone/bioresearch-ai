@@ -36,7 +36,14 @@ FROM mambaorg/micromamba:1.5.6
 
 # Build-time channel configuration. Override with
 # ``--build-arg CONDA_CHANNEL=<url>`` when you need a mirror.
-ARG CONDA_CHANNEL=https://conda-forge.org/conda-forge
+#
+# The default is the conda-forge channel hosted on Anaconda's
+# cloud (the canonical, currently-maintained URL as of
+# conda-forge's 2026 transition). The legacy host
+# ``conda-forge.org/conda-forge`` is being phased out and
+# ``conda.anaconda.org/conda-forge`` is the legacy CDN; the
+# cloud-hosted channel is the recommended one for new builds.
+ARG CONDA_CHANNEL=https://conda.anaconda.cloud/conda-forge
 
 # Persist the channel choice into the runtime so any later commands
 # (e.g. ``micromamba install`` at runtime) reuse the same mirror.
