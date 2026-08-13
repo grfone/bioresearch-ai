@@ -91,6 +91,11 @@ COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 BACKEND_PORT = 8000
 GUI_TIMEOUT_SECONDS = 600  # 10 minutes max for the GUI prompt
 
+#: Default conda channel used by the Dockerfile. The official
+#: conda-forge.org host is more reliable than conda.anaconda.org
+#: for international users and corporate firewalls.
+DEFAULT_CONDA_CHANNEL = "https://conda-forge.org/conda-forge"
+
 
 # ---------------------------------------------------------------------------
 # Pretty output
@@ -418,17 +423,34 @@ def install_docker(hw: HardwareInfo) -> None:
 # ---------------------------------------------------------------------------
 
 
-def build_image() -> None:
-    """Build the bioresearch-ai image. Skips if the image already exists."""
-    log_info("Building the BioResearch AI Docker image (this can take a few minutes)…")
-    last_pct = -1
-    rc = run_streaming(
-        ["docker", "build", "-t", DOCKER_IMAGE, "."],
-        cwd=REPO_ROOT,
-        check=False,
+def build_image(conda_channel: str = DEFAULT_CONDA_CHANNEL) -> None:
+    """Build the bioresearch-ai image.
+
+    Parameters
+    ----------
+    conda_channel : str
+        The conda channel URL to use. Defaults to
+        ``https://conda-forge.org/conda-forge``. The Dockerfile passes
+        this value as a build-arg so the build is reproducible.
+    """
+    log_info(
+        f"Building the BioResearch AI Docker image "
+        f"(conda channel: {conda_channel}, this can take a few minutes)…"
     )
+    cmd = [
+        "docker", "build",
+        "--build-arg", f"CONDA_CHANNEL={conda_channel}",
+        "-t", DOCKER_IMAGE,
+        ".",
+    ]
+    rc = run_streaming(cmd, cwd=REPO_ROOT, check=False)
     if rc != 0:
-        raise RuntimeError("Docker build failed; check the output above.")
+        raise RuntimeError(
+            "Docker build failed; check the output above. "
+            "If the failure is a network timeout to conda-forge.org, "
+            "re-run with --mirror <url> (e.g. "
+            "https://mirrors.tuna.tsinghua.edu.cn/conda-forge)."
+        )
     log_ok("Image built")
 
 
@@ -504,6 +526,30 @@ def describe_hardware(hw: HardwareInfo) -> str:
     else:
         bits.append("no NVIDIA GPU detected")
     return ", ".join(bits)
+
+
+
+
+def _persist_conda_channel(channel: str) -> None:
+    """Write or update the CONDA_CHANNEL line in the existing .env.
+
+    Preserves all other lines. If the file does not exist yet, this
+    is a no-op (the bootstrap will create it from scratch when the
+    GUI completes).
+    """
+    if not ENV_FILE.is_file():
+        return
+    text = ENV_FILE.read_text()
+    lines = text.splitlines()
+    found = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith("CONDA_CHANNEL="):
+            lines[i] = f"CONDA_CHANNEL={channel}"
+            found = True
+            break
+    if not found:
+        lines.append(f"CONDA_CHANNEL={channel}")
+    ENV_FILE.write_text("\n".join(lines) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -870,7 +916,10 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
 # ---------------------------------------------------------------------------
 
 
-def write_env_file(config: GuiConfig) -> None:
+def write_env_file(
+    config: GuiConfig,
+    conda_channel: str = DEFAULT_CONDA_CHANNEL,
+) -> None:
     """Persist the configuration to .env so next runs are silent.
 
     The file always writes the short ``API_KEY`` value because the
@@ -923,6 +972,11 @@ def write_env_file(config: GuiConfig) -> None:
             "",
             "# Database",
             "DATABASE_URL=sqlite:///./bioresearch.db",
+            "",
+            "# Build",
+            "# conda channel used by the Dockerfile. Override with",
+            "# ``python3 bootstrap.py --mirror <url>`` to add a custom mirror.",
+            f"CONDA_CHANNEL={conda_channel}",
             "",
         ]
     )
@@ -1019,6 +1073,18 @@ def main() -> int:
         action="store_true",
         help="Don't open the browser at the end.",
     )
+    parser.add_argument(
+        "--mirror",
+        default=None,
+        help=(
+            "Conda channel URL to use when building the Docker image. "
+            "Use this when the default conda-forge.org host is blocked "
+            "or slow on your network. Examples: "
+            "https://mirrors.tuna.tsinghua.edu.cn/conda-forge, "
+            "https://mirrors.aliyun.com/conda-forge. "
+            "Saved to .env so subsequent runs remember the choice."
+        ),
+    )
     args = parser.parse_args()
 
     log_info("BioResearch AI bootstrap")
@@ -1044,7 +1110,19 @@ def main() -> int:
     print()
 
     # 3. Build the image
-    build_image()
+    # Resolve the conda channel: explicit --mirror flag wins, then
+    # the .env value, then the default.
+    conda_channel = args.mirror
+    if conda_channel is None and ENV_FILE.is_file():
+        for raw in ENV_FILE.read_text().splitlines():
+            line = raw.strip()
+            if line.startswith("CONDA_CHANNEL="):
+                conda_channel = line.split("=", 1)[1].strip()
+                break
+    if conda_channel is None:
+        conda_channel = DEFAULT_CONDA_CHANNEL
+    log_info(f"Using conda channel: {conda_channel}")
+    build_image(conda_channel=conda_channel)
     print()
 
     # 4. First-run GUI (unless --skip-gui)
@@ -1052,6 +1130,9 @@ def main() -> int:
     if args.skip_gui and have_env:
         log_info(f"Using existing {ENV_FILE}")
         config = GuiConfig()
+        # Persist the conda channel back to .env so subsequent runs
+        # reuse the same channel without prompting.
+        _persist_conda_channel(conda_channel)
         # Build an env-var fallback list per provider so we pick up
         # the right key no matter which provider was selected.
         from app.core.enums.llm_provider import LLMProviderEnum
@@ -1086,7 +1167,7 @@ def main() -> int:
         config.selected_local_model = env_values.get("OLLAMA_MODEL")
     else:
         config = _gui_collect_config(hw)
-        write_env_file(config)
+        write_env_file(config, conda_channel=conda_channel)
     print()
 
     # 5. Pull the local model if requested
