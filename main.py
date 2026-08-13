@@ -17,6 +17,10 @@ Responsibilities
 - Configure middleware.
 - Register API routers.
 - Expose the application object for ASGI servers.
+- Serve the prebuilt React frontend from ``frontend/dist`` when
+  available (production / Docker image). In development the SPA
+  is served by Vite on ``http://localhost:5173`` and the backend
+  exposes only the API.
 
 This module contains no:
 
@@ -32,7 +36,7 @@ Clean Architecture principles.
 Architecture
 ------------
 
-                 React Frontend
+                 React Frontend (Vite or built bundle)
                        |
                        |
                     HTTP API
@@ -44,26 +48,26 @@ Architecture
                 Presentation Layer
                        |
                        |
-             ResearchAssistant Facade
+             WorkspaceOrchestrator
                        |
         --------------------------------
-        |              |               |
- Literature       Summaries        Reports
- Search UC        Use Case         Generator
+        |              |              |
+ Literature       Summaries       Reports
+ Provider         Use Case        Generator
         |
         |
-    PubMed Provider
+    PubMed / Ollama
 
 
 Running
 -------
 
-Development:
+Development (two servers):
 
     uvicorn main:app --reload
+    cd frontend && npm run dev
 
-
-Production:
+Production (single image, SPA served by FastAPI):
 
     uvicorn main:app --host 0.0.0.0 --port 8000
 
@@ -77,9 +81,11 @@ from __future__ import annotations
 
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 
 from app.api.routes import papers
@@ -89,6 +95,18 @@ from app.api.routes import workspace
 from app.api.routes import workspace_actions
 from app.api.routes import health
 
+
+# ---------------------------------------------------------------------------
+# Path to the prebuilt frontend bundle.
+#
+# In the Docker image this directory is populated by ``npm run build``
+# during the Dockerfile build stage. In development it is usually
+# absent (the SPA is served by Vite on port 5173). When the
+# directory exists we mount it on "/" so the same FastAPI app
+# serves both the API and the static frontend.
+# ---------------------------------------------------------------------------
+
+FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
 
 
 @asynccontextmanager
@@ -154,7 +172,11 @@ def create_application() -> FastAPI:
     application.add_middleware(
         CORSMiddleware,
         allow_origins=[
+            # Vite development server.
             "http://localhost:5173",
+            # Same-origin requests when the SPA is served by FastAPI.
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
         ],
         allow_credentials=True,
         allow_methods=[
@@ -171,13 +193,16 @@ def create_application() -> FastAPI:
     # --------------------------------------------------------------
 
     @application.get(
-        "/",
+        "/api",
         tags=["System"],
         summary="API status",
     )
     async def root() -> dict[str, str]:
         """
         Return basic API information.
+
+        Note the path is ``/api`` (not ``/``) so the SPA's index.html
+        can be served from ``/`` when the frontend bundle is mounted.
 
         Returns
         -------
@@ -220,6 +245,19 @@ def create_application() -> FastAPI:
         workspace_actions.router,
     )
 
+    # --------------------------------------------------------------
+    # Static frontend (production-only)
+    # --------------------------------------------------------------
+    # When the SPA bundle is present we mount it at "/" so the same
+    # port serves both the API and the static assets. Vite's dev
+    # server (5173) is unchanged when the bundle is absent.
+
+    if FRONTEND_DIST.is_dir():
+        application.mount(
+            "/",
+            StaticFiles(directory=str(FRONTEND_DIST), html=True),
+            name="frontend",
+        )
 
     return application
 
