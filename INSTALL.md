@@ -168,10 +168,12 @@ python3 bootstrap.py --mirror https://mirrors.tuna.tsinghua.edu.cn/conda-forge
 
 Popular mirrors:
 
-- `https://conda-forge.org/conda-forge` (default; official)
+- `https://conda.anaconda.cloud/conda-forge` (default; conda-forge's
+  canonical host as of the 2026 transition)
 - `https://mirrors.tuna.tsinghua.edu.cn/conda-forge` (China: TUNA)
 - `https://mirrors.aliyun.com/conda-forge` (China: Aliyun)
-- `https://conda.anaconda.org/conda-forge` (legacy fallback)
+- `https://conda-forge.org/conda-forge` (legacy host, being phased out)
+- `https://conda.anaconda.org/conda-forge` (legacy CDN, being phased out)
 
 The choice is saved to `.env` so subsequent runs reuse the same
 mirror. You can also pass the mirror directly to `docker build`:
