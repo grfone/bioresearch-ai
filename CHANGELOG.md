@@ -91,6 +91,17 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Added
 
+* **Conda channel mirror.** The Dockerfile now defaults to
+  `https://conda-forge.org/conda-forge` (more reliable than
+  `conda.anaconda.org` for international users) and accepts a
+  `CONDA_CHANNEL` build-arg. The bootstrap CLI exposes
+  `--mirror <url>` so users on restrictive networks can point
+  at Tsinghua, Aliyun, or any other mirror. The choice is saved
+  to `.env` so subsequent runs reuse it. The conda install also
+  retries up to three times with a back-off, and the install
+  step is split into download + link so a transient failure
+  doesn't require re-downloading the entire package set.
+
 * **22 working LLM providers.** A new `LLMProviderCatalog`
   (`app/application/services/llm_provider_catalog.py`) is the
   single source of truth for everything related to provider

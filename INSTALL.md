@@ -155,6 +155,31 @@ sudo dnf install -y python3-tkinter
 brew install python-tk
 ```
 
+### The build fails with a conda timeout
+
+The default channel is `https://conda-forge.org/conda-forge`. If
+your network is slow or blocks that host, the build will retry
+three times before giving up. If retries are not enough, point
+the bootstrap at a mirror:
+
+```bash
+python3 bootstrap.py --mirror https://mirrors.tuna.tsinghua.edu.cn/conda-forge
+```
+
+Popular mirrors:
+
+- `https://conda-forge.org/conda-forge` (default; official)
+- `https://mirrors.tuna.tsinghua.edu.cn/conda-forge` (China: TUNA)
+- `https://mirrors.aliyun.com/conda-forge` (China: Aliyun)
+- `https://conda.anaconda.org/conda-forge` (legacy fallback)
+
+The choice is saved to `.env` so subsequent runs reuse the same
+mirror. You can also pass the mirror directly to `docker build`:
+
+```bash
+docker build --build-arg CONDA_CHANNEL=https://mirrors.tuna.tsinghua.edu.cn/conda-forge .
+```
+
 ### The LLM probe fails
 
 The probe prints a hint in the GUI. Common causes:
