@@ -91,6 +91,31 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Added
 
+* **22 working LLM providers.** A new `LLMProviderCatalog`
+  (`app/application/services/llm_provider_catalog.py`) is the
+  single source of truth for everything related to provider
+  selection. The bootstrap GUI now lists every provider grouped
+  by region (Local / US / EU / CA / CN). The factory registers
+  every entry. New providers: `xai`, `mistral`, `cohere`,
+  `perplexity`. The Chinese tier covers DeepSeek, MiniMax
+  (the user's existing provider is preserved), Moonshot Kimi,
+  Zhipu GLM, Alibaba Qwen, Baidu Qianfan, Tencent Hunyuan,
+  ByteDance Doubao, Baichuan, 01.AI Yi, SenseTime, iFlytek
+  Spark, StepFun, and Huawei Pangu.
+
+* **OpenAI-compatible shared base class.** Every provider that
+  exposes an OpenAI-compatible `/chat/completions` endpoint is
+  now a thin subclass of `OpenAICompatibleProvider` in
+  `app/infrastructure/llm/_openai_compatible.py`. Adding a new
+  provider is one entry in the catalog plus one tiny subclass
+  file.
+
+* **Catalog-driven bootstrap GUI.** The first-run picker is
+  driven by the catalog. Each row shows the provider display
+  name, region, default model, and the API-key environment
+  variable. Theater-style hints update when the user selects
+  a different provider.
+
 * **One-command install (`bootstrap.py`).** `python3 bootstrap.py`
   detects the OS, installs Docker, builds the container image,
   opens a Tkinter first-run GUI that asks for LLM credentials

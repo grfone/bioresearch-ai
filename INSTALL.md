@@ -41,14 +41,44 @@ file is missing.
 
 The GUI offers two providers out of the box:
 
-### Cloud (OpenAI-compatible)
+### Cloud (22 providers)
 
-Pick `openai` in the GUI and supply an API key. The base URL is
-prefilled to `https://api.openai.com/v1` but you can change it to
-talk to any OpenAI-compatible endpoint (Together, Anyscale,
-OpenRouter, a self-hosted vLLM, etc.). The model dropdown lists
-the common OpenAI families; type a custom name to use anything
-else.
+The GUI lists every provider in the catalog, grouped by region:
+
+**US**
+- OpenAI (`gpt-4.1`, `gpt-4.1-mini`, `o3`, `o4-mini` …)
+- Anthropic (`claude-3-5-sonnet`, `claude-3-5-haiku`, `claude-opus-4`)
+- Google Gemini (`gemini-2.0-flash`, `gemini-2.0-pro`)
+- Azure OpenAI (uses your deployment name as the model)
+- xAI Grok (`grok-3`, `grok-3-mini`, `grok-3-fast`)
+- Perplexity (`llama-3.1-sonar-large-128k-online`)
+
+**EU**: Mistral AI (`mistral-large-latest`, `mistral-medium`)
+
+**CA**: Cohere (`command-r-plus`)
+
+**China (14 providers)**
+- DeepSeek (`deepseek-chat`, `deepseek-reasoner`)
+- MiniMax, the model you already use (`MiniMax-M3`)
+- Moonshot Kimi (`moonshot-v1-32k`, `moonshot-v1-128k`)
+- Zhipu GLM (`glm-4-plus`, `glm-4-air`)
+- Alibaba Qwen (`qwen-plus`, `qwen-max`, `qwen-coder-plus`)
+- Baidu Qianfan / ERNIE (`ernie-4.0-8k`)
+- Tencent Hunyuan (`hunyuan-pro`)
+- ByteDance Doubao (`doubao-pro-32k`)
+- Baichuan (`baichuan4-turbo`)
+- 01.AI Yi (`yi-large`)
+- SenseTime SenseChat (`SenseChat-5`)
+- iFlytek Spark (`generalv3.5`)
+- StepFun (`step-1v-32k`)
+- Huawei Pangu (`pangu-4`)
+
+Plus **Local** (self-hosted Ollama) at the top of the picker.
+
+The picker fills the default `Base URL`, `Model`, and the API-key
+environment variable name per provider. The provider list lives in
+`app/application/services/llm_provider_catalog.py` — adding a new
+provider is one entry in that file.
 
 ### Local (self-hosted Ollama)
 
