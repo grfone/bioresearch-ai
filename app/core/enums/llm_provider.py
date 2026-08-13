@@ -38,6 +38,10 @@ class LLMProviderEnum(StrEnum):
     OLLAMA = "ollama"
     LOCAL = "local"  # alias for OLLAMA used by the bootstrap GUI
     AZURE_OPENAI = "azure_openai"
+    XAI = "xai"
+    MISTRAL = "mistral"
+    COHERE = "cohere"
+    PERPLEXITY = "perplexity"
     BAIDU = "baidu"
     ALIBABA = "alibaba"
     TENCENT = "tencent"
