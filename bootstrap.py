@@ -91,10 +91,14 @@ COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 BACKEND_PORT = 8000
 GUI_TIMEOUT_SECONDS = 600  # 10 minutes max for the GUI prompt
 
-#: Default conda channel used by the Dockerfile. The official
-#: conda-forge.org host is more reliable than conda.anaconda.org
-#: for international users and corporate firewalls.
-DEFAULT_CONDA_CHANNEL = "https://conda-forge.org/conda-forge"
+#: Default conda channel used by the Dockerfile.
+#:
+#: conda-forge transitioned its primary host to Anaconda Cloud in
+#: 2026. The new canonical URL is ``conda.anaconda.cloud/conda-forge``.
+#: The legacy host ``conda-forge.org/conda-forge`` is being phased out
+#: and ``conda.anaconda.org/conda-forge`` is the legacy CDN. The
+#: cloud-hosted channel is the recommended one for new builds.
+DEFAULT_CONDA_CHANNEL = "https://conda.anaconda.cloud/conda-forge"
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +346,12 @@ def install_docker(hw: HardwareInfo) -> None:
                     "docker.io",
                     "docker-compose-v2",
                     "docker-compose-plugin",
+                    # BuildKit is the new Docker build engine. The
+                    # legacy ``docker build`` is deprecated as of
+                    # Docker 25 and will be removed in a future
+                    # release; the bootstrap script calls
+                    # ``docker buildx build`` instead.
+                    "docker-buildx",
                 ],
                 check=False,
             )
@@ -418,6 +428,42 @@ def install_docker(hw: HardwareInfo) -> None:
     log_ok(f"Docker installed ({version})")
 
 
+
+
+def _detect_buildx() -> bool:
+    """Return True if ``docker buildx`` is available on the host.
+
+    The legacy ``docker build`` is deprecated as of Docker 25 and
+    will be removed in a future release. The bootstrap calls
+    ``docker buildx build`` so it works against both the legacy
+    builder and the modern BuildKit builder.
+    """
+    if not shutil.which("docker"):
+        return False
+    try:
+        r = subprocess.run(
+            ["docker", "buildx", "version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _build_command(extra_args: list[str]) -> list[str]:
+    """Return the docker build command list to use.
+
+    Prefers ``docker buildx build`` (the modern, supported path).
+    Falls back to ``docker build`` when buildx is unavailable
+    (e.g. older Docker Engine installs).
+    """
+    if _detect_buildx():
+        return ["docker", "buildx", "build"] + extra_args
+    return ["docker", "build"] + extra_args
+
+
 # ---------------------------------------------------------------------------
 # Phase 2 — Build the image
 # ---------------------------------------------------------------------------
@@ -430,26 +476,43 @@ def build_image(conda_channel: str = DEFAULT_CONDA_CHANNEL) -> None:
     ----------
     conda_channel : str
         The conda channel URL to use. Defaults to
-        ``https://conda-forge.org/conda-forge``. The Dockerfile passes
-        this value as a build-arg so the build is reproducible.
+        ``https://conda.anaconda.cloud/conda-forge`` (the new
+        conda-forge canonical host as of the 2026 transition). The
+        Dockerfile passes this value as a build-arg so the build is
+        reproducible.
+
+    Notes
+    -----
+    Uses ``docker buildx build`` (BuildKit) when available. Falls
+    back to ``docker build`` (legacy, deprecated) when buildx is not
+    installed. The bootstrap installs ``docker-buildx`` on Linux
+    alongside ``docker.io`` so the buildx path is preferred.
     """
     log_info(
         f"Building the BioResearch AI Docker image "
         f"(conda channel: {conda_channel}, this can take a few minutes)…"
     )
-    cmd = [
-        "docker", "build",
+    extra = [
         "--build-arg", f"CONDA_CHANNEL={conda_channel}",
         "-t", DOCKER_IMAGE,
         ".",
     ]
+    cmd = _build_command(extra)
+    if cmd[0:3] == ["docker", "buildx", "build"]:
+        log_info("Using BuildKit (buildx).")
+    else:
+        log_warn(
+            "docker buildx is not installed; falling back to the "
+            "legacy builder (deprecated). Install docker-buildx to "
+            "suppress this warning."
+        )
     rc = run_streaming(cmd, cwd=REPO_ROOT, check=False)
     if rc != 0:
         raise RuntimeError(
             "Docker build failed; check the output above. "
-            "If the failure is a network timeout to conda-forge.org, "
-            "re-run with --mirror <url> (e.g. "
-            "https://mirrors.tuna.tsinghua.edu.cn/conda-forge)."
+            "If the failure is a network timeout to "
+            "conda.anaconda.cloud, re-run with --mirror <url> "
+            "(e.g. https://mirrors.tuna.tsinghua.edu.cn/conda-forge)."
         )
     log_ok("Image built")
 
@@ -1078,7 +1141,7 @@ def main() -> int:
         default=None,
         help=(
             "Conda channel URL to use when building the Docker image. "
-            "Use this when the default conda-forge.org host is blocked "
+            "Use this when the default conda.anaconda.cloud host is blocked "
             "or slow on your network. Examples: "
             "https://mirrors.tuna.tsinghua.edu.cn/conda-forge, "
             "https://mirrors.aliyun.com/conda-forge. "
