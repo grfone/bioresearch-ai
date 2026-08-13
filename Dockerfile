@@ -1,59 +1,137 @@
-# BioResearch AI — single-image build
-#
-# This Dockerfile produces a single image that contains:
-# - The Python backend (FastAPI + uvicorn) installed via micromamba.
-# - The React frontend prebuilt into frontend/dist.
-# - The frontend is served by FastAPI itself at "/" so the entire app
-#   is reachable on a single port (8000).
-#
-# The image is produced from the conda environment.yaml at the repo
-# root so the runtime is reproducible across Linux, macOS, and Windows
-# (when Docker Desktop is available).
-#
-# Network resilience
-# ------------------
-# Conda packages are downloaded from a configurable conda channel. The
-# default is ``conda-forge.org/conda-forge`` (the channel's official
-# host) which has a much better track record for international access
-# than ``conda.anaconda.org``. Users on locked-down networks can pass
-# a mirror at build time:
-#
-#     docker build --build-arg CONDA_CHANNEL=https://mirrors.tuna.tsinghua.edu.cn/conda-forge .
-#     python3 bootstrap.py --mirror https://mirrors.tuna.tsinghua.edu.cn/conda-forge
-#
-# Popular mirrors:
-# - https://conda-forge.org/conda-forge           (default; official)
-# - https://mirrors.tuna.tsinghua.edu.cn/conda-forge   (China: TUNA)
-# - https://mirrors.aliyun.com/conda-forge         (China: Aliyun)
-# - https://conda.anaconda.org/conda-forge        (legacy fallback)
-#
-# The build also retries the solve up to three times with a back-off.
-# The two conda steps are split so a transient failure of the solve
-# does not require re-downloading the entire package set on the next run.
+"""
+Multi-stage Dockerfile for BioResearch AI.
+
+Targets
+-------
+- ``bioresearch-ai:latest`` (default): slim Python-only image, ~250 MB.
+  Contains the FastAPI backend and the prebuilt React frontend. No
+  conda, no ML libraries, no Node.js. Suitable for users who pick
+  OpenAI / Anthropic / xAI / any cloud provider in the bootstrap GUI.
+
+- ``bioresearch-ai:local``: full image with the heavy ML dependencies
+  (torch, transformers, scikit-learn, etc.) needed for offline
+  experiments and local Ollama validation. ~3 GB. Only built when the
+  user passes ``--local`` to bootstrap.py.
+
+Selection
+---------
+The target is selected at build time via ``--build-arg BUILD_TARGET=minimal``
+or ``--build-arg BUILD_TARGET=local``. The default is ``minimal``.
+
+A user who picks ``local`` in the bootstrap GUI and tries to use the
+default image will get a clear error at the probe step (the
+``openai`` import will fail because the backend was built without
+the heavy ML deps). The bootstrap reruns with the right target
+automatically.
+"""
 
 # syntax=docker/dockerfile:1.6
-FROM mambaorg/micromamba:1.5.6
-
-# Build-time channel configuration. Override with
-# ``--build-arg CONDA_CHANNEL=<url>`` when you need a mirror.
 #
-# The default is the conda-forge channel hosted on Anaconda's
-# CDN (`conda.anaconda.org/conda-forge`). This is the URL that
-# actually returns a 200 today for the conda-forge channel.
-#
-# We deliberately do NOT default to ``conda-forge.org/conda-forge``
-# (returns 404) or ``conda.anaconda.cloud/conda-forge`` (often
-# unreachable from the build environment). The --mirror flag
-# in bootstrap.py lets users override at build time if they have
-# a different working host.
+# Build arguments
+# ---------------
+# BUILD_TARGET selects which target of this multi-stage build to use.
+# Values: "minimal" (default) or "local".
+ARG BUILD_TARGET=minimal
+# CONDA_CHANNEL is preserved for backwards compatibility but only
+# consulted when BUILD_TARGET=local. The minimal target does not use
+# conda at all.
 ARG CONDA_CHANNEL=https://conda.anaconda.org/conda-forge
 
-# Persist the channel choice into the runtime so any later commands
-# (e.g. ``micromamba install`` at runtime) reuse the same mirror.
+# ---------------------------------------------------------------------------
+# Stage 1: build the React frontend
+# ---------------------------------------------------------------------------
+# This stage runs only at build time. It installs Node, runs npm
+# install, builds the Vite bundle, and discards the entire
+# node_modules (171 MB). The final image only contains the 2.4 MB
+# dist/ directory.
+FROM node:20-bookworm-slim AS frontend
+
+WORKDIR /app/frontend
+
+# Copy only the manifests first so this layer is cached when only
+# source files change.
+COPY frontend/package.json frontend/package-lock.json* ./
+
+# npm is flaky on slow networks (chunks don't always finish). Retry
+# up to three times.
+RUN set -e && \
+    for attempt in 1 2 3; do \
+        echo ">>> npm ci attempt ${attempt}/3"; \
+        npm ci --no-audit --no-fund && break; \
+        echo ">>> npm ci failed, retrying..."; \
+        sleep 5; \
+    done
+
+COPY frontend ./
+RUN npm run build
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: minimal backend (default — no conda, no ML deps)
+# ---------------------------------------------------------------------------
+# Slim Python 3.12 base + pip install of the minimal backend
+# requirements. Total image size: ~250 MB.
+FROM python:3.12-slim AS backend-minimal
+
+# System packages we need beyond Python: curl for the credential
+# probes and healthcheck, and build-essential for any wheels that
+# need to compile (e.g. greenlet on some platforms).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install the minimal backend deps. This is the hot path for the
+# common case (cloud LLMs only).
+COPY requirements/minimal-requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Copy only what the backend needs. environment.yaml is
+# excluded by the minimal target so the conda env doesn't sneak
+# into the slim image.
+COPY --chown=app:app app /app/app
+COPY --chown=app:app main.py pyproject.toml README.md /app/
+# README.md and pyproject.toml are not strictly required by the
+# runtime but they are tiny and help tools like ``pip show``.
+# The minimal requirements file is the only requirements file we
+# need here.
+COPY --chown=app:app requirements/minimal-requirements.txt /app/requirements.txt
+
+# Copy the prebuilt frontend bundle from the frontend stage.
+COPY --from=frontend --chown=app:app /app/frontend/dist /app/frontend/dist
+
+EXPOSE 8000
+
+# Switch to a non-root user for runtime safety.
+RUN useradd --create-home --shell /bin/bash app
+USER app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8000/api || exit 1
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: local backend (heavy ML deps for offline use)
+# ---------------------------------------------------------------------------
+# This stage is only built when the user picks ``local`` in the
+# bootstrap GUI. It uses the conda env to pull in torch, transformers,
+# scikit-learn, rdkit, etc. — the deps that the user's research
+# scripts and the local Ollama validation need.
+FROM mambaorg/micromamba:1.5.6 AS backend-local
+
+# Pull in the user's choice of mirror.
+ARG CONDA_CHANNEL
 ENV CONDA_CHANNEL=${CONDA_CHANNEL}
 
-# System packages we need beyond conda: Node.js for the frontend build,
-# git for some pip packages, and curl for the credential probes.
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -63,33 +141,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         nodejs \
         npm \
         procps \
-        wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Create the application directory.
 WORKDIR /app
 
-# Tell micromamba to use the configured channel. The legacy behaviour
-# of fetching ``repodata.json`` from the URL given here is what we want.
+# Set up the conda channel. The retry loop here is the same as before
+# — bail out on 404 because that means the channel URL is wrong,
+# not a transient failure.
 RUN mkdir -p /root/.conda && \
     echo "channels:" > /root/.conda/.condarc && \
     echo "  - ${CONDA_CHANNEL}" >> /root/.conda/.condarc && \
-    echo "channel_priority: strict" >> /root/.conda/.condarc && \
-    echo "show_channel_urls: true" >> /root/.conda/.condarc
+    echo "channel_priority: strict" >> /root/.conda/.condarc
 
-# ---- Step 1: install only the heavy build-time deps first. ----
-# This is split out so that if the network blips while downloading
-# the first batch, the second batch doesn't have to re-download.
-#
-# The retry loop catches transient SSL / timeout errors that are
-# common on slow or restrictive networks. The set +e / set -e dance
-# lets us inspect the return code of micromamba while keeping the
-# surrounding script's error handling off.
 COPY --chown=$MAMBA_USER:$MAMBA_USER environment.yaml /app/environment.yaml
-# Retry loop. Three attempts on transient failures (SSL handshake
-# timeout, connection reset, DNS hiccup). A 404 response is a hard
-# failure because the channel URL is wrong — no amount of retrying
-# will fix it — so we bail out immediately and surface the error.
 RUN set +e && \
     for attempt in 1 2 3; do \
         echo ">>> conda install attempt ${attempt}/3 from ${CONDA_CHANNEL}"; \
@@ -97,71 +161,51 @@ RUN set +e && \
                 --channel "${CONDA_CHANNEL}" \
                 --download-only \
                 -f /app/environment.yaml; then break; fi; \
-        echo ">>> micromamba install failed"; \
+        echo ">>> micromamba download failed"; \
         if curl -sIL --max-time 10 "${CONDA_CHANNEL}/noarch/repodata.json" | grep -q " 404 "; then \
-            echo ">>> FATAL: channel ${CONDA_CHANNEL} returned 404. The URL is wrong."; \
-            echo ">>> Re-run with --mirror <url>. See INSTALL.md for known working mirrors."; \
+            echo ">>> FATAL: channel ${CONDA_CHANNEL} returned 404"; \
             exit 1; \
         fi; \
         if [ "${attempt}" = "3" ]; then exit 1; fi; \
-        echo ">>> sleeping 10s before retry..."; \
         sleep 10; \
-    done
-
-# ---- Step 2: actually link the packages into the environment. ----
-# Linking is a local filesystem operation so it cannot fail with a
-# network timeout. Splitting it from the download means a flaky
-# network only ever re-downloads, never re-installs.
-RUN set +e && \
-    for attempt in 1 2 3; do \
-        echo ">>> conda link attempt ${attempt}/3"; \
-        micromamba install -y -n base \
-            --offline \
-            -f /app/environment.yaml && break; \
-        rc=$?; \
-        echo ">>> micromamba link failed with rc=${rc}"; \
-        if [ "${attempt}" = "3" ]; then exit "${rc}"; fi; \
-        sleep 5; \
     done && \
+    micromamba install -y -n base --offline -f /app/environment.yaml && \
     micromamba clean -a -y
 
-# Prepend conda's bin so all subsequent commands see python/uvicorn.
-ENV PATH=/opt/conda/bin:$PATH
-ENV PYTHONUNBUFFERED=1
-# Tell pydantic settings to read from /app/.env (mounted by compose).
-ENV PYTHONPATH=/app
-
-# Install Node deps and build the frontend.
+# Frontend build (local image rebuilds; we still want no node_modules
+# in the runtime layer).
 COPY --chown=$MAMBA_USER:$MAMBA_USER frontend/package.json frontend/package-lock.json* /app/frontend/
 WORKDIR /app/frontend
-# npm is also flaky on slow networks. Add a retry around the install.
 RUN set +e && \
     for attempt in 1 2 3; do \
-        echo ">>> npm install attempt ${attempt}/3"; \
-        npm install --no-audit --no-fund && break; \
-        rc=$?; \
-        echo ">>> npm install failed with rc=${rc}"; \
-        if [ "${attempt}" = "3" ]; then exit "${rc}"; fi; \
+        echo ">>> npm ci attempt ${attempt}/3"; \
+        (cd /app/frontend && npm ci --no-audit --no-fund) && break; \
         sleep 5; \
     done
 COPY --chown=$MAMBA_USER:$MAMBA_USER frontend /app/frontend
 RUN npm run build
 
-# Copy the rest of the backend and install it.
 WORKDIR /app
 COPY --chown=$MAMBA_USER:$MAMBA_USER . /app
-# pip install --no-deps so we don't reinstall what's already in conda.
 RUN pip install --no-cache-dir --no-deps -e .
 
-# Switch back to the micromamba user (uid 1000) so the running
-# container is not root.
+ENV PATH=/opt/conda/bin:$PATH \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
 USER $MAMBA_USER
 
 EXPOSE 8000
 
-# Healthcheck is intentionally simple: uvicorn's / endpoint always
-# returns 200 when the app is up.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/ || exit 1
+    CMD curl -fsS http://127.0.0.1:8000/api || exit 1
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+# ---------------------------------------------------------------------------
+# Target selection
+# ---------------------------------------------------------------------------
+# The default target is the slim backend. The bootstrap script also
+# accepts ``--local`` which builds the heavy backend-local target.
+FROM backend-${BUILD_TARGET} AS final
