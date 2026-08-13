@@ -6,7 +6,7 @@
  *
  * This module provides a typed interface for all backend endpoints,
  * including health checks, literature search, workspace management,
- * and report generation.
+ * FSM actions, evidence comparison, and report generation.
  *
  * The client uses the native `fetch` API and returns parsed JSON.
  * All methods are async and throw on HTTP errors.
@@ -18,45 +18,42 @@
  */
 
 import type {
-  SearchRequest,
-  SearchResponse,
-} from './search'; // We'll assume we have search.ts (similar to paper but for search)
-// Actually we don't have search.ts yet, but we can define the types inside or import from paper?
-// We can inline the types for search request/response.
-// For simplicity, we define them here or import from separate file.
-// Let's create a minimal SearchRequest and SearchResponse based on backend.
-
-// We'll also import WorkspaceRequest, WorkspaceResponse, ReportRequest, ReportResponse from their modules.
-
-import type { WorkspaceRequest, WorkspaceResponse } from '../models/workspace';
+  WorkspaceRequest,
+  WorkspaceResponse,
+  WorkspaceStatusResponse,
+} from '../models/workspace';
+import type {
+  EvidenceComparisonResponse,
+} from '../models/comparison';
 import type { ReportRequest, ReportResponse } from '../models/report';
 import type { Paper } from '../models/paper';
-
-// Since we don't have search.ts, we can define them here or create separate file.
-// I'll create a search.ts later, but for client.ts we need them.
-// For brevity, I'll define them inline.
 
 /**
  * Request payload for literature search.
  */
 export interface SearchRequest {
-  /** Biomedical research question */
   question: string;
+}
+
+/**
+ * Response payload for literature search.
+ */
+export interface SearchResponse {
+  query: string;
+  source: string;
+  total_results: number;
+  retrieved_at: string;
+  papers: Paper[];
 }
 
 /**
  * Response from literature search.
  */
-export interface SearchResponse {
-  /** Original query */
+export interface SearchResponseWrapped {
   query: string;
-  /** Literature source (e.g., "PubMed") */
   source: string;
-  /** Total number of papers returned */
   total_results: number;
-  /** UTC timestamp of search completion */
   retrieved_at: string;
-  /** List of papers */
   papers: Paper[];
 }
 
@@ -68,9 +65,6 @@ const BASE_URL = import.meta.env?.VITE_API_BASE_URL ?? DEFAULT_BASE_URL;
 
 /**
  * Helper to construct full URL for a given path.
- *
- * @param path - API endpoint path (e.g., '/health').
- * @returns Full URL.
  */
 function buildUrl(path: string): string {
   return `${BASE_URL}${path}`;
@@ -79,11 +73,6 @@ function buildUrl(path: string): string {
 /**
  * Wrapper for `fetch` that handles JSON serialisation, error responses,
  * and throws consistent errors.
- *
- * @param url - Full URL to fetch.
- * @param options - Fetch options.
- * @returns Parsed JSON response.
- * @throws {Error} If the HTTP response is not OK.
  */
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -95,14 +84,16 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    let detail = 'Unknown error';
+    let detail: unknown = 'Unknown error';
     try {
       const errorBody = await response.json();
-      detail = errorBody.detail ?? JSON.stringify(errorBody);
+      detail = (errorBody as { detail?: unknown }).detail ?? errorBody;
     } catch {
       detail = response.statusText || `HTTP ${response.status}`;
     }
-    throw new Error(`API error ${response.status}: ${detail}`);
+    const detailStr =
+      typeof detail === 'string' ? detail : JSON.stringify(detail);
+    throw new Error(`API error ${response.status}: ${detailStr}`);
   }
 
   return response.json();
@@ -112,27 +103,17 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
  * API client object containing methods for each backend endpoint.
  */
 export const api = {
-  /**
-   * Health check endpoint.
-   * @returns {Promise<{ status: string }>} Health status.
-   */
+  /** Health check endpoint. */
   health: (): Promise<{ status: string }> => {
     return fetchJson(buildUrl('/health'));
   },
 
-  /**
-   * Root endpoint.
-   * @returns {Promise<{ application: string; status: string }>} Application info.
-   */
+  /** Root endpoint. */
   root: (): Promise<{ application: string; status: string }> => {
     return fetchJson(buildUrl('/'));
   },
 
-  /**
-   * Search literature using the main `/search` endpoint.
-   * @param request - Search request containing the question.
-   * @returns {Promise<SearchResponse>} Search results.
-   */
+  /** Search literature using the main `/search` endpoint. */
   search: (request: SearchRequest): Promise<SearchResponse> => {
     return fetchJson(buildUrl('/search'), {
       method: 'POST',
@@ -140,10 +121,7 @@ export const api = {
     });
   },
 
-  /**
-   * Search literature using the legacy `/papers/search` endpoint.
-   * Same payload and response as `/search`.
-   */
+  /** Search literature using the legacy `/papers/search` endpoint. */
   searchPapers: (request: SearchRequest): Promise<SearchResponse> => {
     return fetchJson(buildUrl('/papers/search'), {
       method: 'POST',
@@ -151,11 +129,7 @@ export const api = {
     });
   },
 
-  /**
-   * Create a new Research Workspace.
-   * @param request - Workspace creation payload.
-   * @returns {Promise<WorkspaceResponse>} Created workspace.
-   */
+  /** Create a new Research Workspace. */
   createWorkspace: (request: WorkspaceRequest): Promise<WorkspaceResponse> => {
     return fetchJson(buildUrl('/workspaces'), {
       method: 'POST',
@@ -163,37 +137,101 @@ export const api = {
     });
   },
 
-  /**
-   * Retrieve an existing Workspace by ID.
-   * @param workspaceId - UUID of the workspace.
-   * @returns {Promise<WorkspaceResponse>} Workspace data.
-   */
+  /** Retrieve an existing Workspace by ID. */
   getWorkspace: (workspaceId: string): Promise<WorkspaceResponse> => {
     return fetchJson(buildUrl(`/workspaces/${workspaceId}`));
   },
 
-  /**
-   * Update an existing Workspace (currently only the question can be changed).
-   * @param workspaceId - UUID of the workspace.
-   * @param request - Updated workspace data.
-   * @returns {Promise<WorkspaceResponse>} Updated workspace.
-   */
-  updateWorkspace: (workspaceId: string, request: WorkspaceRequest): Promise<WorkspaceResponse> => {
+  /** Update an existing Workspace (currently only the question can be changed). */
+  updateWorkspace: (
+    workspaceId: string,
+    request: WorkspaceRequest,
+  ): Promise<WorkspaceResponse> => {
     return fetchJson(buildUrl(`/workspaces/${workspaceId}`), {
       method: 'PUT',
       body: JSON.stringify(request),
     });
   },
 
-  /**
-   * Generate a research report from a workspace.
-   * @param request - Report generation options.
-   * @returns {Promise<ReportResponse>} Generated report.
-   */
+  /** Generate a research report from a workspace (legacy). */
   generateReport: (request: ReportRequest): Promise<ReportResponse> => {
     return fetchJson(buildUrl('/reports/generate'), {
       method: 'POST',
       body: JSON.stringify(request),
     });
+  },
+
+  // ------------------------------------------------------------------
+  // FSM action endpoints
+  // ------------------------------------------------------------------
+
+  /**
+   * Run the SEARCH action on a workspace.
+   */
+  runSearchAction: (
+    workspaceId: string,
+    query?: string,
+  ): Promise<WorkspaceResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/actions/search`),
+      {
+        method: 'POST',
+        body: JSON.stringify({ query: query ?? null }),
+      },
+    );
+  },
+
+  /** Run the SUMMARIZE action on a workspace. */
+  runSummarizeAction: (workspaceId: string): Promise<WorkspaceResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/actions/summarize`),
+      { method: 'POST' },
+    );
+  },
+
+  /** Run the COMPARE action on a workspace. */
+  runCompareAction: (workspaceId: string): Promise<WorkspaceResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/actions/compare`),
+      { method: 'POST' },
+    );
+  },
+
+  /** Run the REPORT action on a workspace. */
+  runReportAction: (workspaceId: string): Promise<WorkspaceResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/actions/report`),
+      { method: 'POST' },
+    );
+  },
+
+  /** Run the COMPLETE action on a workspace. */
+  runCompleteAction: (workspaceId: string): Promise<WorkspaceResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/actions/complete`),
+      { method: 'POST' },
+    );
+  },
+
+  /** Run the RETRY action on a workspace. */
+  runRetryAction: (workspaceId: string): Promise<WorkspaceResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/actions/retry`),
+      { method: 'POST' },
+    );
+  },
+
+  /** Return the FSM status of a workspace. */
+  getTransitions: (workspaceId: string): Promise<WorkspaceStatusResponse> => {
+    return fetchJson(buildUrl(`/workspaces/${workspaceId}/transitions`));
+  },
+
+  /** Return the stored evidence comparison for a workspace. */
+  getEvidenceComparison: (
+    workspaceId: string,
+  ): Promise<EvidenceComparisonResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/evidence-comparison`),
+    );
   },
 };

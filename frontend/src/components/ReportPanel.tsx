@@ -14,7 +14,7 @@
 
 import React from 'react';
 import type { ReportResponse } from '../models/report';
-import { hasLimitations, hasFutureWork } from '../models/report';../report';
+import { hasLimitations, hasFutureWork } from '../models/report';
 import { AlertCircle, Lightbulb, CheckCircle, FileText } from 'lucide-react';
 
 interface ReportPanelProps {

@@ -10,42 +10,13 @@
  * Purpose
  * ----------------------------------------------------------------------------
  *
- * Displays a research workspace, including the research question, evidence
- * summary, literature search interface, and the list of retrieved papers.
+ * The lab-bench view of a Research Workspace. Shows the research question,
+ * the FSM lifecycle strip, the retrieved literature, the evidence summary,
+ * the cross-paper comparison, and the final report.
  *
- * This page is the central hub for building a collection of relevant
- * literature around a specific biomedical query.
- *
- * ----------------------------------------------------------------------------
- * Architecture
- * ----------------------------------------------------------------------------
- *
- *                Workspace (Page)
- *                      │
- *              useWorkspace (hook)
- *                      │
- *       ┌──────────────┼──────────────┐
- *       │              │              │
- * LiteratureSearch  PaperList   WorkspaceHeader
- *       │              │              │
- *   SearchBar       PaperItem   Metadata/Controls
- *       │              │
- *   Results count   Remove/Clear
- *
- * ----------------------------------------------------------------------------
- * Responsibilities
- * ----------------------------------------------------------------------------
- *
- * • Display the research question and metadata (created date, status).
- * • Show an evidence summary if available.
- * • Provide a literature search component to add new papers.
- * • List all papers associated with the workspace.
- * • Allow removal of individual papers and clearing all papers.
- * • Provide a "Generate Report" action to create a research report.
- * • Navigate to the generated report when ready.
- *
- * The page integrates with the workspace store for local state management
- * and uses the `useWorkspace` hook for API interactions.
+ * The page is fully driven by the FSM: action buttons are enabled only
+ * when the FSM allows them. There is no "always-on" report button — the
+ * UI consults ``workspace.allowed_actions``.
  *
  * ----------------------------------------------------------------------------
  * Author
@@ -60,18 +31,19 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../hooks/useWorkspace';
 import { LiteratureSearch } from '../components/LiteratureSearch';
 import { PaperList } from '../components/PaperList';
-import { BookOpen, Clock, FileText, Trash2 } from 'lucide-react';
+import { WorkspaceStatusBar } from '../components/WorkspaceStatusBar';
+import { EvidenceComparisonPanel } from '../components/EvidenceComparisonPanel';
+import { BookOpen, Clock, FileText, Trash2, Play, Sparkles, GitCompareArrows, FilePlus2, RotateCcw } from 'lucide-react';
 import { useWorkspaceStore } from '../state/workspaceStore';
-import { toast } from '../state/toastStore'; // if you have
+import { toast } from '../state/toastStore';
+import type { WorkspaceAction } from '../models/workspace';
 
 export const Workspace: React.FC = () => {
   const { workspaceId } = useParams<{ workspaceId: string }>();
   const navigate = useNavigate();
 
-  // Get the workspace from the store
   const storeWorkspace = useWorkspaceStore((s) => s.currentWorkspace);
 
-  // We only fetch if the store doesn't have the workspace with this ID
   const shouldFetch = !storeWorkspace || storeWorkspace.workspace_id !== workspaceId;
 
   const {
@@ -79,10 +51,9 @@ export const Workspace: React.FC = () => {
     loading,
     error,
     fetchWorkspace,
-    generateReport,
+    runAction,
   } = useWorkspace(workspaceId, { autoFetch: false });
 
-  // Fetch only if needed
   useEffect(() => {
     if (shouldFetch && workspaceId) {
       (async () => {
@@ -95,17 +66,27 @@ export const Workspace: React.FC = () => {
     }
   }, [workspaceId, shouldFetch, fetchWorkspace]);
 
-    // Get store actions
-    const removePaper = useWorkspaceStore((s) => s.removePaper);
-    const clearPapers = useWorkspaceStore((s) => s.clearPapers);
+  const removePaper = useWorkspaceStore((s) => s.removePaper);
+  const clearPapers = useWorkspaceStore((s) => s.clearPapers);
+
+  const can = (action: WorkspaceAction): boolean => {
+    return workspace?.allowed_actions.includes(action) ?? false;
+  };
+
+  const handleRunAction = async (action: WorkspaceAction, label: string) => {
+    try {
+      await runAction(action);
+      toast.success(`${label} completed`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`${label} failed: ${message}`);
+    }
+  };
 
   const handleGenerateReport = async () => {
-    try {
-      await generateReport();
-      toast.success('Report generated successfully!');
+    await handleRunAction('report', 'Report generation');
+    if (can('report') === false && workspace?.state === 'REPORTED') {
       navigate(`/report/${workspaceId}`);
-    } catch (err) {
-      toast.error('Failed to generate report.');
     }
   };
 
@@ -124,7 +105,7 @@ export const Workspace: React.FC = () => {
     }
   };
 
-  if (loading) {
+  if (loading && !workspace) {
     return (
       <div className="page section flex items-center justify-center min-h-screen">
         <div className="text-center">
@@ -135,7 +116,7 @@ export const Workspace: React.FC = () => {
     );
   }
 
-  if (error) {
+  if (error && !workspace) {
     return (
       <div className="page section flex items-center justify-center min-h-screen">
         <div className="text-center text-error">
@@ -146,8 +127,7 @@ export const Workspace: React.FC = () => {
     );
   }
 
-  // Use the store's workspace if available, otherwise the fetched one
-  const currentWorkspace = storeWorkspace?.workspace_id === workspaceId ? storeWorkspace : workspace;
+  const currentWorkspace = workspace;
 
   if (!currentWorkspace) {
     return (
@@ -174,30 +154,97 @@ export const Workspace: React.FC = () => {
               <Clock size={14} />
               {new Date(currentWorkspace.created_at).toLocaleDateString()}
             </span>
-            <span className="badge badge-neutral">{currentWorkspace.status}</span>
+            <span className="badge badge-neutral">{currentWorkspace.state}</span>
             {currentWorkspace.report_available && (
               <span className="badge badge-success">Report Available</span>
             )}
           </div>
         </div>
-        <div className="flex gap-3">
-          <button
-            className="btn btn-secondary"
-            onClick={handleClearPapers}
-            disabled={currentWorkspace.total_papers === 0}
-          >
-            <Trash2 size={16} />
-            Clear All
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={handleGenerateReport}
-            disabled={currentWorkspace.total_papers === 0}
-          >
-            <FileText size={16} />
-            Generate Report
-          </button>
-        </div>
+      </div>
+
+      {/* Lifecycle strip */}
+      <WorkspaceStatusBar
+        state={currentWorkspace.state}
+        progress={currentWorkspace.progress}
+        allowedActions={currentWorkspace.allowed_actions}
+        lastError={currentWorkspace.last_error}
+      />
+
+      {/* Action buttons (FSM-aware) */}
+      <div className="lab-bench-action-bar" role="toolbar" aria-label="Workspace actions">
+        <button
+          className="btn btn-primary"
+          onClick={() => handleRunAction('search', 'PubMed search')}
+          disabled={!can('search')}
+          data-action="search"
+          title={
+            can('search')
+              ? 'Run a new PubMed search for this workspace'
+              : 'Search is not allowed in the current state'
+          }
+        >
+          <Play size={16} />
+          Search
+        </button>
+
+        <button
+          className="btn btn-primary"
+          onClick={() => handleRunAction('summarize', 'Summarization')}
+          disabled={!can('summarize')}
+          data-action="summarize"
+        >
+          <Sparkles size={16} />
+          Summarize
+        </button>
+
+        <button
+          className="btn btn-primary"
+          onClick={() => handleRunAction('compare', 'Evidence comparison')}
+          disabled={!can('compare')}
+          data-action="compare"
+        >
+          <GitCompareArrows size={16} />
+          Compare
+        </button>
+
+        <button
+          className="btn btn-primary"
+          onClick={handleGenerateReport}
+          disabled={!can('report')}
+          data-action="report"
+        >
+          <FileText size={16} />
+          Generate Report
+        </button>
+
+        <button
+          className="btn btn-secondary"
+          onClick={() => handleRunAction('complete', 'Completion')}
+          disabled={!can('complete')}
+          data-action="complete"
+        >
+          <FilePlus2 size={16} />
+          Complete
+        </button>
+
+        <button
+          className="btn btn-secondary"
+          onClick={() => handleRunAction('retry', 'Retry')}
+          disabled={!can('retry')}
+          data-action="retry"
+        >
+          <RotateCcw size={16} />
+          Retry
+        </button>
+
+        <button
+          className="btn btn-secondary"
+          onClick={handleClearPapers}
+          disabled={currentWorkspace.total_papers === 0}
+        >
+          <Trash2 size={16} />
+          Clear All
+        </button>
       </div>
 
       {/* Summary */}
@@ -209,6 +256,14 @@ export const Workspace: React.FC = () => {
           <p className="text-secondary leading-relaxed">{currentWorkspace.summary}</p>
         </div>
       )}
+
+      {/* Evidence Comparison */}
+      <div className="mb-6">
+        <EvidenceComparisonPanel
+          workspaceId={currentWorkspace.workspace_id}
+          hasComparison={currentWorkspace.has_evidence_comparison}
+        />
+      </div>
 
       {/* Literature Search */}
       <div className="mb-6">

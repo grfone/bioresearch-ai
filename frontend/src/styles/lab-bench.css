@@ -1,0 +1,399 @@
+/* ============================================================================
+ * lab-bench.css
+ * BioResearch AI — Lab-bench FSM UI
+ * ============================================================================
+ *
+ * The lab-bench styles render the workspace as a sequence of named
+ * stations (Question → Papers → Summary → Comparison → Report)
+ * plus the action toolbar and the evidence comparison panel.
+ *
+ * The visual language is intentionally distinct from the chat-style
+ * "card" UI of the rest of the application: the workspace feels
+ * like a researcher’s bench with persistent state, not a
+ * conversational surface.
+ *
+ * ============================================================================ */
+
+:root {
+  --bench-bg: rgba(15, 23, 42, 0.65);
+  --bench-bg-light: rgba(30, 41, 59, 0.55);
+  --bench-border: rgba(148, 163, 184, 0.2);
+  --bench-border-strong: rgba(148, 163, 184, 0.4);
+  --bench-text: #e2e8f0;
+  --bench-text-muted: #94a3b8;
+  --bench-text-dim: #64748b;
+
+  --station-pending: #475569;
+  --station-in-progress: #38bdf8;
+  --station-complete: #34d399;
+  --station-error: #f87171;
+
+  --pill-bg: rgba(56, 189, 248, 0.12);
+  --pill-border: rgba(56, 189, 248, 0.4);
+  --pill-text: #bae6fd;
+
+  --pill-warning-bg: rgba(248, 113, 113, 0.12);
+  --pill-warning-border: rgba(248, 113, 113, 0.4);
+  --pill-warning-text: #fecaca;
+}
+
+/* ---------------------------------------------------------------------------
+ * Lifecycle strip
+ * --------------------------------------------------------------------------- */
+
+.lab-bench-panel {
+  background: var(--bench-bg);
+  border: 1px solid var(--bench-border);
+  border-radius: 14px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.lab-bench-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.lab-bench-title {
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--bench-text-muted);
+  font-weight: 600;
+}
+
+.lab-bench-state {
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: #bae6fd;
+}
+
+.lab-bench-state[data-state="ERROR"] {
+  background: rgba(248, 113, 113, 0.15);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #fecaca;
+}
+
+.lab-bench-state[data-state="COMPLETED"] {
+  background: rgba(52, 211, 153, 0.15);
+  border-color: rgba(52, 211, 153, 0.4);
+  color: #bbf7d0;
+}
+
+.lab-bench-progress {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--bench-text);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.lab-bench-stations {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.75rem;
+}
+
+.lab-bench-station {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 0.75rem 0.5rem;
+  border-radius: 10px;
+  background: var(--bench-bg-light);
+  border: 1px solid var(--bench-border);
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.lab-bench-station-dot {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  background: var(--station-pending);
+  margin-bottom: 0.5rem;
+}
+
+.lab-bench-station-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--bench-text);
+}
+
+.lab-bench-station-description {
+  font-size: 0.7rem;
+  color: var(--bench-text-muted);
+  margin-top: 0.15rem;
+}
+
+.lab-bench-station--pending {
+  opacity: 0.6;
+}
+
+.lab-bench-station--in-progress {
+  border-color: rgba(56, 189, 248, 0.5);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.lab-bench-station--in-progress .lab-bench-station-dot {
+  background: var(--station-in-progress);
+  box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.25);
+  animation: bench-pulse 1.6s ease-in-out infinite;
+}
+
+.lab-bench-station--complete {
+  border-color: rgba(52, 211, 153, 0.4);
+  background: rgba(52, 211, 153, 0.06);
+}
+
+.lab-bench-station--complete .lab-bench-station-dot {
+  background: var(--station-complete);
+}
+
+.lab-bench-station--error {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.lab-bench-station--error .lab-bench-station-dot {
+  background: var(--station-error);
+}
+
+@keyframes bench-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.25); }
+  50% { box-shadow: 0 0 0 8px rgba(56, 189, 248, 0.1); }
+}
+
+.lab-bench-progress-bar {
+  height: 4px;
+  background: rgba(148, 163, 184, 0.15);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.lab-bench-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #38bdf8, #34d399);
+  transition: width 0.4s ease;
+}
+
+.lab-bench-error {
+  padding: 0.5rem 0.75rem;
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 8px;
+  color: #fecaca;
+  font-size: 0.85rem;
+}
+
+.lab-bench-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--bench-text-muted);
+}
+
+.lab-bench-actions-label {
+  font-weight: 500;
+}
+
+.lab-bench-actions-empty {
+  color: var(--bench-text-dim);
+  font-style: italic;
+}
+
+.lab-bench-action-pill {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  border: 1px solid var(--pill-border);
+  color: var(--pill-text);
+}
+
+/* ---------------------------------------------------------------------------
+ * Action bar
+ * --------------------------------------------------------------------------- */
+
+.lab-bench-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem;
+  background: var(--bench-bg);
+  border: 1px solid var(--bench-border);
+  border-radius: 12px;
+}
+
+.lab-bench-action-bar .btn {
+  position: relative;
+}
+
+.lab-bench-action-bar .btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------------------
+ * Evidence Comparison panel
+ * --------------------------------------------------------------------------- */
+
+.evidence-comparison-panel {
+  background: var(--bench-bg);
+  border: 1px solid var(--bench-border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+}
+
+.evidence-comparison-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--bench-text);
+  margin-bottom: 1rem;
+}
+
+.evidence-comparison-empty,
+.evidence-comparison-loading,
+.evidence-comparison-error {
+  color: var(--bench-text-muted);
+  font-size: 0.9rem;
+}
+
+.evidence-comparison-error {
+  color: #fecaca;
+}
+
+.evidence-comparison-section {
+  margin-bottom: 1.25rem;
+}
+
+.evidence-comparison-section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--bench-text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.evidence-comparison-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.evidence-comparison-item {
+  padding: 0.75rem;
+  background: var(--bench-bg-light);
+  border: 1px solid var(--bench-border);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  color: var(--bench-text);
+}
+
+.evidence-comparison-item--contradiction {
+  border-color: rgba(248, 113, 113, 0.3);
+  background: rgba(248, 113, 113, 0.05);
+}
+
+.evidence-comparison-claim,
+.evidence-comparison-topic,
+.evidence-comparison-description {
+  margin: 0 0 0.4rem 0;
+}
+
+.evidence-comparison-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+
+.evidence-comparison-pill {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.65rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  border: 1px solid var(--pill-border);
+  color: var(--pill-text);
+}
+
+.evidence-comparison-pill--warning {
+  background: var(--pill-warning-bg);
+  border-color: var(--pill-warning-border);
+  color: var(--pill-warning-text);
+}
+
+.evidence-comparison-notes {
+  font-size: 0.8rem;
+  color: var(--bench-text-muted);
+  margin-top: 0.4rem;
+  font-style: italic;
+}
+
+.evidence-comparison-matrix-wrapper {
+  overflow-x: auto;
+}
+
+.evidence-comparison-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.evidence-comparison-matrix th,
+.evidence-comparison-matrix td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--bench-border);
+}
+
+.evidence-comparison-matrix th {
+  background: var(--bench-bg-light);
+  color: var(--bench-text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.7rem;
+}
+
+.evidence-comparison-matrix-paper {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  color: var(--pill-text);
+}
+
+.evidence-comparison-confidence {
+  margin-top: 1rem;
+  font-size: 0.8rem;
+  color: var(--bench-text-muted);
+  font-style: italic;
+}
+
+/* ---------------------------------------------------------------------------
+ * Responsive
+ * --------------------------------------------------------------------------- */
+
+@media (max-width: 768px) {
+  .lab-bench-stations {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

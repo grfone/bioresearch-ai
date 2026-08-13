@@ -14,7 +14,7 @@
  */
 
 import React from 'react';
-import { useWorkspaceStore } from '../workspaceStore';
+import { useWorkspaceStore } from '../state/workspaceStore';
 import { Activity, Database, Cpu } from 'lucide-react';
 
 interface StatusBarProps {
