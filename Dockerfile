@@ -1,30 +1,3 @@
-"""
-Multi-stage Dockerfile for BioResearch AI.
-
-Targets
--------
-- ``bioresearch-ai:latest`` (default): slim Python-only image, ~250 MB.
-  Contains the FastAPI backend and the prebuilt React frontend. No
-  conda, no ML libraries, no Node.js. Suitable for users who pick
-  OpenAI / Anthropic / xAI / any cloud provider in the bootstrap GUI.
-
-- ``bioresearch-ai:local``: full image with the heavy ML dependencies
-  (torch, transformers, scikit-learn, etc.) needed for offline
-  experiments and local Ollama validation. ~3 GB. Only built when the
-  user passes ``--local`` to bootstrap.py.
-
-Selection
----------
-The target is selected at build time via ``--build-arg BUILD_TARGET=minimal``
-or ``--build-arg BUILD_TARGET=local``. The default is ``minimal``.
-
-A user who picks ``local`` in the bootstrap GUI and tries to use the
-default image will get a clear error at the probe step (the
-``openai`` import will fail because the backend was built without
-the heavy ML deps). The bootstrap reruns with the right target
-automatically.
-"""
-
 # syntax=docker/dockerfile:1.6
 #
 # Build arguments
@@ -90,15 +63,12 @@ WORKDIR /app
 COPY requirements/minimal-requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy only what the backend needs. environment.yaml is
-# excluded by the minimal target so the conda env doesn't sneak
-# into the slim image.
+# Copy only what the backend needs at runtime.
 COPY --chown=app:app app /app/app
-COPY --chown=app:app main.py pyproject.toml README.md /app/
-# README.md and pyproject.toml are not strictly required by the
-# runtime but they are tiny and help tools like ``pip show``.
-# The minimal requirements file is the only requirements file we
-# need here.
+COPY --chown=app:app main.py pyproject.toml /app/
+# The minimal requirements file is the only one we install from
+# the slim image — environment.yaml stays in the build context
+# for the local target but is not copied into the slim image.
 COPY --chown=app:app requirements/minimal-requirements.txt /app/requirements.txt
 
 # Copy the prebuilt frontend bundle from the frontend stage.
