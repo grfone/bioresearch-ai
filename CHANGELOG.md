@@ -93,6 +93,15 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Fixed
 
+* **GUI crash with "`Container ... instance has no attribute 'strip'`" (root cause).**
+  A previous version had ``provider_hint_var.set("...").strip()`` —
+  a chained call that returned ``None`` from ``set()`` and then
+  crashed with ``AttributeError: 'NoneType' object has no attribute
+  'strip'``. The fix is to apply ``.strip()`` to the string
+  argument first, then pass the result to ``set()``. This also
+  affects any Tkinter ``StringVar.set()`` chain (``append``,
+  ``extend``, ``write``, etc.) that returns None.
+
 * **Bootstrap crashes with "cannot join thread before it is started".**
   The previous ``_prompt`` helper used ``threading.Thread`` without
   calling ``.start()`` before ``.join()``. Replaced with plain
