@@ -1375,19 +1375,19 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
 
 
 def _prompt(text: str = "") -> str:
-    """Read a line from stdin with the prompt visible.
+    """Read a line from stdin.
 
-    Prints the prompt to stderr so it shows up even when stdout is
-    captured by ``tee`` or a logging framework. This matches the
-    behaviour of ``input(prompt)`` but works in the tmux-+-tee
-    testing setup.
+    We use Python's built-in ``input(prompt)`` which writes the
+    prompt to stdout and reads from stdin. This is the most
+    reliable cross-terminal behaviour.
+
+    Note: the prompt will not show up if stdout is captured by a
+    pipe (e.g. ``python3 bootstrap.py | tee log``). Users in that
+    situation should use ``--skip-gui`` with a pre-populated
+    ``.env``.
     """
-    if text:
-        # Print to stderr so it survives stdout redirection.
-        sys.stderr.write(text)
-        sys.stderr.flush()
     try:
-        return input("")
+        return input(text)
     except EOFError:
         return ""
 
