@@ -1211,11 +1211,23 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
         entry = provider_lookup.get(provider_var.get())
         slug = entry.slug.value if entry else "openai"
         is_local = slug == "local"
+        # Map the catalog's ``protocol`` field to the probe's
+        # --llm argument. The probe accepts ``openai``,
+        # ``anthropic``, or ``local``; anything that uses the
+        # OpenAI-compatible /chat/completions schema gets
+        # ``openai``, anything using /v1/messages gets
+        # ``anthropic``.
+        if is_local:
+            llm_arg = "local"
+        elif entry is not None and entry.protocol.value == "anthropic":
+            llm_arg = "anthropic"
+        else:
+            llm_arg = "openai"
         probe_cmd = [
             sys.executable,
             str(REPO_ROOT / "scripts" / "probe_credentials.py"),
             "--llm",
-            "local" if is_local else "openai",
+            llm_arg,
             "--api-key",
             api_key_var.get(),
             "--base-url",
@@ -1531,11 +1543,25 @@ def _cli_collect_config(hw: HardwareInfo) -> GuiConfig:
                 break
             print("  -> Required. Paste the key or set the env var.")
 
-    # Base URL — default is empty for OpenAI-compat (the provider
-    # supplies the right one).
-    default_base_url = (
-        "" if entry.slug.value != "openai" else "https://api.openai.com/v1"
-    )
+    # Base URL. Pick the catalog value as the default. If the
+    # catalog entry doesn't declare one (e.g. for Anthropic native
+    # where the base_url is set by the SDK), fall back to a
+    # protocol-aware default: the standard /v1 endpoint for
+    # OpenAI-compat providers, /v1 for Anthropic (the SDK adds the
+    # route), or empty for local.
+    catalog_url = entry.base_url or ""
+    if catalog_url:
+        default_base_url = catalog_url
+    elif entry.protocol.value == "anthropic":
+        # Anthropic native: SDK users typically set
+        # ``base_url=https://api.anthropic.com`` and the SDK adds
+        # ``/v1/messages``. For MiniMax/Anthropic-compat hosts the
+        # user has already entered the catalog URL via the GUI.
+        default_base_url = "https://api.anthropic.com"
+    elif entry.slug.value == "openai":
+        default_base_url = "https://api.openai.com/v1"
+    else:
+        default_base_url = ""
     print(f"\nBase URL [{default_base_url or '<auto>'}]")
     try:
         raw = _prompt("Base URL: ").strip()
