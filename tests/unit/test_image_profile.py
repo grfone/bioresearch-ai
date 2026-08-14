@@ -38,6 +38,38 @@ ENVIRONMENT_YAML = REPO_ROOT / "environment.yaml"
 # ---------------------------------------------------------------------------
 
 
+def test_dockerfile_first_line_is_syntax_directive() -> None:
+    """The Dockerfile's first line must be ``# syntax=docker/dockerfile:1.6``.
+
+    A previous version started with a Python docstring (triple
+    double-quote), which Docker does not recognise as a comment
+    and treats as an instruction. BuildKit needs the syntax directive on line 1 of
+    the file so it knows how to interpret the rest. The directive
+    must be followed by at least one newline.
+    """
+    text = DOCKERFILE.read_text()
+    first_line = text.splitlines()[0]
+    assert first_line.startswith("# syntax=docker/dockerfile:"), (
+        f"Dockerfile must start with '# syntax=docker/dockerfile:...' "
+        f"on line 1, got {first_line!r}"
+    )
+
+
+def test_dockerfile_does_not_start_with_python_docstring() -> None:
+    """The Dockerfile must not start with a Python docstring.
+
+    Docker does not ignore triple-double-quote lines; it treats
+    them as instructions and fails to parse the file. The previous
+    version started with a docstring and broke every build.
+    """
+    text = DOCKERFILE.read_text()
+    assert not text.startswith(chr(34)*3), (
+        "Dockerfile must not start with a Python docstring "
+        "(Docker does not understand triple-quoted strings)"
+    )
+
+
+
 def test_dockerfile_declares_build_target_build_arg() -> None:
     """The Dockerfile must accept BUILD_TARGET so docker build can pick a target."""
     text = DOCKERFILE.read_text()
@@ -271,3 +303,35 @@ def test_bootstrap_persists_build_target_in_env() -> None:
     assert "BUILD_TARGET=" in text, (
         "bootstrap.py must persist BUILD_TARGET in .env"
     )
+
+
+
+# ---------------------------------------------------------------------------
+# Regression test for the UnboundLocalError fixed in this commit
+# ---------------------------------------------------------------------------
+
+
+def test_main_does_not_reference_config_before_gui() -> None:
+    """``build_image()`` must not reference ``config.build_target``.
+
+    A previous version of bootstrap.py referenced ``config.build_target``
+    on the line that calls ``build_image``, but ``config`` is only
+    assigned later (inside the GUI / ``--skip-gui`` branches). This
+    meant the bootstrap crashed with ``UnboundLocalError`` on first
+    run before the GUI ever opened.
+    """
+    text_src = BOOTSTRAP.read_text()
+    # Find the line that calls build_image and assert it does not
+    # reference ``config``.
+    build_image_calls = [
+        m for m in re.finditer(r"^\s*build_image\(", text_src, re.MULTILINE)
+    ]
+    assert build_image_calls, "no build_image() call found in bootstrap.py"
+    for match in build_image_calls:
+        line = match.group(0)
+        # Allow ``build_target=build_target`` and ``build_target="minimal"``
+        # but NOT ``build_target=config.something``.
+        assert "config." not in line, (
+            "build_image() must not reference config.* before config "
+            f"is assigned; got {line!r}"
+        )

@@ -284,3 +284,42 @@ def test_bootstrap_apt_install_includes_docker_buildx() -> None:
         "bootstrap.py must install docker-buildx on Debian so "
         "the buildx path is the default."
     )
+
+
+
+def test_ensure_buildx_also_installs_compose() -> None:
+    """``ensure_buildx`` must also install the docker compose v2 plugin.
+
+    A previous version only installed ``docker-buildx``. The user
+    then ran the bootstrap and ``start_containers()`` failed with
+    ``unknown shorthand flag: 'f' in -f`` because ``docker compose``
+    was not a registered plugin (it falls back to the root docker
+    CLI which doesn't accept ``-f``).
+    """
+    text = BOOTSTRAP.read_text()
+    assert "docker-compose-v2" in text, (
+        "bootstrap.py must install docker-compose-v2 on Debian so "
+        "the docker compose plugin is registered"
+    )
+    # The function name should now also handle compose.
+    assert "_detect_compose_plugin" in text
+    assert "ensure_buildx" in text
+
+
+def test_bootstrap_main_runs_ensure_buildx_before_start_containers() -> None:
+    """``ensure_buildx`` must run before ``start_containers``.
+
+    ``start_containers()`` invokes ``docker compose``, which
+    requires both ``docker-buildx`` and the ``docker compose v2``
+    plugin to be installed.
+    """
+    text = BOOTSTRAP.read_text()
+    main_body_start = text.find("def main()")
+    assert main_body_start > 0
+    main_body = text[main_body_start:]
+    ensure_pos = main_body.find("ensure_buildx(hw)")
+    start_pos = main_body.find("start_containers()")
+    assert ensure_pos > 0 and start_pos > 0
+    assert ensure_pos < start_pos, (
+        "ensure_buildx(hw) must run before start_containers()"
+    )
