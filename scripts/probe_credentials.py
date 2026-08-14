@@ -2,12 +2,15 @@
 probe_credentials.py
 
 Standalone helper used by the bootstrap GUI to verify that the
-supplied credentials actually work before saving them to `.env`.
+supplied credentials actually work before saving them to ``.env``.
 
 The script is intentionally self-contained — it does not import the
-BioResearch AI application. It only needs the standard library
-plus ``openai`` (which is shipped on the host or the conda env) and
-``urllib`` for PubMed.
+BioResearch AI application. It uses the standard library plus
+``httpx`` (already shipped on the host via the conda env or the
+slim image's minimal requirements) for HTTP. We deliberately avoid
+the OpenAI and Anthropic SDKs so the probe works for providers that
+expose either ``/chat/completions`` (OpenAI-compatible) or
+``/v1/messages`` (Anthropic-compatible).
 
 Exit code semantics:
     0   success
@@ -35,129 +38,237 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.parse
 import urllib.request
 from typing import Any
 
+import httpx
+
 
 # ---------------------------------------------------------------------------
-# LLM probe
+# LLM probes — one per protocol
 # ---------------------------------------------------------------------------
 
 
-def probe_openai(api_key: str, base_url: str, model: str, timeout: int = 30) -> dict[str, Any]:
-    """
-    Verify an OpenAI-compatible API key by issuing a 1-token call.
+# The smallest valid request for each protocol. The goal is to
+# reach the model endpoint and confirm the API key works without
+# spending tokens or generating a meaningful reply.
 
-    Parameters
-    ----------
-    api_key : str
-        The API key under test (or "ollama" for local).
-    base_url : str
-        Base URL of the OpenAI-compatible endpoint.
-    model : str
-        Model name to call.
-    timeout : int
-        Maximum time (seconds) to wait.
+_OPENAI_PROBE: dict[str, Any] = {
+    "model": "placeholder-replaced-by-arg",
+    "messages": [{"role": "user", "content": "ping"}],
+    "max_tokens": 1,
+    "temperature": 0.0,
+    "stream": False,
+}
 
-    Returns
-    -------
-    dict[str, Any]
-        Probe result with ``ok`` and ``message``.
+_ANTHROPIC_PROBE: dict[str, Any] = {
+    "model": "placeholder-replaced-by-arg",
+    "messages": [{"role": "user", "content": "ping"}],
+    "max_tokens": 1,
+}
+
+
+def probe_openai_compat(
+    api_key: str,
+    base_url: str,
+    model: str,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """Probe an OpenAI-compatible ``/chat/completions`` endpoint.
+
+    Used for the vast majority of providers (OpenAI itself, DeepSeek,
+    Moonshot, Alibaba Qwen, ByteDance Doubao, Mistral, Cohere, Gemini
+    via its openai-compat layer, xAI Grok, Perplexity, etc.).
     """
+    if not base_url:
+        return {
+            "ok": False,
+            "message": "No base URL configured for this provider.",
+        }
+    payload = dict(_OPENAI_PROBE)
+    payload["model"] = model
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    started = time.monotonic()
     try:
-        from openai import OpenAI
-    except ImportError as exc:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(url, headers=headers, json=payload)
+    except httpx.HTTPError as exc:
         return {
             "ok": False,
             "message": (
-                "The 'openai' Python package is not installed. "
-                "Re-run bootstrap.py with the conda environment active."
+                f"Could not reach the API endpoint: {exc!s}. "
+                "Check the base URL and your network connection."
             ),
         }
-
-    client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
-    started = time.monotonic()
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": "ping"}],
-            max_tokens=1,
-            temperature=0.0,
-        )
-        _ = response.choices[0].message.content
+    elapsed = time.monotonic() - started
+    if response.status_code == 200:
         return {
             "ok": True,
             "message": (
-                f"OK — {model} responded in "
-                f"{time.monotonic() - started:.1f}s"
+                f"OK — {model} responded via OpenAI-compatible "
+                f"endpoint in {elapsed:.1f}s"
             ),
         }
-    except Exception as exc:
+    return {
+        "ok": False,
+        "message": _explain_http_error(response.status_code, response.text),
+    }
+
+
+def probe_anthropic_compat(
+    api_key: str,
+    base_url: str,
+    model: str,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """Probe an Anthropic-compatible ``/v1/messages`` endpoint.
+
+    Used for Anthropic itself and providers that expose the
+    Anthropic Messages schema (e.g. MiniMax recommends
+    ``/v1/messages`` for M-series reasoning models).
+    """
+    if not base_url:
         return {
             "ok": False,
-            "message": _explain_openai_error(exc),
+            "message": (
+                "This provider uses the Anthropic protocol but "
+                "no base URL is configured."
+            ),
+        }
+    payload = dict(_ANTHROPIC_PROBE)
+    payload["model"] = model
+    # The Anthropic API requires ``max_tokens``. We already set it
+    # to 1 above. Anthropic also accepts a ``system`` field; we
+    # omit it to keep the probe minimal.
+    url = f"{base_url.rstrip('/')}/v1/messages"
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    started = time.monotonic()
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(url, headers=headers, json=payload)
+    except httpx.HTTPError as exc:
+        return {
+            "ok": False,
+            "message": (
+                f"Could not reach the API endpoint: {exc!s}. "
+                "Check the base URL and your network connection."
+            ),
+        }
+    elapsed = time.monotonic() - started
+    if response.status_code == 200:
+        return {
+            "ok": True,
+            "message": (
+                f"OK — {model} responded via Anthropic-compatible "
+                f"endpoint in {elapsed:.1f}s"
+            ),
+        }
+    return {
+        "ok": False,
+        "message": _explain_http_error(response.status_code, response.text),
+    }
+
+
+def probe_local(base: str | None = None, timeout: int = 10) -> dict[str, Any]:
+    """Probe a local Ollama daemon.
+
+    Hits ``/api/version`` (cheap, no GPU required) to confirm the
+    daemon is reachable on the configured host. The bootstrap
+    script sets ``OLLAMA_BASE_URL`` to the in-network address
+    (http://ollama:11434) when docker compose is used.
+    """
+    if base is None:
+        base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    url = f"{base.rstrip('/')}/api/version"
+    started = time.monotonic()
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(url)
+        response.raise_for_status()
+        body = response.text
+        elapsed = time.monotonic() - started
+        return {
+            "ok": True,
+            "message": (
+                f"OK — Ollama daemon reachable at {base} "
+                f"({body.strip()[:80]}) in {elapsed:.1f}s"
+            ),
+        }
+    except httpx.HTTPError as exc:
+        return {
+            "ok": False,
+            "message": (
+                f"Could not reach Ollama at {base}: {exc!s}. "
+                "Make sure ``docker compose up`` finished and the "
+                "ollama service is running."
+            ),
         }
 
 
-def _explain_openai_error(exc: Exception) -> str:
-    """Return a hint tailored to the most common OpenAI-style errors."""
-    text = str(exc)
-    lowered = text.lower()
-    if "401" in text or "invalid_api_key" in lowered or "incorrect api key" in lowered:
+def _explain_http_error(status_code: int, body: str) -> str:
+    """Return a hint tailored to the most common LLM API errors."""
+    snippet = body[:200] if body else ""
+    lowered = snippet.lower()
+    if status_code == 401 or "invalid_api_key" in lowered or "incorrect api key" in lowered:
         return (
             "Authentication failed: the API key was rejected. "
-            "Double-check the value (no leading/trailing whitespace) and "
-            "that it has the right permissions on your provider's dashboard."
+            "Double-check the value (no leading/trailing whitespace) "
+            "and that it has the right permissions on your provider's "
+            "dashboard."
         )
-    if "404" in text or "model_not_found" in lowered:
+    if status_code == 403:
+        return (
+            "Permission denied. The API key may not have access to "
+            "this model or this endpoint."
+        )
+    if status_code == 404 or "model_not_found" in lowered:
         return (
             "The selected model is not available on this account. "
-            "Try a different model (e.g. 'gpt-4.1-mini', 'claude-3-5-sonnet')."
+            "Try a different model (e.g. 'gpt-4.1-mini', "
+            "'claude-3-5-sonnet-latest', 'MiniMax-M3')."
         )
-    if "429" in text or "rate_limit" in lowered:
+    if status_code == 429 or "rate_limit" in lowered:
         return (
             "Rate-limited. Wait a few seconds and try again, or "
             "upgrade the plan on your provider's dashboard."
         )
-    if "connection" in lowered or "timeout" in lowered:
+    if status_code in (502, 503, 504) or "connection" in lowered or "timeout" in lowered:
         return (
-            "Could not reach the API endpoint. Check the base URL "
-            "and your network connection."
+            "The provider's API endpoint is unreachable or "
+            "timing out. Try again in a moment, or check the base "
+            "URL is correct."
         )
-    return f"Unexpected error: {text}"
+    return (
+        f"Unexpected error: HTTP {status_code}. "
+        f"Response: {snippet}"
+    )
 
 
 # ---------------------------------------------------------------------------
-# PubMed probe
+# PubMed probe (unchanged — uses stdlib urllib)
 # ---------------------------------------------------------------------------
 
 
 def probe_pubmed(email: str, api_key: str, timeout: int = 15) -> dict[str, Any]:
-    """
-    Verify that the PubMed (NCBI E-utilities) credentials work.
+    """Verify that the PubMed (NCBI E-utilities) credentials work.
 
     NCBI requires an email for every request and accepts an
     optional API key which raises the rate limit from 3 to 10
     requests per second. The probe hits the ``einfo`` endpoint
     which returns the public list of databases — it is a cheap
     round-trip that fails fast if the credentials are invalid.
-
-    Parameters
-    ----------
-    email : str
-        Email registered with NCBI.
-    api_key : str
-        NCBI API key (may be empty).
-    timeout : int
-        Request timeout (seconds).
-
-    Returns
-    -------
-    dict[str, Any]
-        Probe result with ``ok`` and ``message``.
     """
     base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/einfo.fcgi"
     params = {"email": email, "tool": "BioResearchAI-bootstrap"}
@@ -218,53 +329,73 @@ def probe_pubmed(email: str, api_key: str, timeout: int = 15) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Probe LLM and PubMed credentials")
-    parser.add_argument("--llm", choices=["openai", "local"], required=True)
+    parser = argparse.ArgumentParser(
+        description=(
+            "Probe LLM and PubMed credentials. The LLM probe "
+            "dispatches to one of three backends based on --llm: "
+            "'local' pings Ollama's /api/version; 'openai' talks "
+            "to /chat/completions; 'anthropic' talks to /v1/messages."
+        )
+    )
+    parser.add_argument(
+        "--llm",
+        choices=["openai", "anthropic", "local"],
+        required=True,
+        help=(
+            "LLM probe protocol. 'openai' = OpenAI-compatible "
+            "/chat/completions (covers most providers). "
+            "'anthropic' = Anthropic Messages API. "
+            "'local' = Ollama daemon."
+        ),
+    )
     parser.add_argument("--api-key", default="")
     parser.add_argument("--base-url", default="https://api.openai.com/v1")
     parser.add_argument("--model", default="gpt-4.1-mini")
     parser.add_argument("--pubmed-email", default="")
     parser.add_argument("--pubmed-api-key", default="")
     parser.add_argument("--timeout", type=int, default=30)
+    parser.add_argument(
+        "--ollama-base-url",
+        default=None,
+        help=(
+            "Override the Ollama daemon URL for the 'local' probe. "
+            "Defaults to the OLLAMA_BASE_URL env var or "
+            "http://localhost:11434."
+        ),
+    )
     args = parser.parse_args()
 
     checks: list[dict[str, Any]] = []
     exit_code = 0
 
+    # ---- LLM probe ----
     if args.llm == "local":
-        # For local mode we don't probe the API key — we just check
-        # that the Ollama daemon is reachable on the configured host.
-        # The bootstrap script sets OLLAMA_BASE_URL to the in-network
-        # address (http://ollama:11434) when docker compose is used.
-        import os
-        base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-        try:
-            with urllib.request.urlopen(f"{base}/api/version", timeout=10) as r:
-                body = r.read().decode("utf-8", errors="replace")
-            checks.append({
-                "name": "llm",
-                "ok": True,
-                "message": f"OK — Ollama daemon reachable at {base} ({body.strip()[:80]})",
-            })
-        except Exception as exc:
-            checks.append({
-                "name": "llm",
-                "ok": False,
-                "message": (
-                    f"Could not reach Ollama at {base}: {exc}. "
-                    "Make sure `docker compose up` finished and the "
-                    "ollama service is running."
-                ),
-            })
-            exit_code = 2
-    else:
-        result = probe_openai(
-            args.api_key, args.base_url, args.model, timeout=args.timeout
+        result = probe_local(
+            base=args.ollama_base_url, timeout=min(args.timeout, 15)
         )
-        checks.append({"name": "llm", **result})
-        if not result["ok"]:
-            exit_code = 2
+    elif args.llm == "openai":
+        result = probe_openai_compat(
+            api_key=args.api_key,
+            base_url=args.base_url,
+            model=args.model,
+            timeout=args.timeout,
+        )
+    elif args.llm == "anthropic":
+        result = probe_anthropic_compat(
+            api_key=args.api_key,
+            base_url=args.base_url,
+            model=args.model,
+            timeout=args.timeout,
+        )
+    else:
+        # argparse ``choices`` should make this unreachable.
+        result = {"ok": False, "message": f"Unknown --llm value {args.llm!r}"}
 
+    checks.append({"name": "llm", **result})
+    if not result["ok"]:
+        exit_code = 2
+
+    # ---- PubMed probe ----
     if args.pubmed_email:
         result = probe_pubmed(args.pubmed_email, args.pubmed_api_key)
         checks.append({"name": "pubmed", **result})
