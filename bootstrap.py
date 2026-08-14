@@ -456,29 +456,53 @@ def _detect_buildx() -> bool:
         return False
 
 
+def _detect_compose_plugin() -> bool:
+    """Return True if the ``docker compose`` v2 plugin is installed."""
+    if not shutil.which("docker"):
+        return False
+    try:
+        r = subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def ensure_buildx(hw: HardwareInfo) -> None:
-    """Install ``docker buildx`` if it is not already on PATH.
+    """Install ``docker buildx`` and the ``docker compose`` v2 plugin.
 
     BuildKit is the modern Docker build engine and the legacy
     ``docker build`` is deprecated as of Docker 25. The bootstrap
     uses ``docker buildx build`` so the deprecation warning
     never appears in the user's build output.
 
+    The compose v2 plugin is needed by ``start_containers()`` to
+    bring the backend and (optionally) the Ollama sidecar up. A
+    common mistake is to install only ``docker-buildx`` (which the
+    apt-get update suggested as the "newly installed" package on
+    Ubuntu) and forget ``docker-compose-v2``. This function
+    handles both so users don't have to debug two missing
+    dependencies.
+
     This function is called after ``install_docker`` so users with
-    an existing Docker install still get buildx installed the
-    first time they run the bootstrap. On macOS and Windows,
-    buildx is bundled with Docker Desktop and no extra install is
-    required — we only verify.
+    an existing Docker install still get buildx + compose added
+    on the first run. On macOS and Windows, both are bundled
+    with Docker Desktop and no extra install is required.
 
     On Linux we install via the OS package manager:
-    - Debian / Ubuntu: ``docker-buildx``
-    - Fedora / RHEL: ``docker-buildx``
-    - Arch:          ``docker-buildx``
+    - Debian / Ubuntu: ``docker-buildx``, ``docker-compose-v2``
+    - Fedora / RHEL: ``docker-buildx``, ``docker-compose``
+    - Arch:          ``docker-buildx``, ``docker-compose``
 
     On macOS the buildx binary lives inside the Docker Desktop
     bundle. If ``docker buildx`` is not on PATH, we symlink it
     from the standard install location.
     """
+    # ---- buildx ----
     if _detect_buildx():
         try:
             version = subprocess.check_output(
@@ -489,51 +513,128 @@ def ensure_buildx(hw: HardwareInfo) -> None:
         except Exception:
             version = "installed"
         log_ok(f"docker buildx available ({version[:80]})")
+    else:
+        log_info("docker buildx is not installed; installing…")
+        if hw.os == "Linux":
+            if shutil.which("apt-get"):
+                run(
+                    ["sudo", "apt-get", "install", "-y", "docker-buildx"],
+                    check=False,
+                )
+            elif shutil.which("dnf"):
+                run(
+                    ["sudo", "dnf", "install", "-y", "docker-buildx"],
+                    check=False,
+                )
+            elif shutil.which("pacman"):
+                run(
+                    ["sudo", "pacman", "-S", "--noconfirm", "docker-buildx"],
+                    check=False,
+                )
+            elif hw.os == "Linux":
+                log_warn(
+                    "Could not detect the package manager to install "
+                    "docker-buildx. The build will use the legacy "
+                    "builder (deprecated). Install docker-buildx "
+                    "manually to suppress the warning."
+                )
+
+        elif hw.os == "Darwin":
+            candidates = [
+                Path("/Applications/Docker.app/Contents/Resources/bin/docker-buildx"),
+                Path("/usr/local/bin/docker-buildx"),
+                Path.home()
+                / "Applications"
+                / "Docker.app"
+                / "Contents"
+                / "Resources"
+                / "bin"
+                / "docker-buildx",
+            ]
+            for cand in candidates:
+                if cand.is_file():
+                    link = Path("/usr/local/bin/docker-buildx")
+                    if not link.exists():
+                        run(
+                            ["sudo", "ln", "-s", str(cand), str(link)],
+                            check=False,
+                        )
+                    break
+            else:
+                log_warn(
+                    "Could not find docker-buildx inside Docker Desktop. "
+                    "Reinstall Docker Desktop or update it to the latest "
+                    "version."
+                )
+
+        # Verify the install worked. The first ``docker buildx``
+        # invocation right after a fresh install can sometimes fail
+        # because the shell has cached the PATH.
+        if _detect_buildx():
+            log_ok("docker buildx installed")
+        else:
+            log_warn(
+                "docker-buildx was installed but the binary is not on "
+                "PATH in this shell. Open a new terminal and re-run, or "
+                "check that /usr/bin is in PATH."
+            )
+
+    # ---- compose v2 plugin ----
+    if _detect_compose_plugin():
+        try:
+            version = subprocess.check_output(
+                ["docker", "compose", "version"],
+                text=True,
+                timeout=10,
+            ).strip()
+        except Exception:
+            version = "installed"
+        log_ok(f"docker compose v2 plugin available ({version[:80]})")
         return
 
-    log_info("docker buildx is not installed; installing…")
-
+    log_info("docker compose v2 plugin is not installed; installing…")
     if hw.os == "Linux":
         if shutil.which("apt-get"):
             run(
-                ["sudo", "apt-get", "install", "-y", "docker-buildx"],
+                ["sudo", "apt-get", "install", "-y", "docker-compose-v2"],
                 check=False,
             )
         elif shutil.which("dnf"):
             run(
-                ["sudo", "dnf", "install", "-y", "docker-buildx"],
+                ["sudo", "dnf", "install", "-y", "docker-compose"],
                 check=False,
             )
         elif shutil.which("pacman"):
             run(
-                ["sudo", "pacman", "-S", "--noconfirm", "docker-buildx"],
+                ["sudo", "pacman", "-S", "--noconfirm", "docker-compose"],
                 check=False,
             )
         else:
             log_warn(
                 "Could not detect the package manager to install "
-                "docker-buildx. The build will use the legacy "
-                "builder (deprecated). Install docker-buildx "
-                "manually to suppress the warning."
+                "the docker compose plugin. start_containers() will fail. "
+                "Install docker-compose-v2 (Debian) or docker-compose "
+                "(Fedora/Arch) manually."
             )
             return
     elif hw.os == "Darwin":
-        # Docker Desktop on macOS bundles buildx at this path.
-        # Some installs don't expose it on PATH, so we symlink it.
+        # Docker Desktop on macOS bundles the compose plugin.
         candidates = [
-            Path("/Applications/Docker.app/Contents/Resources/bin/docker-buildx"),
-            Path("/usr/local/bin/docker-buildx"),
+            Path("/Applications/Docker.app/Contents/Resources/cli-plugins/docker-compose"),
+            Path("/usr/local/lib/docker/cli-plugins/docker-compose"),
             Path.home()
             / "Applications"
             / "Docker.app"
             / "Contents"
             / "Resources"
-            / "bin"
-            / "docker-buildx",
+            / "cli-plugins"
+            / "docker-compose",
         ]
         for cand in candidates:
             if cand.is_file():
-                link = Path("/usr/local/bin/docker-buildx")
+                link_dir = Path("/usr/local/lib/docker/cli-plugins")
+                link_dir.mkdir(parents=True, exist_ok=True)
+                link = link_dir / "docker-compose"
                 if not link.exists():
                     run(
                         ["sudo", "ln", "-s", str(cand), str(link)],
@@ -542,34 +643,21 @@ def ensure_buildx(hw: HardwareInfo) -> None:
                 break
         else:
             log_warn(
-                "Could not find docker-buildx inside Docker Desktop. "
-                "Reinstall Docker Desktop or update it to the latest "
-                "version."
+                "Could not find the docker-compose plugin inside "
+                "Docker Desktop. Reinstall Docker Desktop or update it "
+                "to the latest version."
             )
             return
     elif hw.os == "Windows":
-        # WSL2 path: buildx is bundled with Docker Desktop. If the
-        # user is on stock Windows (not WSL), bootstrap already
-        # raised in install_docker so we never get here.
-        return
-    else:
-        log_warn(
-            f"buildx install is not implemented for {hw.os}. "
-            "The build will use the legacy builder (deprecated)."
-        )
         return
 
-    # Verify the install worked. The first ``docker buildx`` invocation
-    # right after a fresh install can sometimes fail because the
-    # shell has cached the PATH — ``shutil.which`` only re-reads the
-    # cache on certain conditions. We force a fresh lookup.
-    if _detect_buildx():
-        log_ok("docker buildx installed")
+    if _detect_compose_plugin():
+        log_ok("docker compose v2 plugin installed")
     else:
         log_warn(
-            "docker-buildx was installed but the binary is not on "
-            "PATH in this shell. Open a new terminal and re-run, or "
-            "check that /usr/bin is in PATH."
+            "The docker compose plugin was installed but ``docker "
+            "compose version`` still fails. start_containers() will "
+            "fail. Try opening a new shell so PATH is re-read."
         )
 
 
@@ -1188,6 +1276,10 @@ def write_env_file(
             "# (full ML stack via conda, ~3 GB). Set to 'local' if you want",
             "# to run local models or use the offline research scripts.",
             f"BUILD_TARGET={build_target}",
+            "# Docker Compose profile: 'minimal' (backend only) or 'local'",
+            "# (backend + Ollama sidecar). Picked by the bootstrap based",
+            "# on the LLM provider.",
+            f"COMPOSE_PROFILES={'local' if build_target == 'local' else 'minimal'}",
             "",
         ]
     )
@@ -1206,10 +1298,32 @@ def write_env_file(
 
 
 def start_containers() -> None:
-    """Bring the backend and (optionally) the ollama service up."""
-    log_info("Starting containers…")
-    run(
-        ["docker", "compose", "-f", str(COMPOSE_FILE), "up", "-d", "--build"],
+    """Bring the backend (and optionally Ollama) up via ``docker compose``.
+
+    Only the ``local`` profile is activated when the user picked
+    the local LLM in the GUI; otherwise only the backend is
+    started (no Ollama pull, no GPU reservation).
+    """
+    # Read the profile from .env so subsequent runs remember the choice.
+    profile = "minimal"
+    if ENV_FILE.is_file():
+        for raw in ENV_FILE.read_text().splitlines():
+            line = raw.strip()
+            if line.startswith("COMPOSE_PROFILES="):
+                value = line.split("=", 1)[1].strip()
+                if value:
+                    profile = value
+                break
+    profile_args = ["--profile", profile] if profile != "minimal" else []
+
+    log_info(f"Starting containers (profile={profile})…")
+    run_streaming(
+        [
+            "docker", "compose",
+            "--file", str(COMPOSE_FILE),
+            *profile_args,
+            "up", "-d",
+        ],
         cwd=REPO_ROOT,
         check=False,
     )
@@ -1357,7 +1471,7 @@ def main() -> int:
     build_target = "local" if args.local else "minimal"
     if build_target == "local":
         log_info(f"Using conda channel: {conda_channel}")
-    build_image(conda_channel=conda_channel, build_target=config.build_target)
+    build_image(conda_channel=conda_channel, build_target=build_target)
     print()
 
     # 4. First-run GUI (unless --skip-gui)
