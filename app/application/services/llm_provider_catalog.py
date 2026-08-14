@@ -48,6 +48,7 @@ Guillermo Ramajo Fernández
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Optional
 
 from app.core.enums.llm_provider import LLMProviderEnum
@@ -56,6 +57,29 @@ from app.core.enums.llm_provider import LLMProviderEnum
 # ---------------------------------------------------------------------------
 # Metadata model
 # ---------------------------------------------------------------------------
+
+
+class ProviderProtocol(StrEnum):
+    """The wire protocol a provider exposes.
+
+    Most modern LLM providers expose an OpenAI-compatible
+    ``/chat/completions`` endpoint (OpenAI itself, DeepSeek,
+    Moonshot, Alibaba Qwen, ByteDance Doubao, Mistral, Cohere,
+    Gemini, xAI Grok, Perplexity, etc.).
+
+    A handful of providers expose the Anthropic-native
+    ``/v1/messages`` endpoint instead. The most prominent is
+    Anthropic itself, but the Anthropic-shaped API is also
+    exposed by several Chinese providers (e.g. MiniMax
+    recommends it for M-series reasoning models). When a
+    provider uses the Anthropic protocol we must talk to
+    ``/v1/messages`` with the Anthropic request schema
+    (system, messages, max_tokens) rather than the OpenAI
+    schema.
+    """
+
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
 
 
 @dataclass(frozen=True)
@@ -114,6 +138,7 @@ class ProviderMeta:
     model_hint: str = ""
     requires_extra_headers: bool = False
     notes: str = ""
+    protocol: ProviderProtocol = ProviderProtocol.OPENAI
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +166,7 @@ CATALOG: tuple[ProviderMeta, ...] = (
             "Runs entirely on your machine. The bootstrap script "
             "selects a quantized model that fits your hardware."
         ),
+    protocol=ProviderProtocol.OPENAI,
     ),
     # ------------------------------------------------------------------
     # US — major providers
@@ -153,19 +179,21 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="gpt-4.1-mini",
         api_key_env="OPENAI_API_KEY",
         model_hint="gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, gpt-4o, gpt-4o-mini, o3, o4-mini",
-    ),
+        protocol=ProviderProtocol.OPENAI,
+),
     ProviderMeta(
         slug=LLMProviderEnum.ANTHROPIC,
         display_name="Anthropic",
         region="US",
-        base_url=None,
+        base_url="https://api.anthropic.com/v1",
         default_model="claude-3-5-sonnet-latest",
         api_key_env="ANTHROPIC_API_KEY",
         model_hint="claude-3-5-sonnet, claude-3-5-haiku, claude-opus-4",
         notes=(
-            "Uses Anthropic's native /v1/messages API. Configured "
-            "via ANTHROPIC_API_KEY."
-        ),
+            "Uses Anthropic's OpenAI-compatible endpoint at /v1. "
+            "Configure via ANTHROPIC_API_KEY."
+),
+    protocol=ProviderProtocol.OPENAI,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.GEMINI,
@@ -175,7 +203,8 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="gemini-2.0-flash",
         api_key_env="GEMINI_API_KEY",
         model_hint="gemini-2.0-flash, gemini-2.0-pro, gemini-1.5-pro",
-    ),
+        protocol=ProviderProtocol.OPENAI,
+),
     ProviderMeta(
         slug=LLMProviderEnum.AZURE_OPENAI,
         display_name="Azure OpenAI",
@@ -187,7 +216,8 @@ CATALOG: tuple[ProviderMeta, ...] = (
         notes=(
             "Azure requires AZURE_OPENAI_ENDPOINT and the deployment "
             "name as the model field."
-        ),
+),
+    protocol=ProviderProtocol.OPENAI,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.XAI,
@@ -197,6 +227,7 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="grok-3-mini",
         api_key_env="XAI_API_KEY",
         model_hint="grok-3, grok-3-fast, grok-3-mini, grok-2",
+    protocol=ProviderProtocol.OPENAI,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.PERPLEXITY,
@@ -206,7 +237,8 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="llama-3.1-sonar-large-128k-online",
         api_key_env="PERPLEXITY_API_KEY",
         model_hint="llama-3.1-sonar-large-128k-online, sonar",
-    ),
+        protocol=ProviderProtocol.OPENAI,
+),
     # ------------------------------------------------------------------
     # EU / CA
     # ------------------------------------------------------------------
@@ -218,7 +250,8 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="mistral-large-latest",
         api_key_env="MISTRAL_API_KEY",
         model_hint="mistral-large-latest, mistral-medium-latest, mistral-small-latest",
-    ),
+        protocol=ProviderProtocol.OPENAI,
+),
     ProviderMeta(
         slug=LLMProviderEnum.COHERE,
         display_name="Cohere",
@@ -227,7 +260,8 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="command-r-plus",
         api_key_env="COHERE_API_KEY",
         model_hint="command-r-plus, command-r, command-light",
-    ),
+        protocol=ProviderProtocol.OPENAI,
+),
     # ------------------------------------------------------------------
     # China — major providers
     # ------------------------------------------------------------------
@@ -239,7 +273,8 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="deepseek-chat",
         api_key_env="DEEPSEEK_API_KEY",
         model_hint="deepseek-chat, deepseek-reasoner, deepseek-coder",
-    ),
+        protocol=ProviderProtocol.OPENAI,
+),
     ProviderMeta(
         slug=LLMProviderEnum.MINIMAX,
         display_name="MiniMax",
@@ -251,7 +286,8 @@ CATALOG: tuple[ProviderMeta, ...] = (
         notes=(
             "Uses Anthropic-compatible /v1/messages. The retain "
             "API key starts with ``eyJ...``."
-        ),
+),
+    protocol=ProviderProtocol.ANTHROPIC,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.MOONSHOT,
@@ -261,6 +297,7 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="moonshot-v1-32k",
         api_key_env="MOONSHOT_API_KEY",
         model_hint="moonshot-v1-32k, moonshot-v1-128k, moonshot-v1-8k",
+    protocol=ProviderProtocol.OPENAI,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.ZHIPU,
@@ -270,6 +307,7 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="glm-4-plus",
         api_key_env="ZHIPU_API_KEY",
         model_hint="glm-4-plus, glm-4-air, glm-4-airx, glm-4-long",
+    protocol=ProviderProtocol.OPENAI,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.ALIBABA,
@@ -279,6 +317,7 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="qwen-plus",
         api_key_env="DASHSCOPE_API_KEY",
         model_hint="qwen-plus, qwen-max, qwen-turbo, qwen-coder-plus",
+    protocol=ProviderProtocol.OPENAI,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.BAIDU,
@@ -289,6 +328,7 @@ CATALOG: tuple[ProviderMeta, ...] = (
         api_key_env="QIANFAN_API_KEY",
         model_hint="ernie-4.0-8k, ernie-3.5-8k, ernie-speed-8k",
         requires_extra_headers=True,
+    protocol=ProviderProtocol.OPENAI,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.TENCENT,
@@ -298,6 +338,7 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="hunyuan-pro",
         api_key_env="HUNYUAN_API_KEY",
         model_hint="hunyuan-pro, hunyuan-standard, hunyuan-lite",
+    protocol=ProviderProtocol.OPENAI,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.BYTEDANCE,
@@ -307,6 +348,7 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="doubao-pro-32k",
         api_key_env="BYTE_DANCE_API_KEY",
         model_hint="doubao-pro-32k, doubao-lite-32k, doubao-pro-128k",
+    protocol=ProviderProtocol.OPENAI,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.BAICHUAN,
@@ -316,7 +358,8 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="baichuan4-turbo",
         api_key_env="BAICHUAN_API_KEY",
         model_hint="baichuan4-turbo, baichuan4-air, baichuan3-turbo",
-    ),
+        protocol=ProviderProtocol.OPENAI,
+),
     ProviderMeta(
         slug=LLMProviderEnum.YI,
         display_name="01.AI (Yi)",
@@ -325,6 +368,7 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="yi-large",
         api_key_env="YI_API_KEY",
         model_hint="yi-large, yi-medium, yi-vision, yi-spark",
+    protocol=ProviderProtocol.OPENAI,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.SENSETIME,
@@ -334,6 +378,7 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="SenseChat-5",
         api_key_env="SENSENOVA_API_KEY",
         model_hint="SenseChat-5, SenseChat-5-120B, SenseChat-4",
+    protocol=ProviderProtocol.OPENAI,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.IFLYTEK,
@@ -343,6 +388,7 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="generalv3.5",
         api_key_env="IFLYTEK_API_KEY",
         model_hint="generalv3.5, generalv3, generalv2.5",
+    protocol=ProviderProtocol.OPENAI,
     ),
     ProviderMeta(
         slug=LLMProviderEnum.STEP_FUN,
@@ -352,7 +398,8 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="step-1v-32k",
         api_key_env="STEPFUN_API_KEY",
         model_hint="step-1v-32k, step-1-32k, step-1-128k",
-    ),
+        protocol=ProviderProtocol.OPENAI,
+),
     ProviderMeta(
         slug=LLMProviderEnum.HUAWEI,
         display_name="Huawei (Pangu)",
@@ -361,6 +408,7 @@ CATALOG: tuple[ProviderMeta, ...] = (
         default_model="pangu-4",
         api_key_env="HUAWEI_PANGU_API_KEY",
         model_hint="pangu-4, pangu-3",
+    protocol=ProviderProtocol.OPENAI,
     ),
 )
 
