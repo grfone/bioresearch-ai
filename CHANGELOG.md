@@ -93,6 +93,11 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Fixed
 
+* **Bootstrap crashes with "cannot join thread before it is started".**
+  The previous ``_prompt`` helper used ``threading.Thread`` without
+  calling ``.start()`` before ``.join()``. Replaced with plain
+  ``input(text)`` — the most reliable cross-terminal behaviour.
+
 * **GUI crash on Tk with bare ``StringVar()`` calls.** A previous
   version declared ``api_key_var``, ``pubmed_email_var`` and
   ``pubmed_api_key_var`` with ``tk.StringVar()`` (no default).
