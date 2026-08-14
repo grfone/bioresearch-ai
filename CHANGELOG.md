@@ -91,6 +91,14 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Added
 
+* **Robust first-run setup.** The bootstrap auto-installs
+  ``python3-tk`` on Linux / macOS when tkinter is missing, and
+  falls back to a terminal-based wizard when the GUI can't run
+  (e.g. no DISPLAY on a remote server over SSH). The terminal
+  wizard handles the same fields as the GUI wizard and refuses
+  to run in a non-TTY context with a clear error pointing at
+  ``--skip-gui``.
+
 * **Slim Docker image by default.** The Dockerfile now ships two
   build targets: `bioresearch-ai:latest` (slim, ~250 MB, no
   conda, no Node.js, no ML libraries) and `bioresearch-ai:local`
