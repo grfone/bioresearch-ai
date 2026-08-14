@@ -865,24 +865,123 @@ class GuiConfig:
     proceed: bool = False
 
 
-def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
-    """Open the Tkinter GUI and return the user's choices."""
+def _import_tkinter():
+    """Lazy-import tkinter. Returns the (tk, messagebox, ttk) tuple or None."""
     try:
         import tkinter as tk
         from tkinter import messagebox, ttk
-    except ImportError as exc:
-        raise RuntimeError(
-            "Tkinter is not installed on this Python. "
-            "Install it with `apt-get install python3-tk` "
-            "(Debian/Ubuntu) or `brew install python-tk` (macOS) "
-            "and re-run."
-        ) from exc
+    except Exception:
+        return None
+    return (tk, messagebox, ttk)
+
+
+def _ensure_tkinter(hw: HardwareInfo) -> bool:
+    """Make sure tkinter is importable. Try to install it if not.
+
+    The bootstrap needs a graphical wizard for the first-run setup.
+    On a fresh Python install (system Python, pyenv, uv) tkinter is
+    often missing because it's a separate OS package. We detect
+    that and install it via the OS package manager so the user
+    doesn't have to.
+
+    Returns True if tkinter is now importable, False otherwise. The
+    caller should fall back to the CLI wizard when False.
+    """
+    if _import_tkinter() is not None:
+        return True
+
+    log_info("tkinter is missing on this Python; trying to install it…")
+    if hw.os == "Linux":
+        # Debian / Ubuntu: python3-tk. Fedora / RHEL: python3-tkinter.
+        # Arch: tk (the system tk is what the python-tk AUR pkg uses,
+        # but we cannot install AUR via the system package manager).
+        if shutil.which("apt-get"):
+            run(
+                ["sudo", "-S", "apt-get", "install", "-y", "python3-tk"],
+                check=False,
+            )
+        elif shutil.which("dnf"):
+            run(
+                ["sudo", "-S", "dnf", "install", "-y", "python3-tkinter"],
+                check=False,
+            )
+        elif shutil.which("pacman"):
+            log_warn(
+                "On Arch Linux the tkinter module ships in the AUR. "
+                "Install it manually with your AUR helper, e.g. "
+                "``yay -S python-tk``."
+            )
+            return False
+        else:
+            log_warn(
+                "Could not detect the package manager to install "
+                "tkinter. The bootstrap will use the terminal wizard "
+                "instead."
+            )
+            return False
+    elif hw.os == "Darwin":
+        if shutil.which("brew"):
+            # The python-tk brew formula follows the system Python,
+            # so on a uv-managed Python the system tkinter is what
+            # we want. The Python.org installer also bundles tkinter.
+            run(
+                ["brew", "install", "python-tk"],
+                check=False,
+            )
+        else:
+            log_warn(
+                "Homebrew is required to install python-tk on macOS. "
+                "Install it from https://brew.sh and re-run."
+            )
+            return False
+    elif hw.os == "Windows":
+        log_warn(
+            "Windows: reinstall Python from python.org with the "
+            "``tcl/tk and IDLE`` option checked. The bootstrap will "
+            "use the terminal wizard instead."
+        )
+        return False
+
+    # Re-check.
+    if _import_tkinter() is not None:
+        log_ok("tkinter installed")
+        return True
+    log_warn("tkinter is still not importable; using the terminal wizard.")
+    return False
+
+
+def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
+    """Open the Tkinter GUI and return the user's choices."""
+    if not _ensure_tkinter(hw):
+        return _cli_collect_config(hw)
+    # Defer the tkinter import until after _ensure_tkinter so the
+    # tk.Tk() call (which raises TclError when DISPLAY is not set)
+    # is inside our try/except.
+    try:
+        import tkinter as tk
+        from tkinter import messagebox, ttk
+    except Exception as exc:
+        log_warn(
+            f"Could not import tkinter ({exc!s}); using the terminal wizard."
+        )
+        return _cli_collect_config(hw)
 
     detected = pick_local_model(hw)
     recommended_model = detected.name if detected else ""
 
     config = GuiConfig()
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except Exception as exc:
+        # tk.Tk() raises TclError when DISPLAY is not set, or when
+        # the X server is unreachable (common when running over
+        # SSH without X forwarding). The CLI wizard is the same
+        # flow without the GUI, so fall back to it.
+        log_warn(
+            f"The graphical wizard could not start ({exc!s}). "
+            "Falling back to the terminal wizard."
+        )
+        return _cli_collect_config(hw)
     root.title("BioResearch AI — first-run setup")
     root.geometry("640x560")
     root.minsize(640, 480)
@@ -1196,12 +1295,245 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
     # Auto-close after timeout (helps CI runs).
     root.after(GUI_TIMEOUT_SECONDS * 1000, root.destroy)
 
-    root.mainloop()
+    try:
+        root.mainloop()
+    except Exception as exc:
+        # Tkinter can fail in several ways: no $DISPLAY (X server not
+        # reachable on this machine — common when running over SSH
+        # without X forwarding), or a Tcl-level error during the
+        # mainloop. The CLI wizard is the same flow without the GUI,
+        # so fall back to it rather than failing the bootstrap.
+        log_warn(
+            f"The graphical wizard failed ({exc!s}). Falling back to "
+            "the terminal wizard."
+        )
+        try:
+            root.destroy()
+        except Exception:
+            pass
+        return _cli_collect_config(hw)
 
     if not config.proceed:
         log_warn("Setup was cancelled. Run bootstrap.py again to retry.")
         sys.exit(0)
 
+    return config
+
+
+def _prompt(text: str = "") -> str:
+    """Read a line from stdin with the prompt visible.
+
+    Prints the prompt to stderr so it shows up even when stdout is
+    captured by ``tee`` or a logging framework. This matches the
+    behaviour of ``input(prompt)`` but works in the tmux-+-tee
+    testing setup.
+    """
+    if text:
+        # Print to stderr so it survives stdout redirection.
+        sys.stderr.write(text)
+        sys.stderr.flush()
+    try:
+        return input("")
+    except EOFError:
+        return ""
+
+
+def _is_tty() -> bool:
+    """True if stdin is a real terminal.
+
+    The CLI wizard reads from stdin (via ``input()``). We do NOT
+    require stdout to be a TTY because the bootstrap may run with
+    stdout captured by ``tee`` or by a logging framework — the
+    user still wants to answer the prompts interactively in that
+    case.
+
+    This is split out so tests can monkeypatch it.
+    """
+    try:
+        return sys.stdin.isatty()
+    except Exception:
+        return False
+
+
+def _cli_collect_config(hw: HardwareInfo) -> GuiConfig:
+    """Terminal-based first-run wizard.
+
+    Used when tkinter is unavailable (or when the user wants a
+    non-interactive setup). Prompts for the same fields as the GUI
+    wizard: LLM provider, API key, model, PubMed email + key.
+
+    Non-interactive behaviour: when stdin is not a TTY (CI, scripts,
+    piped input) we fall back to the values already in ``.env`` if
+    any, otherwise we raise a clear error. We never block on
+    ``_prompt()`` in a non-TTY context because that would hang.
+    """
+    config = GuiConfig()
+    # Tests can monkeypatch ``_is_tty`` to ``lambda: True`` to drive
+    # the wizard with fake stdin in unit tests. In production the
+    # function checks both stdin and stdout.
+    is_tty = _is_tty()
+
+    detected = pick_local_model(hw)
+    recommended_model = detected.name if detected else ""
+
+    # Build the catalog of providers with indices so the user can
+    # type ``3`` instead of the full provider name.
+    region_groups = llm_grouped_by_region()
+    flat_providers: list[tuple[str, LLMCatalogEntry]] = []
+    for region_name, entries in region_groups.items():
+        for entry in entries:
+            flat_providers.append((region_name, entry))
+    # Find a default to highlight.
+    default_idx = 0
+    for i, (_, entry) in enumerate(flat_providers):
+        if entry.slug.value == "openai":
+            default_idx = i
+            break
+
+    print()
+    log_info("Detected: " + describe_hardware(hw))
+    if not is_tty:
+        log_warn(
+            "stdin is not a TTY. The terminal wizard cannot ask "
+            "interactive questions. Use ``--skip-gui`` and pre-populate "
+            "``.env``, or run from a real terminal."
+        )
+        raise RuntimeError(
+            "Tkinter is unavailable and stdin is not a TTY, so the "
+            "CLI wizard cannot run. Re-run from a terminal or pass "
+            "--skip-gui with an existing .env."
+        )
+    print()
+    print("=" * 60)
+    print(" BioResearch AI — terminal first-run setup")
+    print("=" * 60)
+    print()
+    print("Pick an LLM provider. Type the number or the provider")
+    print("name (e.g. ``openai``). The list is grouped by region.")
+    print()
+
+    for i, (region, entry) in enumerate(flat_providers, start=1):
+        marker = " *" if i - 1 == default_idx else ""
+        print(
+            f"  {i:>3}. [{region:<8}] {entry.display_name} ({entry.slug.value}){marker}"
+        )
+
+    # Read the choice.
+    while True:
+        try:
+            raw = _prompt(
+                f"\nLLM provider [{default_idx + 1}]: "
+            ).strip()
+        except EOFError:
+            raise RuntimeError("EOF on stdin; aborting.")
+        if not raw:
+            raw = str(default_idx + 1)
+        # Try numeric first.
+        try:
+            idx = int(raw) - 1
+            if 0 <= idx < len(flat_providers):
+                entry = flat_providers[idx][1]
+                break
+        except ValueError:
+            pass
+        # Try slug.
+        for _, candidate in flat_providers:
+            if candidate.slug.value == raw:
+                entry = candidate
+                break
+        else:
+            print(f"  -> Unknown provider {raw!r}. Try again.")
+            continue
+        break
+
+    is_local = entry.slug.value == "local"
+    print(f"\n  -> Selected: {entry.display_name}")
+    if entry.notes:
+        print(f"     Note: {entry.notes}")
+
+    # API key.
+    api_key = ""
+    if not is_local:
+        env_hint = entry.api_key_env
+        print(f"\nAPI key for {entry.display_name}. Set ``{env_hint}``")
+        print("in your environment if you prefer not to paste it here.")
+        while True:
+            try:
+                api_key = _prompt("API key: ").strip()
+            except EOFError:
+                api_key = ""
+            if api_key:
+                break
+            # Fall back to the environment variable.
+            api_key = os.environ.get(env_hint, "")
+            if api_key:
+                print(f"  -> Using {env_hint} from the environment.")
+                break
+            print("  -> Required. Paste the key or set the env var.")
+
+    # Base URL — default is empty for OpenAI-compat (the provider
+    # supplies the right one).
+    default_base_url = (
+        "" if entry.slug.value != "openai" else "https://api.openai.com/v1"
+    )
+    print(f"\nBase URL [{default_base_url or '<auto>'}]")
+    try:
+        raw = _prompt("Base URL: ").strip()
+    except EOFError:
+        raw = ""
+    base_url = raw or default_base_url
+
+    # Model.
+    default_model = entry.default_model or "gpt-4.1-mini"
+    print(f"\nModel [{default_model}]")
+    try:
+        raw = _prompt("Model: ").strip()
+    except EOFError:
+        raw = ""
+    model = raw or default_model
+
+    # Local model.
+    selected_local_model: Optional[str] = None
+    if is_local:
+        print("\nLocal model options:")
+        for i, m in enumerate(LOCAL_MODELS, start=1):
+            print(f"  {i}. {m.name}  — {m.description}")
+        default_local = recommended_model or LOCAL_MODELS[0].name
+        try:
+            raw = _prompt(f"\nLocal model [{default_local}]: ").strip()
+        except EOFError:
+            raw = ""
+        selected_local_model = raw or default_local
+
+    # PubMed.
+    print("\nPubMed (NCBI Entrez) credentials. The email is required")
+    print("by NCBI; the API key raises the rate limit (recommended).")
+    default_email = os.environ.get("PUBMED_EMAIL", "")
+    try:
+        raw = _prompt(f"PubMed email [{default_email}]: ").strip()
+    except EOFError:
+        raw = ""
+    pubmed_email = raw or default_email
+    if not pubmed_email:
+        log_warn(
+            "PubMed email is required. NCBI rejects anonymous requests."
+        )
+
+    default_pubmed_key = os.environ.get("PUBMED_API_KEY", "")
+    try:
+        raw = _prompt(f"PubMed API key [{'<empty>' if not default_pubmed_key else '***'}]: ").strip()
+    except EOFError:
+        raw = ""
+    pubmed_api_key = raw or default_pubmed_key
+
+    config.llm_provider = entry.slug.value
+    config.api_key = api_key
+    config.base_url = base_url
+    config.model = model
+    config.pubmed_email = pubmed_email
+    config.pubmed_api_key = pubmed_api_key
+    config.selected_local_model = selected_local_model
+    config.proceed = True
     return config
 
 
