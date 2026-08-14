@@ -341,3 +341,20 @@ def test_gui_strip_calls_are_defensive_against_none() -> None:
         "These ``.get().strip()`` calls are unsafe and must be "
         f"wrapped as ``(X_var.get() or '').strip()``: {unsafe}"
     )
+
+
+
+def test_prompt_returns_eof_as_empty() -> None:
+    """``_prompt`` must return empty string on EOFError.
+
+    A broken stdin (e.g. piped to ``/dev/null``) raises EOFError
+    instead of blocking. The wizard treats empty as ``"cancel"``
+    and the bootstrap surfaces a clear message.
+    """
+    import bootstrap
+    from unittest.mock import patch
+
+    # input() raises EOFError on EOF.
+    with patch("builtins.input", side_effect=EOFError):
+        result = bootstrap._prompt("test: ")
+    assert result == ""
