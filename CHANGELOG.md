@@ -93,6 +93,28 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Fixed
 
+* **"Test credentials" fails for MiniMax with "'openai' Python package is not installed".**
+  ``probe_credentials.py`` was hardcoded to use the OpenAI Python
+  client for every non-local provider. MiniMax uses the Anthropic
+  Messages API (``/v1/messages``) at ``https://api.minimax.io/anthropic``,
+  so the OpenAI client couldn't talk to it. The probe now
+  dispatches based on a new ``protocol`` field in the catalog:
+  ``openai`` for the OpenAI-compatible ``/chat/completions`` schema,
+  ``anthropic`` for the Anthropic Messages API, ``local`` for
+  Ollama. MiniMax and Anthropic-style hosts are routed to the
+  new ``probe_anthropic_compat`` function which uses ``httpx``
+  directly — no SDK dependency. The catalog also got a
+  ``base_url`` for Anthropic (``https://api.anthropic.com/v1``,
+  the OpenAI-compat layer that the existing
+  ``AnthropicProvider`` already uses) so the GUI's default
+  is now correct instead of empty.
+
+* **Bootstrap saved an empty ``BASE_URL`` for MiniMax / non-OpenAI
+  providers.** The CLI wizard's default base URL was hardcoded
+  to ``""`` for anything other than OpenAI. Now it falls back
+  to the catalog value (``entry.base_url``), or for Anthropic
+  uses ``https://api.anthropic.com`` as a sensible default.
+
 * **GUI crash with "`Container ... instance has no attribute 'strip'`" (root cause).**
   A previous version had ``provider_hint_var.set("...").strip()`` —
   a chained call that returned ``None`` from ``set()`` and then
