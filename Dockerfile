@@ -4,11 +4,18 @@
 # ---------------
 # BUILD_TARGET selects which target of this multi-stage build to use.
 # Values: "minimal" (default) or "local".
+#
+# CONDA_CHANNEL is preserved as a build-arg for backwards
+# compatibility. The current implementation does NOT use conda
+# at all: pip pulls the wheels directly from PyPI. The flag is
+# kept so ``bootstrap.py --mirror <url>`` still works, but it
+# does not change the source.
 ARG BUILD_TARGET=minimal
-# CONDA_CHANNEL is preserved for backwards compatibility but only
-# consulted when BUILD_TARGET=local. The minimal target does not use
-# conda at all.
 ARG CONDA_CHANNEL=https://conda.anaconda.org/conda-forge
+# When the user has an NVIDIA GPU, the bootstrap sets this to the
+# CUDA wheel index (e.g. https://download.pytorch.org/whl/cu121)
+# so torch installs with GPU support. Empty -> CPU-only wheels.
+ARG TORCH_INDEX_URL=
 
 # ---------------------------------------------------------------------------
 # Stage 1: build the React frontend
@@ -40,10 +47,11 @@ RUN npm run build
 
 
 # ---------------------------------------------------------------------------
-# Stage 2: minimal backend (default — no conda, no ML deps)
+# Stage 2: minimal backend (default — no ML deps)
 # ---------------------------------------------------------------------------
 # Slim Python 3.12 base + pip install of the minimal backend
-# requirements. Total image size: ~250 MB.
+# requirements. Total image size: ~250 MB. This is the default for
+# users who pick any cloud LLM (OpenAI, Anthropic, xAI, etc.).
 FROM python:3.12-slim AS backend-minimal
 
 # System packages we need beyond Python: curl for the credential
@@ -67,8 +75,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY --chown=app:app app /app/app
 COPY --chown=app:app main.py pyproject.toml /app/
 # The minimal requirements file is the only one we install from
-# the slim image — environment.yaml stays in the build context
-# for the local target but is not copied into the slim image.
+# the slim image.
 COPY --chown=app:app requirements/minimal-requirements.txt /app/requirements.txt
 
 # Copy the prebuilt frontend bundle from the frontend stage.
@@ -90,82 +97,80 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 
 # ---------------------------------------------------------------------------
-# Stage 3: local backend (heavy ML deps for offline use)
+# Stage 3: local backend (heavy ML deps via pip — NO conda)
 # ---------------------------------------------------------------------------
 # This stage is only built when the user picks ``local`` in the
-# bootstrap GUI. It uses the conda env to pull in torch, transformers,
-# scikit-learn, rdkit, etc. — the deps that the user's research
-# scripts and the local Ollama validation need.
-FROM mambaorg/micromamba:1.5.6 AS backend-local
+# bootstrap GUI. It installs the heavy ML deps (torch, transformers,
+# scikit-learn, rdkit, etc.) via pip on top of the same slim
+# Python 3.12 base. NO conda is used: we save ~2 GB of image
+# weight and avoid the conda solver's slow downloads.
+#
+# Why no conda?
+# ------------
+# - conda + the conda-forge solver is slow and bandwidth-heavy.
+# - PyTorch ships manylinux wheels on PyPI that work on
+#   python:3.12-slim without compilation. No conda needed.
+# - Ollama itself is a separate sidecar container with its own
+#   binary; the BioResearch backend only talks to it via HTTP.
+#   We don't need PyTorch at all to talk to Ollama — Ollama
+#   handles the GPU runtime inside its own container.
+#
+# - For users who DO want their research scripts to work inside
+#   the container (torch, transformers, rdkit, scikit-learn),
+#   we install them via pip on the slim base. This makes the
+#   local image about 1.2 GB (vs. 3 GB for the previous conda
+#   build) and avoids the 404-prone conda channel entirely.
+FROM python:3.12-slim AS backend-local
 
-# Pull in the user's choice of mirror.
-ARG CONDA_CHANNEL
-ENV CONDA_CHANNEL=${CONDA_CHANNEL}
-
-USER root
+# System packages: build-essential for compiling numpy/pandas/scipy
+# wheels from source when no wheel is available, curl for the
+# credential probes and healthcheck, git for some pip packages
+# (e.g. transformers), and tini for clean signal handling of the
+# long-running pip install.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
         curl \
         git \
-        nodejs \
-        npm \
-        procps \
+        tini \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Set up the conda channel. The retry loop here is the same as before
-# — bail out on 404 because that means the channel URL is wrong,
-# not a transient failure.
-RUN mkdir -p /root/.conda && \
-    echo "channels:" > /root/.conda/.condarc && \
-    echo "  - ${CONDA_CHANNEL}" >> /root/.conda/.condarc && \
-    echo "channel_priority: strict" >> /root/.conda/.condarc
+# Install the minimal backend deps first, then layer the heavy ML
+# deps on top. The install is split so a cache invalidation of one
+# layer doesn't force re-download of the other.
+# When TORCH_INDEX_URL is set (e.g. to the CUDA wheel index for
+# GPU machines) we use it to install torch. When unset we fall
+# back to the default PyPI CPU wheels.
+ARG TORCH_INDEX_URL=
 
-COPY --chown=$MAMBA_USER:$MAMBA_USER environment.yaml /app/environment.yaml
-RUN set +e && \
-    for attempt in 1 2 3; do \
-        echo ">>> conda install attempt ${attempt}/3 from ${CONDA_CHANNEL}"; \
-        if micromamba install -y -n base \
-                --channel "${CONDA_CHANNEL}" \
-                --download-only \
-                -f /app/environment.yaml; then break; fi; \
-        echo ">>> micromamba download failed"; \
-        if curl -sIL --max-time 10 "${CONDA_CHANNEL}/noarch/repodata.json" | grep -q " 404 "; then \
-            echo ">>> FATAL: channel ${CONDA_CHANNEL} returned 404"; \
-            exit 1; \
-        fi; \
-        if [ "${attempt}" = "3" ]; then exit 1; fi; \
-        sleep 10; \
-    done && \
-    micromamba install -y -n base --offline -f /app/environment.yaml && \
-    micromamba clean -a -y
+COPY requirements/minimal-requirements.txt /app/requirements.txt
+COPY requirements/local-requirements.txt /app/local-requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt && \
+    if [ -n "${TORCH_INDEX_URL}" ]; then \
+        pip install --no-cache-dir --index-url "${TORCH_INDEX_URL}" \
+            torch torchvision; \
+    else \
+        pip install --no-cache-dir -r /app/local-requirements.txt; \
+    fi
 
-# Frontend build (local image rebuilds; we still want no node_modules
-# in the runtime layer).
-COPY --chown=$MAMBA_USER:$MAMBA_USER frontend/package.json frontend/package-lock.json* /app/frontend/
-WORKDIR /app/frontend
-RUN set +e && \
-    for attempt in 1 2 3; do \
-        echo ">>> npm ci attempt ${attempt}/3"; \
-        (cd /app/frontend && npm ci --no-audit --no-fund) && break; \
-        sleep 5; \
-    done
-COPY --chown=$MAMBA_USER:$MAMBA_USER frontend /app/frontend
-RUN npm run build
+# Copy only what the backend needs at runtime.
+COPY --chown=app:app app /app/app
+COPY --chown=app:app main.py pyproject.toml /app/
+COPY --chown=app:app requirements/minimal-requirements.txt /app/requirements.txt
 
-WORKDIR /app
-COPY --chown=$MAMBA_USER:$MAMBA_USER . /app
-RUN pip install --no-cache-dir --no-deps -e .
-
-ENV PATH=/opt/conda/bin:$PATH \
-    PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
-
-USER $MAMBA_USER
+# Copy the prebuilt frontend bundle from the frontend stage.
+COPY --from=frontend --chown=app:app /app/frontend/dist /app/frontend/dist
 
 EXPOSE 8000
+
+# Switch to a non-root user for runtime safety.
+RUN useradd --create-home --shell /bin/bash app
+USER app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/api || exit 1
