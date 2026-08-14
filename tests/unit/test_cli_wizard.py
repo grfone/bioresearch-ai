@@ -286,3 +286,58 @@ def test_gui_wizard_wraps_mainloop_in_try_except() -> None:
     assert "_cli_collect_config" in after, (
         "The except clause must fall back to _cli_collect_config"
     )
+
+
+
+def test_gui_stringvars_are_initialized_to_empty_string() -> None:
+    """The GUI's ``tk.StringVar()`` calls must use ``value=""``.
+
+    A previous version called ``tk.StringVar()`` with no default
+    for ``api_key_var``, ``pubmed_email_var`` and
+    ``pubmed_api_key_var``. On some Tk versions the initial value
+    is ``None`` instead of ``""``, which made ``.get().strip()`` raise
+    ``AttributeError: 'NoneType' object has no attribute 'strip'``.
+    """
+    text = BOOTSTRAP.read_text()
+    # Find the StringVar declarations.
+    import re
+    matches = re.findall(r"(\w+_var)\s*=\s*tk\.StringVar\(\s*\)", text)
+    # The bug was on api_key_var, pubmed_email_var,
+    # pubmed_api_key_var. Other variables have valid defaults.
+    forbidden = {
+        "api_key_var",
+        "pubmed_email_var",
+        "pubmed_api_key_var",
+    }
+    for var in matches:
+        assert var not in forbidden, (
+            f"{var} must be initialized with a default value "
+            f"(e.g. tk.StringVar(value='')). Bare tk.StringVar() "
+            f"returns None on some Tk versions and crashes the "
+            f"bootstrap with 'NoneType has no attribute strip'."
+        )
+
+
+def test_gui_strip_calls_are_defensive_against_none() -> None:
+    """Every ``X_var.get().strip()`` in the GUI code must be wrapped
+    as ``(X_var.get() or '').strip()`` to survive ``None`` returns.
+
+    Defensive belt-and-braces for any Tk version that ever returns
+    ``None`` from a StringVar's ``.get()`` method.
+    """
+    text = BOOTSTRAP.read_text()
+    # Find any unguarded ``X_var.get().strip()`` calls inside the GUI.
+    import re
+    # Only check inside _gui_collect_config.
+    m = re.search(
+        r"def _gui_collect_config\(.*?\) -> GuiConfig:.*?(?=^def )",
+        text,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert m is not None, "_gui_collect_config not found"
+    body = m.group(0)
+    unsafe = re.findall(r"\w+_var\.get\(\)\.strip\(\)", body)
+    assert not unsafe, (
+        "These ``.get().strip()`` calls are unsafe and must be "
+        f"wrapped as ``(X_var.get() or '').strip()``: {unsafe}"
+    )

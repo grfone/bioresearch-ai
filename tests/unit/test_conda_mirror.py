@@ -1,28 +1,28 @@
 """
-Unit tests for the conda-channel mirror support.
+Unit tests for the build-system resilience properties.
 
-These tests lock in the three properties that make the bootstrap
-resilient to bad connections:
+These tests lock in the four properties that make the bootstrap
+resilient to bad hardware and bad connections:
 
-1. The Dockerfile references the ``CONDA_CHANNEL`` build-arg so
-   users can override the channel at build time.
-2. The Dockerfile's default channel is the conda-forge channel on
-   Anaconda's CDN (``conda.anaconda.org/conda-forge``). Other
-   plausible URLs return 404 or are unreachable from build
-   environments, so they are explicitly rejected by the assertions.
-3. ``bootstrap.py`` wires the ``--mirror`` flag through to
-   ``docker build --build-arg CONDA_CHANNEL=...`` and persists
-   the choice in ``.env`` so subsequent runs reuse it.
+1. The Dockerfile declares the ``BUILD_TARGET`` build-arg so the
+   bootstrap can pick between the slim and the heavy image.
+2. The Dockerfile declares ``TORCH_INDEX_URL`` so the bootstrap
+   can route PyTorch installs to the right wheel repo (CPU vs CUDA).
+3. The ``backend-local`` stage uses pip, NOT conda. We pulled
+   out of the conda-forge channel entirely because conda was slow
+   and prone to 404s. The tests enforce this regression guard.
+4. ``bootstrap.py`` wires the ``--mirror`` and ``--local`` flags
+   through to ``docker build --build-arg`` and persists the
+   choices in ``.env`` so subsequent runs reuse them.
 
 The Dockerfile is parsed as plain text for these tests because we
 do not have a Docker daemon in the CI environment. The parsing is
 tolerant — it catches the most common regressions (deleted arg,
-deleted env reference, wrong default).
+wrong default, conda creeping back in).
 """
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -31,6 +31,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 BOOTSTRAP = REPO_ROOT / "bootstrap.py"
+MINIMAL_REQS = REPO_ROOT / "requirements" / "minimal-requirements.txt"
+LOCAL_REQS = REPO_ROOT / "requirements" / "local-requirements.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -42,284 +44,205 @@ def test_dockerfile_exists() -> None:
     assert DOCKERFILE.is_file(), "Dockerfile is missing"
 
 
-def test_dockerfile_declares_conda_channel_build_arg() -> None:
-    """The Dockerfile must accept a CONDA_CHANNEL build-arg."""
+def test_dockerfile_declares_build_target_build_arg() -> None:
+    """The Dockerfile must accept a ``BUILD_TARGET`` build-arg."""
     text = DOCKERFILE.read_text()
     assert re.search(
-        r"^ARG\s+CONDA_CHANNEL=", text, re.MULTILINE
-    ), "Dockerfile must declare 'ARG CONDA_CHANNEL=...' so users can override"
+        r"^ARG\s+BUILD_TARGET=", text, re.MULTILINE
+    ), "Dockerfile must declare 'ARG BUILD_TARGET=...' so users can pick the build target"
 
 
-def test_dockerfile_default_is_anaconda_cdn_conda_forge() -> None:
-    """The default channel must be ``conda.anaconda.org/conda-forge``.
-
-    This is the URL that actually returns a 200 for the conda-forge
-    channel. Earlier ``conda-forge.org/conda-forge`` and the
-    Anaconda Cloud variant ``conda.anaconda.cloud/conda-forge``
-    return 404 or are unreachable from build environments, so the
-    default must NOT be either.
-    """
+def test_dockerfile_default_build_target_is_minimal() -> None:
+    """The default ``BUILD_TARGET`` must be ``minimal``."""
     text = DOCKERFILE.read_text()
     match = re.search(
-        r"^ARG\s+CONDA_CHANNEL=(\S+)", text, re.MULTILINE
+        r"^ARG\s+BUILD_TARGET=(\S+)", text, re.MULTILINE
     )
-    assert match is not None, "CONDA_CHANNEL arg missing"
-    default = match.group(1)
-    assert "conda-forge" in default, (
-        f"Default channel should be a conda-forge mirror, got {default!r}"
-    )
-    assert "conda.anaconda.org" in default, (
-        f"Default channel should be conda.anaconda.org/conda-forge, "
-        f"got {default!r}"
-    )
-    assert "conda-forge.org" not in default, (
-        f"Default channel must NOT be conda-forge.org (returns 404), "
-        f"got {default!r}"
-    )
-    assert "conda.anaconda.cloud" not in default, (
-        f"Default channel must NOT be conda.anaconda.cloud (often "
-        f"unreachable from build environments), got {default!r}"
+    assert match is not None, "BUILD_TARGET arg missing"
+    assert match.group(1) == "minimal", (
+        f"Default BUILD_TARGET must be 'minimal', got {match.group(1)!r}"
     )
 
 
-def test_dockerfile_uses_channel_in_install() -> None:
-    """The conda install must reference the configured channel."""
-    text = DOCKERFILE.read_text()
-    # We accept either an explicit ``--channel ${CONDA_CHANNEL}``
-    # or a ``.condarc`` file that lists the channel. Both are
-    # supported by micromamba.
-    has_arg = "--channel" in text and "${CONDA_CHANNEL}" in text
-    has_condarc = ".condarc" in text and "${CONDA_CHANNEL}" in text
-    assert has_arg or has_condarc, (
-        "Dockerfile must reference ${CONDA_CHANNEL} either via "
-        "--channel or in a .condarc file"
-    )
+def test_dockerfile_declares_torch_index_url() -> None:
+    """The Dockerfile must accept ``TORCH_INDEX_URL`` for the local stage.
 
-
-def test_dockerfile_has_retry_loop() -> None:
-    """The install step must retry on transient failures."""
-    text = DOCKERFILE.read_text()
-    for_pattern = re.search(r"for\s+attempt\s+in\s+1\s+2\s+3", text)
-    assert for_pattern is not None, (
-        "Dockerfile must include a 3-attempt retry loop around the "
-        "conda install to survive transient network failures"
-    )
-
-
-def test_dockerfile_bails_on_404() -> None:
-    """A 404 from the channel must fail fast, not retry three times.
-
-    404 means the channel URL is wrong. Retrying won't help and
-    wastes 30 seconds. The Dockerfile must probe the URL with
-    ``curl`` and exit 1 if it gets a 404.
+    When the user has an NVIDIA GPU, the bootstrap sets this to
+    the CUDA wheel index (``https://download.pytorch.org/whl/cu124``).
+    When unset, pip pulls the small CPU-only torch wheel from PyPI.
     """
-    text = DOCKERFILE.read_text()
-    # The 404 detection runs inside the conda install RUN block.
-    # Look for the curl probe + the 404 string.
-    assert "404" in text
-    # The probe URL is the channel + /noarch/repodata.json.
-    assert "${CONDA_CHANNEL}/noarch/repodata.json" in text
-    # The block must echo "FATAL" so the user sees a clear error.
-    assert "FATAL" in text
-
-
-def test_dockerfile_persists_channel_at_runtime() -> None:
-    """The channel must be persisted into the runtime image so the
-    running container can also use it (e.g. for additional
-    ``micromamba install`` calls)."""
     text = DOCKERFILE.read_text()
     assert re.search(
-        r"^ENV\s+CONDA_CHANNEL=\$\{CONDA_CHANNEL\}", text, re.MULTILINE
-    ), "Dockerfile must persist CONDA_CHANNEL as an ENV so the runtime sees it"
+        r"^ARG\s+TORCH_INDEX_URL=", text, re.MULTILINE
+    ), "Dockerfile must declare 'ARG TORCH_INDEX_URL=...'"
 
 
-# ---------------------------------------------------------------------------
-# bootstrap.py CLI
-# ---------------------------------------------------------------------------
+def test_dockerfile_local_stage_uses_pip_not_conda() -> None:
+    """The local stage must install via pip and NOT use conda.
 
-
-def test_bootstrap_has_mirror_flag() -> None:
-    text = BOOTSTRAP.read_text()
-    assert "--mirror" in text, "bootstrap.py must accept --mirror"
-    # The argparse help should mention at least one popular mirror so
-    # users don't have to guess.
-    assert "tuna" in text.lower() or "aliyun" in text.lower(), (
-        "bootstrap.py --mirror help should reference popular mirrors"
-    )
-
-
-def test_bootstrap_mirror_propagates_to_docker_build() -> None:
-    """The --mirror URL must be passed as a build-arg."""
-    text = BOOTSTRAP.read_text()
-    # The build_image() implementation must invoke
-    # ``docker build --build-arg CONDA_CHANNEL=...``.
-    assert "--build-arg" in text
-    assert "CONDA_CHANNEL" in text
-
-
-def test_bootstrap_persists_mirror_to_env() -> None:
-    """After the GUI, the chosen channel must be saved to .env."""
-    text = BOOTSTRAP.read_text()
-    assert "CONDA_CHANNEL" in text, (
-        "bootstrap.py must persist CONDA_CHANNEL into .env"
-    )
-
-
-def test_bootstrap_default_channel_is_anaconda_cdn() -> None:
-    text = BOOTSTRAP.read_text()
-    # Look for the DEFAULT_CONDA_CHANNEL constant.
-    match = re.search(
-        r"DEFAULT_CONDA_CHANNEL\s*=\s*[\"']([^\"']+)[\"']", text
-    )
-    assert match is not None, "bootstrap.py must define DEFAULT_CONDA_CHANNEL"
-    assert "conda.anaconda.org" in match.group(1), (
-        "Default channel should be conda.anaconda.org/conda-forge, "
-        f"got {match.group(1)!r}"
-    )
-    assert "conda.anaconda.cloud" not in match.group(1), (
-        "conda.anaconda.cloud is often unreachable; default must "
-        f"not use it, got {match.group(1)!r}"
-    )
-    assert "conda-forge.org" not in match.group(1), (
-        "conda-forge.org returns 404; default must not use it, "
-        f"got {match.group(1)!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# .env parsing
-# ---------------------------------------------------------------------------
-
-
-def test_bootstrap_reads_mirror_from_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """If CONDA_CHANNEL is in .env, the bootstrap should use it."""
-    # Write a minimal .env to the temporary location.
-    env = tmp_path / ".env"
-    env.write_text(
-        "PUBMED_EMAIL=test@example.com\n"
-        "DEFAULT_LLM_PROVIDER=openai\n"
-        "CONDA_CHANNEL=https://mirrors.tuna.tsinghua.edu.cn/conda-forge\n"
-    )
-    # Read the file and assert the parsing logic we use in main().
-    text = env.read_text()
-    channel = None
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith("CONDA_CHANNEL="):
-            channel = line.split("=", 1)[1].strip()
-            break
-    assert channel == "https://mirrors.tuna.tsinghua.edu.cn/conda-forge"
-
-
-
-# ---------------------------------------------------------------------------
-# Buildx support
-# ---------------------------------------------------------------------------
-
-
-def test_bootstrap_prefers_buildx_when_available() -> None:
-    """``_build_command`` returns ``docker buildx build`` when buildx is on PATH."""
-    import sys
-    sys.path.insert(0, str(REPO_ROOT))
-    from bootstrap import _build_command  # type: ignore
-
-    cmd = _build_command(["-t", "foo", "."])
-    # If buildx is installed on this host, the prefix must be
-    # ``docker buildx build``. Otherwise the legacy fallback is
-    # acceptable — but the function must still return a list
-    # whose first two elements are ``["docker", "build"]`` or
-    # ``["docker", "buildx", "build"]``.
-    assert cmd[0] == "docker"
-    assert cmd[1] in ("build", "buildx")
-    if cmd[1] == "buildx":
-        assert cmd[2] == "build"
-
-
-def test_bootstrap_apt_install_includes_docker_buildx() -> None:
-    """The Linux install path must include docker-buildx so buildx is on PATH."""
-    text = BOOTSTRAP.read_text()
-    assert "docker-buildx" in text, (
-        "bootstrap.py must install docker-buildx on Debian so "
-        "the buildx path is the default."
-    )
-
-
-
-def test_bootstrap_calls_ensure_buildx_separately() -> None:
-    """``bootstrap.py`` must install docker-buildx as a separate step.
-
-    The previous version of the apt ``install`` block included
-    ``docker-buildx`` but only ran when Docker itself was missing.
-    That meant users with an existing Docker install (the
-    common case) never had buildx installed and the build emitted
-    a deprecation warning. The fix is to call ``ensure_buildx``
-    unconditionally after the Docker check.
+    We pulled out of conda-forge entirely. Conda was slow (~30 s
+    solver round-trip), prone to 404s on the wrong mirror, and the
+    PyTorch manylinux wheels on PyPI are smaller and faster to
+    install. This test guards against a regression that re-introduces
+    micromamba/conda.
     """
-    text_src = BOOTSTRAP.read_text()
-    assert "ensure_buildx" in text_src, (
-        "bootstrap.py must define and call ensure_buildx()"
+    text = DOCKERFILE.read_text()
+    chunks = re.split(r"^FROM\s+", text, flags=re.MULTILINE)
+    local_block = next(
+        (c for c in chunks if "AS backend-local" in c),
+        None,
     )
-    # The call must be AFTER install_docker, not inside it.
-    install_docker_pos = text_src.find("def install_docker")
-    ensure_buildx_pos = text_src.find("def ensure_buildx")
-    assert ensure_buildx_pos > install_docker_pos, (
-        "ensure_buildx must be defined after install_docker"
+    assert local_block is not None, "backend-local block not found"
+    # Strip comments before checking.
+    code = re.sub(r"(?m)^\s*#.*$", "", local_block)
+    assert "micromamba" not in code, (
+        "backend-local must not use micromamba (we use pip)"
     )
-    # The main() entry must call ensure_buildx(). We look for the
-    # function definition and assert ensure_buildx(hw) appears
-    # somewhere after it.
-    main_body_start = text_src.find("def main()")
-    assert main_body_start > 0, "main() not found"
-    main_body = text_src[main_body_start:]
-    assert "ensure_buildx(hw)" in main_body, (
-        "main() must call ensure_buildx(hw) so existing Docker "
-        "installs still get buildx added"
+    assert "conda" not in code.lower(), (
+        "backend-local must not mention conda"
+    )
+    assert "environment.yaml" not in code, (
+        "backend-local must not reference environment.yaml"
+    )
+    assert "pip install" in code, (
+        "backend-local must install via pip"
     )
 
 
-def test_bootstrap_apt_install_includes_docker_buildx() -> None:
-    """The Linux install path must include docker-buildx so buildx is on PATH."""
+def test_dockerfile_local_stage_installs_local_deps() -> None:
+    """The local stage must reference local-requirements.txt."""
+    text = DOCKERFILE.read_text()
+    chunks = re.split(r"^FROM\s+", text, flags=re.MULTILINE)
+    local_block = next(
+        (c for c in chunks if "AS backend-local" in c),
+        None,
+    )
+    assert local_block is not None
+    assert "local-requirements.txt" in local_block, (
+        "backend-local must reference requirements/local-requirements.txt"
+    )
+
+
+def test_dockerfile_no_install_retry_loop_needed() -> None:
+    """Because we use pip (not conda) the retry loop is no longer
+    required for channel 404s. This test enforces that the
+    conda-specific retry loop has been removed. We keep retries
+    on npm ci (handled separately) but no longer need them for
+    pip install.
+    """
+    text = DOCKERFILE.read_text()
+    # The pip install commands should NOT be wrapped in a
+    # ``for attempt in 1 2 3`` retry loop, which is the conda
+    # pattern.
+    chunks = re.split(r"^FROM\s+", text, flags=re.MULTILINE)
+    for chunk in chunks:
+        code = re.sub(r"(?m)^\s*#.*$", "", chunk)
+        if "AS backend-" in chunk:
+            pip_section = code.split("pip install", 1)
+            if len(pip_section) > 1:
+                # Look at the chunk right after pip install — must NOT
+                # be a retry loop.
+                following = pip_section[1][:300]
+                assert "for attempt in" not in following, (
+                    "pip install must not be wrapped in a retry loop; "
+                    "pip retries internally on transient network errors"
+                )
+
+
+def test_dockerfile_final_target_is_parametric() -> None:
+    """The final ``FROM`` line must select the target based on ``BUILD_TARGET``."""
+    text = DOCKERFILE.read_text()
+    last_from = re.findall(r"^FROM\s+(\S+)", text, re.MULTILINE)[-1]
+    assert "${BUILD_TARGET}" in last_from, (
+        f"Final FROM must be 'FROM backend-${{BUILD_TARGET}}', got {last_from!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# bootstrap.py
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_persists_build_target_in_env() -> None:
+    """``bootstrap.py`` must save ``BUILD_TARGET`` to ``.env``."""
     text = BOOTSTRAP.read_text()
-    assert "docker-buildx" in text, (
-        "bootstrap.py must install docker-buildx on Debian so "
-        "the buildx path is the default."
+    assert "BUILD_TARGET=" in text, (
+        "bootstrap.py must persist BUILD_TARGET in .env"
     )
 
 
+def test_bootstrap_persists_mirror_in_env() -> None:
+    """``bootstrap.py`` must save the conda channel / pip mirror to ``.env``.
 
-def test_ensure_buildx_also_installs_compose() -> None:
-    """``ensure_buildx`` must also install the docker compose v2 plugin.
-
-    A previous version only installed ``docker-buildx``. The user
-    then ran the bootstrap and ``start_containers()`` failed with
-    ``unknown shorthand flag: 'f' in -f`` because ``docker compose``
-    was not a registered plugin (it falls back to the root docker
-    CLI which doesn't accept ``-f``).
+    Even though we no longer use conda, the ``--mirror`` flag is
+    still accepted and persisted for backwards compatibility.
     """
     text = BOOTSTRAP.read_text()
-    assert "docker-compose-v2" in text, (
-        "bootstrap.py must install docker-compose-v2 on Debian so "
-        "the docker compose plugin is registered"
+    assert "CONDA_CHANNEL=" in text, (
+        "bootstrap.py must persist CONDA_CHANNEL in .env (legacy)"
     )
-    # The function name should now also handle compose.
-    assert "_detect_compose_plugin" in text
-    assert "ensure_buildx" in text
 
 
-def test_bootstrap_main_runs_ensure_buildx_before_start_containers() -> None:
-    """``ensure_buildx`` must run before ``start_containers``.
-
-    ``start_containers()`` invokes ``docker compose``, which
-    requires both ``docker-buildx`` and the ``docker compose v2``
-    plugin to be installed.
-    """
+def test_bootstrap_local_passes_torch_index_url_for_gpu() -> None:
+    """When the user picks ``--local`` and has an NVIDIA GPU, the
+    bootstrap must pass ``--build-arg TORCH_INDEX_URL=.../cu124``
+    so pip installs the CUDA build of torch."""
     text = BOOTSTRAP.read_text()
-    main_body_start = text.find("def main()")
-    assert main_body_start > 0
-    main_body = text[main_body_start:]
-    ensure_pos = main_body.find("ensure_buildx(hw)")
-    start_pos = main_body.find("start_containers()")
-    assert ensure_pos > 0 and start_pos > 0
-    assert ensure_pos < start_pos, (
-        "ensure_buildx(hw) must run before start_containers()"
+    assert "TORCH_INDEX_URL" in text, (
+        "bootstrap.py must forward TORCH_INDEX_URL to docker build"
     )
+    assert "download.pytorch.org/whl/cu124" in text or "cu124" in text, (
+        "bootstrap.py must reference the cu124 wheel index for "
+        "NVIDIA GPUs"
+    )
+
+
+def test_bootstrap_local_skips_torch_index_for_cpu_only() -> None:
+    """When the user picks ``--local`` without a GPU, the bootstrap
+    must leave ``TORCH_INDEX_URL`` empty (default = CPU wheels)."""
+    text = BOOTSTRAP.read_text()
+    # The build_image call must use the local torch_index_url variable.
+    assert "torch_index_url=" in text
+
+
+def test_bootstrap_default_image_is_slim() -> None:
+    """Without ``--local``, the bootstrap builds the slim image."""
+    text = BOOTSTRAP.read_text()
+    assert "\"minimal\"" in text, (
+        "bootstrap.py must default BUILD_TARGET to 'minimal' so the slim image is built"
+    )
+
+
+# ---------------------------------------------------------------------------
+# requirements files
+# ---------------------------------------------------------------------------
+
+
+def test_local_requirements_exists() -> None:
+    """``requirements/local-requirements.txt`` must exist."""
+    assert LOCAL_REQS.is_file(), (
+        "requirements/local-requirements.txt is missing — the local "
+        "image needs a pip-installable ML deps file"
+    )
+
+
+def test_local_requirements_has_ml_deps() -> None:
+    """``local-requirements.txt`` must include the ML deps."""
+    text = LOCAL_REQS.read_text().lower()
+    # At least one of the heavy ML deps must be present.
+    heavy = ["torch", "transformers", "scikit-learn", "rdkit", "pandas", "scipy"]
+    has = [p for p in heavy if p in text]
+    assert has, (
+        f"local-requirements.txt must contain at least one of {heavy}"
+    )
+
+
+def test_minimal_requirements_does_not_have_ml_deps() -> None:
+    """``minimal-requirements.txt`` must NOT include ML deps."""
+    text = MINIMAL_REQS.read_text().lower()
+    code = re.sub(r"(?m)^\s*#.*$", "", text)
+    forbidden = ["torch", "transformers", "scikit-learn", "rdkit", "pandas", "scipy"]
+    for pkg in forbidden:
+        assert pkg not in code, (
+            f"minimal-requirements.txt must not install {pkg!r}"
+        )

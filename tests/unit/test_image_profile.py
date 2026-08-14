@@ -126,7 +126,7 @@ def test_dockerfile_minimal_stage_uses_slim_python() -> None:
     )
 
 
-def test_dockerfile_minimal_stage_does_not_install_conda_env() -> None:
+def test_dockerfile_minimal_stage_does_not_use_conda() -> None:
     """The slim stage must not run ``micromamba install`` or COPY environment.yaml."""
     text = DOCKERFILE.read_text()
     chunks = re.split(r"^FROM\s+", text, flags=re.MULTILINE)
@@ -190,8 +190,14 @@ def test_dockerfile_minimal_stage_does_not_include_node() -> None:
     )
 
 
-def test_dockerfile_local_stage_uses_environment_yaml() -> None:
-    """The local stage must install environment.yaml via conda."""
+def test_dockerfile_local_stage_uses_pip_and_local_requirements() -> None:
+    """The local stage must install requirements via pip.
+
+    We use ``requirements/local-requirements.txt`` (a pip requirements
+    file) rather than ``environment.yaml`` (a conda env file). The
+    pip approach is faster, smaller, and avoids the conda solver's
+    404-prone mirror.
+    """
     text = DOCKERFILE.read_text()
     chunks = re.split(r"^FROM\s+", text, flags=re.MULTILINE)
     local_block = next(
@@ -199,13 +205,17 @@ def test_dockerfile_local_stage_uses_environment_yaml() -> None:
         None,
     )
     assert local_block is not None, "backend-local block not found"
-    assert "environment.yaml" in local_block, (
-        "backend-local must reference environment.yaml"
+    # Strip comments before checking.
+    code = re.sub(r"(?m)^\s*#.*$", "", local_block)
+    assert "environment.yaml" not in code, (
+        "backend-local must not reference environment.yaml (we use pip)"
     )
-    assert "micromamba install" in local_block, (
-        "backend-local must install the conda env via micromamba"
+    assert "local-requirements.txt" in local_block, (
+        "backend-local must reference requirements/local-requirements.txt"
     )
-
+    assert "pip install" in code, (
+        "backend-local must install deps via pip"
+    )
 
 def test_dockerfile_final_target_is_parametric() -> None:
     """The final FROM line must select the target based on BUILD_TARGET."""
@@ -252,21 +262,21 @@ def test_minimal_requirements_has_backend_runtime() -> None:
         )
 
 
-def test_environment_yaml_has_ml_deps() -> None:
-    """environment.yaml should still contain the ML deps (the local target uses them)."""
-    text = ENVIRONMENT_YAML.read_text().lower()
-    # At least one of the heavy ML deps must be present.
-    heavy = ["torch", "transformers", "scikit-learn", "rdkit"]
-    has = [p for p in heavy if p in text]
-    assert has, (
-        f"environment.yaml must contain at least one of {heavy} for the local target"
+def test_environment_yaml_is_legacy_only() -> None:
+    """``environment.yaml`` is kept for the legacy conda path but
+    is no longer consulted by the Dockerfile. We do not delete it
+    because the user's research scripts may still reference it.
+    """
+    if not ENVIRONMENT_YAML.is_file():
+        return  # optional file
+    text = ENVIRONMENT_YAML.read_text()
+    # If it exists it should at least declare some deps so the
+    # legacy conda build still works for users who keep their
+    # old runbooks.
+    lower = text.lower()
+    assert "torch" in lower or "transformers" in lower or "scikit-learn" in lower, (
+        "environment.yaml must still contain ML deps (legacy compat)"
     )
-
-
-# ---------------------------------------------------------------------------
-# bootstrap.py
-# ---------------------------------------------------------------------------
-
 
 def test_bootstrap_has_local_flag() -> None:
     """bootstrap.py must accept --local."""
