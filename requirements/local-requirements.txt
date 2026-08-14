@@ -1,0 +1,57 @@
+#
+# Heavy ML dependencies for the BioResearch AI Docker image.
+#
+# This file is ONLY consulted by the ``backend-local`` build target.
+# The default ``backend-minimal`` target ships only the 7 packages
+# in ``requirements/minimal-requirements.txt`` and stays at
+# ~250 MB.
+#
+# Adding a package here will increase the local image by roughly
+# the wheel's unpacked size plus its transitive deps. The total
+# local image is ~1.2 GB with this list, vs ~3 GB for the legacy
+# conda-based build. Keep it lean.
+#
+# If you find yourself adding a dependency here, ask: is it used
+# by the FastAPI backend at runtime, or is it a research-script
+# dep? The latter is fine, but consider whether the backend actually
+# imports it. We only install research deps the user's scripts
+# need when they specifically opt into the heavy image.
+#
+
+# --- ML framework (CPU + CUDA) ---
+# Pin the major version of torch. We use the CPU-only build by
+# default to keep the image small; the GPU build is added
+# dynamically when the bootstrap detects an NVIDIA GPU.
+#
+# Note: the actual CPU/CUDA decision is made at build time via the
+# TORCH_INDEX_URL build-arg (set by bootstrap.py). The default
+# ``CPU`` index keeps this file wheel-only; a GPU-enabled image
+# overrides it during build.
+torch>=2.5,<3.0
+torchvision>=0.20,<1.0
+
+# --- Transformer models (for the offline research scripts) ---
+transformers>=4.45,<5.0
+tokenizers>=0.20,<1.0
+
+# --- Classical ML / chemistry ---
+scikit-learn>=1.5,<2.0
+rdkit>=2024.9,<2025.0
+
+# --- Numerical / data ---
+numpy>=2.0,<3.0
+pandas>=2.2,<3.0
+scipy>=1.13,<2.0
+
+# --- Graph ---
+torch-geometric>=2.6,<3.0
+
+# --- Common helpers ---
+tqdm>=4.66,<5.0
+joblib>=1.4,<2.0
+
+# --- Bring-your-own-data pip-install helper (UNIMOLTools is an
+# example from the user's original research scripts) ---
+# Uncomment the next line to enable. Disabled by default to keep
+# the image lean.
+# unimol_tools>=0.1.3
