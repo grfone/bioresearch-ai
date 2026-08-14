@@ -358,3 +358,45 @@ def test_prompt_returns_eof_as_empty() -> None:
     with patch("builtins.input", side_effect=EOFError):
         result = bootstrap._prompt("test: ")
     assert result == ""
+
+
+
+def test_gui_stringvar_set_does_not_chain_into_strip() -> None:
+    """The GUI must never call ``.strip()`` on the return of ``.set()``.
+
+    A previous version had ``provider_hint_var.set("...").strip()`` —
+    a chained call that returned ``None`` from ``set()`` and then
+    crashed with ``AttributeError: 'NoneType' object has no attribute
+    'strip'``. The fix is to apply ``.strip()`` to the string
+    argument instead of the return value.
+
+    To detect this regression without false positives in the
+    test's own docstring, we look for the exact pattern at the
+    end of a line: ``.set(...).strip()`` where the closing ``)``
+    of ``.set(...)`` is followed by ``.strip()``.
+    """
+    text = BOOTSTRAP.read_text()
+    # Find lines ending with ``.set(...).strip()`` (the buggy pattern).
+    # A regex using ``[^)]*`` matches the inside of .set() which is
+    # safe because we only care about the *immediate* chained call.
+    suspicious = []
+    for line in text.splitlines():
+        line_stripped = line.lstrip()
+        if line_stripped.startswith("#"):
+            continue
+        # Look for the buggy pattern on lines where the whole
+        # line is a chained .set(...).strip() call.
+        if ".set(" in line and ").strip()" in line:
+            # Make sure the .set() is *immediately* followed by .strip().
+            # We allow whitespace between the closing ) and .strip().
+            import re
+            # Match pattern: <name>.set(<anything not ()>)  .strip()
+            # (Not perfect — but the bug we are guarding against is
+            # exactly this shape.)
+            if re.search(r"\.set\([^()]*\)[. ]*\.strip\(\)", line):
+                suspicious.append(line)
+    assert not suspicious, (
+        "Chained .set(...).strip() calls detected. "
+        "StringVar.set() returns None; chain into .strip() crashes. "
+        f"Offending lines: {suspicious}"
+    )
