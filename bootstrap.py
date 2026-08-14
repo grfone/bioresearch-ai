@@ -103,9 +103,11 @@ GUI_TIMEOUT_SECONDS = 600  # 10 minutes max for the GUI prompt
 #: - ``conda.anaconda.cloud/conda-forge`` → routinely unreachable
 #:   from build environments.
 #:
-#: If the default ever stops working, the bootstrap CLI accepts
-#: ``--mirror <url>`` so users can pin a working mirror without
-#: having to rebuild the image.
+#: This constant is preserved for backwards compatibility with
+#: the ``--mirror`` flag, but the current Dockerfile does NOT use
+#: conda at all — pip pulls the wheels directly from PyPI. The
+#: flag still works because we pass it as a build-arg in case
+#: future revisions want to use it.
 DEFAULT_CONDA_CHANNEL = "https://conda.anaconda.org/conda-forge"
 
 
@@ -681,6 +683,7 @@ def _build_command(extra_args: list[str]) -> list[str]:
 def build_image(
     conda_channel: str = DEFAULT_CONDA_CHANNEL,
     build_target: str = "minimal",
+    torch_index_url: str = "",
 ) -> None:
     """Build the BioResearch AI image.
 
@@ -706,6 +709,13 @@ def build_image(
     back to ``docker build`` (legacy, deprecated) when buildx is not
     installed. The bootstrap installs ``docker-buildx`` on Linux
     alongside ``docker.io`` so the buildx path is preferred.
+
+    ``torch_index_url`` is the PyPI index URL used to install
+    ``torch`` + ``torchvision`` in the local target. When empty
+    (the default) pip pulls the CPU-only wheels from PyPI. When
+    set to e.g. ``https://download.pytorch.org/whl/cu124`` pip
+    pulls the CUDA 12.4 wheels — the local image will then have
+    GPU support.
     """
     if build_target not in ("minimal", "local"):
         raise ValueError(
@@ -713,8 +723,10 @@ def build_image(
         )
     target_description = {
         "minimal": "slim Python-only image (~250 MB)",
-        "local": "full image with ML deps (~3 GB)",
+        "local": "full image with ML deps (~1.2 GB)",
     }[build_target]
+    if torch_index_url:
+        target_description += f" [GPU via {torch_index_url}]"
     log_info(
         f"Building the BioResearch AI Docker image "
         f"({target_description}, this can take a few minutes)…"
@@ -722,6 +734,7 @@ def build_image(
     extra = [
         "--build-arg", f"CONDA_CHANNEL={conda_channel}",
         "--build-arg", f"BUILD_TARGET={build_target}",
+        "--build-arg", f"TORCH_INDEX_URL={torch_index_url}",
         "-t", DOCKER_IMAGE,
         ".",
     ]
@@ -863,6 +876,9 @@ class GuiConfig:
     # When false, the slim image is built (~250 MB).
     build_target: str = "minimal"
     proceed: bool = False
+    # Internal: True when the GUI raised during on_save and we
+    # should fall back to the CLI wizard.
+    gui_failed: bool = False
 
 
 def _import_tkinter():
@@ -1053,7 +1069,7 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
     row += 1
     api_key_label = ttk.Label(root, text="API key")
     api_key_label.grid(row=row, column=0, sticky="w", **pad)
-    api_key_var = tk.StringVar()
+    api_key_var = tk.StringVar(value="")
     api_key_entry = ttk.Entry(root, textvariable=api_key_var, show="*", width=40)
     api_key_entry.grid(row=row, column=1, sticky="ew", **pad)
 
@@ -1115,7 +1131,7 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
     )
     row += 1
     ttk.Label(root, text="PubMed email").grid(row=row, column=0, sticky="w", **pad)
-    pubmed_email_var = tk.StringVar()
+    pubmed_email_var = tk.StringVar(value="")
     ttk.Entry(root, textvariable=pubmed_email_var, width=40).grid(
         row=row, column=1, sticky="ew", **pad
     )
@@ -1125,7 +1141,7 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
     ttk.Label(root, text="PubMed API key (optional)").grid(
         row=row, column=0, sticky="w", **pad
     )
-    pubmed_api_key_var = tk.StringVar()
+    pubmed_api_key_var = tk.StringVar(value="")
     ttk.Entry(root, textvariable=pubmed_api_key_var, show="*", width=40).grid(
         row=row, column=1, sticky="ew", **pad
     )
@@ -1247,8 +1263,40 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
     )
 
     def on_save():
+        # Wrap the save flow in try/except so any unexpected failure
+        # (e.g. a Tk quirk that makes ``.get()`` return None on a
+        # fresh StringVar) shows a dialog to the user instead of
+        # crashing the bootstrap with a bare traceback.
+        try:
+            _on_save_impl()
+        except Exception as exc:
+            try:
+                messagebox.showerror(
+                    "Error",
+                    f"Could not save the configuration:\n\n{exc!s}\n\n"
+                    "Please try again or quit and re-run from a terminal.",
+                )
+            except Exception:
+                # The error dialog itself failed (no display?). Log to
+                # stderr, destroy the GUI, and signal the outer
+                # code to fall back to the CLI wizard.
+                log_error(str(exc))
+                log_warn(
+                    "The GUI could not show the error dialog; "
+                    "the CLI wizard will take over."
+                )
+                try:
+                    root.destroy()
+                except Exception:
+                    pass
+                # Mark the config so the outer wrapper sees the
+                # failure and falls back.
+                config.proceed = False
+                config.gui_failed = True
+
+    def _on_save_impl():
         # Validate.
-        if not pubmed_email_var.get().strip():
+        if not (pubmed_email_var.get() or '').strip():
             messagebox.showerror(
                 "Required",
                 "PubMed email is required. NCBI rejects anonymous requests.",
@@ -1261,7 +1309,7 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
             )
             return
         is_local = entry.slug.value == "local"
-        if not is_local and not api_key_var.get().strip():
+        if not is_local and not (api_key_var.get() or '').strip():
             messagebox.showerror(
                 "Required",
                 f"API key is required for {entry.display_name}. "
@@ -1269,14 +1317,13 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
             )
             return
         config.llm_provider = entry.slug.value
-        config.api_key = api_key_var.get().strip()
-        config.base_url = base_url_var.get().strip()
-        config.model = model_var.get().strip()
-        config.pubmed_email = pubmed_email_var.get().strip()
-        config.pubmed_api_key = pubmed_api_key_var.get().strip()
+        config.api_key = (api_key_var.get() or '').strip()
+        config.base_url = (base_url_var.get() or '').strip()
+        config.model = (model_var.get() or '').strip()
+        config.pubmed_email = (pubmed_email_var.get() or '').strip()
+        config.pubmed_api_key = (pubmed_api_key_var.get() or '').strip()
         config.selected_local_model = (
-            local_model_var.get().strip() if is_local else None
-        )
+            (local_model_var.get() or '').strip() if is_local else None        )
         config.proceed = True
         root.destroy()
 
@@ -1313,6 +1360,13 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
             pass
         return _cli_collect_config(hw)
 
+    if config.gui_failed:
+        log_warn("Falling back to the terminal wizard after a GUI error.")
+        try:
+            root.destroy()
+        except Exception:
+            pass
+        return _cli_collect_config(hw)
     if not config.proceed:
         log_warn("Setup was cancelled. Run bootstrap.py again to retry.")
         sys.exit(0)
@@ -1734,12 +1788,11 @@ def main() -> int:
         "--mirror",
         default=None,
         help=(
-            "Conda channel URL to use when building the local image. "
-            "Use this when the default conda.anaconda.org host is blocked "
-            "or slow on your network. Examples: "
-            "https://mirrors.tuna.tsinghua.edu.cn/conda-forge, "
-            "https://mirrors.aliyun.com/conda-forge. "
-            "Saved to .env so subsequent runs remember the choice."
+            "Mirror URL preserved for backwards compatibility. The "
+            "current Dockerfile does not use conda at all (it pulls "
+            "wheels from PyPI directly), so this flag is a no-op "
+            "today. It is still accepted and persisted to .env so "
+            "older runbooks keep working."
         ),
     )
     parser.add_argument(
@@ -1803,7 +1856,19 @@ def main() -> int:
     build_target = "local" if args.local else "minimal"
     if build_target == "local":
         log_info(f"Using conda channel: {conda_channel}")
-    build_image(conda_channel=conda_channel, build_target=build_target)
+    # Pick the right PyTorch wheel index for the user's hardware.
+    # The CPU index (the default) pulls the small CPU-only torch
+    # wheel; the cu124 index pulls the ~1 GB CUDA 12.4 wheel that
+    # talks to NVIDIA GPUs. We detect NVIDIA via ``nvidia-smi``.
+    torch_index_url = ""
+    if build_target == "local" and hw.gpu_name and "nvidia" in hw.gpu_name.lower():
+        torch_index_url = "https://download.pytorch.org/whl/cu124"
+        log_info(f"NVIDIA GPU detected ({hw.gpu_name}); pulling CUDA torch wheels.")
+    build_image(
+        conda_channel=conda_channel,
+        build_target=build_target,
+        torch_index_url=torch_index_url,
+    )
     print()
 
     # 4. First-run GUI (unless --skip-gui)
