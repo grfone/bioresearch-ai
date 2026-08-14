@@ -91,6 +91,37 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Added
 
+### Fixed
+
+* **GUI crash on Tk with bare ``StringVar()`` calls.** A previous
+  version declared ``api_key_var``, ``pubmed_email_var`` and
+  ``pubmed_api_key_var`` with ``tk.StringVar()`` (no default).
+  Some Tk versions return ``None`` from a freshly-constructed
+  StringVar's ``.get()``, which made ``.get().strip()`` raise
+  ``AttributeError: 'NoneType' object has no attribute 'strip'``.
+  All StringVars now use ``value=""`` and every ``.get().strip()``
+  call is wrapped as ``(X.get() or '').strip()`` for belt-and-braces
+  protection. The GUI's ``on_save`` is also wrapped in a
+  ``try/except`` that shows a clear message instead of crashing
+  the bootstrap on any unexpected error.
+
+### Changed
+
+* **Dropped conda entirely.** The ``backend-local`` build target
+  no longer uses micromamba/conda. It installs the ML stack
+  (torch, transformers, scikit-learn, rdkit, pandas, scipy)
+  via pip on the same ``python:3.12-slim`` base. This cuts the
+  local image from ~3 GB to ~1.2 GB and avoids the 404-prone
+  conda-forge channel entirely. When the host has an NVIDIA
+  GPU, the bootstrap now sets ``TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124``
+  so pip pulls the CUDA build of torch instead of the CPU build.
+
+* **No conda, no micromamba.** The ``environment.yaml`` file is
+  retained for users who keep the legacy conda runbook, but the
+  Dockerfile no longer reads it. New users can ignore it.
+
+### Added
+
 * **Robust first-run setup.** The bootstrap auto-installs
   ``python3-tk`` on Linux / macOS when tkinter is missing, and
   falls back to a terminal-based wizard when the GUI can't run
