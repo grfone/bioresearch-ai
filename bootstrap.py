@@ -1190,10 +1190,16 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
                 base_url_var.set(entry.base_url)
             if entry.default_model:
                 model_var.set(entry.default_model)
+            # The .strip() is on the f-string BEFORE set(), not
+            # after. The previous code had ``.set(...).strip()`` which
+            # crashed with ``NoneType has no attribute 'strip'`` because
+            # ``StringVar.set()`` returns None.
             provider_hint_var.set(
-                f"Set {entry.api_key_env} in your environment, or paste "
-                f"the key directly below. {entry.notes}"
-            ).strip()
+                (
+                    f"Set {entry.api_key_env} in your environment, "
+                    f"or paste the key directly below. {entry.notes}"
+                ).strip()
+            )
             model_hint_var.set(
                 "Suggested models: " + entry.model_hint
             )
