@@ -3,30 +3,33 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: bioresearch-ai:latest
+      args:
+        # Default to the slim image. Pass ``BUILD_TARGET=local``
+        # via the bootstrap to use the heavy image.
+        BUILD_TARGET: ${BUILD_TARGET:-minimal}
+    image: bioresearch-ai:${BUILD_TARGET:-minimal}
     container_name: bioresearch-ai-backend
     env_file: .env
     environment:
-      # When the bootstrap chose the local LLM, point the backend at
-      # the in-network Ollama service.
-      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - LLM_PROVIDER=${DEFAULT_LLM_PROVIDER:-openai}
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-deepseek-coder-v2-lite-instruct}
     volumes:
-      # Persist the workspace database on the host.
       - ./bioresearch.db:/app/bioresearch.db
     ports:
       - "8000:8000"
+    # Only depend on Ollama when the user picked the local LLM.
     depends_on:
       ollama:
         condition: service_started
-    # The ollama service is optional; if the user used a cloud LLM
-    # the backend will still start even without it. We use
-    # `service_started` rather than `service_healthy` because the
-    # backend does not need to wait for the model to be pulled.
+        required: false
     restart: unless-stopped
 
+  # Ollama is only started when the user picked the local LLM.
+  # The bootstrap activates this profile automatically by setting
+  # COMPOSE_PROFILES=local in .env when needed.
   ollama:
+    profiles: ["local"]
     image: ollama/ollama:latest
     container_name: bioresearch-ai-ollama
     ports:
@@ -48,5 +51,3 @@ services:
 
 volumes:
   ollama_models:
-    # Persistent storage for downloaded models so a `docker compose up`
-    # rerun doesn't re-download 4 GB of GGUF weights.
