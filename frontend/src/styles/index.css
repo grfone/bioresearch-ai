@@ -49,6 +49,13 @@
  *                               utilities.css
  *                                     │
  *                              components.css
+ *                                     │
+ *                                lab-bench.css
+ *
+ * The lab-bench stylesheet is loaded last so that the lifecycle
+ * strip and the action pills can override the default component
+ * styles when needed. Without it, ``WorkspaceStatusBar`` renders
+ * as raw inline text instead of a horizontal progress strip.
  *
  ******************************************************************************/
 
@@ -63,3 +70,5 @@
 @import "./utilities.css";
 
 @import "./components.css";
+
+@import "./lab-bench.css";
