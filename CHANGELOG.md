@@ -93,6 +93,35 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Added
 
+* **Three-zone empty state.** When a workspace has zero papers
+  the page now shows three clickable workflow cards ("I have
+  specific papers", "I want to discover papers", "I have PDFs
+  on my machine") instead of the bare "No papers yet" message.
+  Each card brings the matching entry surface into view —
+  PMID/DOI input, PubMed search, or (eventually) PDF drop.
+  Driven by UX consultation with bench-biology and clinical-
+  biomedical-engineering personas.
+
+* **Two-tier action bar.** The action bar is now split into a
+  primary tier (Search PubMed) that's always visible, and a
+  secondary tier (Summarize, Compare, Generate Report, Complete,
+  Retry, Clear All) that's collapsed by default at CREATED and
+  auto-expands once papers exist. The previous design listed all
+  seven actions in a single row, which buried the most useful
+  primary action in a wall of disabled buttons.
+
+* **Identifier-first paper entry with bulk paste.** A new
+  `POST /workspaces/{id}/papers/resolve` endpoint accepts a
+  list of PMIDs and/or DOIs (one per line, comma-separated) and
+  returns per-identifier status chips. The companion
+  `POST /workspaces/{id}/papers/bulk` adds all resolved papers
+  in one transaction; `POST /workspaces/{id}/papers/fetch`
+  resolves one identifier and adds it in a single call (the
+  identifier is a query parameter so DOIs with `/` work). The
+  resolver uses PubMed EFetch for PMIDs and CrossRef for DOIs,
+  both via `httpx` (no extra SDK dependency). The frontend's
+  AddPapersPanel exposes the bulk workflow as the default tab.
+
 * **Manual paper upload.** A new `POST /workspaces/{id}/papers`
   endpoint lets the user add a paper to a workspace manually,
   without going through PubMed. Useful when the user already
