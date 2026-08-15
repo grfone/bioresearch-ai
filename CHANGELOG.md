@@ -91,9 +91,43 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Added
 
+### Added
+
+* **Manual paper upload.** A new `POST /workspaces/{id}/papers`
+  endpoint lets the user add a paper to a workspace manually,
+  without going through PubMed. Useful when the user already
+  knows the paper they want to study (and would rather not
+  spend API quota on a search) or when the paper isn't indexed
+  in PubMed at all. Title is the only required field; authors,
+  journal, year, abstract, DOI, PMID, keywords, and URL are
+  optional. The companion `DELETE
+  /workspaces/{id}/papers/{paper_id}` endpoint removes a paper
+  by PMID or DOI. Both endpoints respect the FSM: an illegal
+  action returns HTTP 409 with `allowed_actions` in the body,
+  the same contract as every other action endpoint. The
+  frontend has a new "Upload Paper" toggle in the action bar
+  that opens a compact form.
+
+* **Proper SVG favicon.** A DNA-double-helix favicon (with
+  cyan rungs and amber circuit nodes) now ships at
+  `frontend/public/favicon.svg`. The previous `favicon.ico`
+  was a malformed Targa image; the HTML referenced an
+  unfindable `favicon.svg`, leaving the browser tab empty.
+
 ### Fixed
 
-* **"Test credentials" fails for MiniMax with "'openai' Python package is not installed".**
+* **Workspace layout rendered as raw inline text.** The lab-bench
+  stylesheet (`frontend/src/styles/lab-bench.css`) was never
+  imported, so every `.lab-bench-*` class had no CSS — the
+  lifecycle strip ("LifecycleCREATED0%"), the available-action
+  pills ("Available actions:add_papersearch"), and the station
+  labels all stacked as plain text without flex/inline layout.
+  The `index.css` file now imports `lab-bench.css` after
+  `components.css` so the lab-bench styles can override the
+  defaults. The lifecycle strip now renders horizontally with
+  proper spacing, dots, and pill labels.
+
+* **"Test credentials" fails for MiniMax** with "'openai' Python package is not installed".**
   ``probe_credentials.py`` was hardcoded to use the OpenAI Python
   client for every non-local provider. MiniMax uses the Anthropic
   Messages API (``/v1/messages``) at ``https://api.minimax.io/anthropic``,
