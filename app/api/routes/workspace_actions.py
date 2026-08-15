@@ -31,6 +31,15 @@ POST /workspaces/{id}/actions/complete
 POST /workspaces/{id}/actions/retry
     Recover the workspace from the ERROR state.
 
+POST /workspaces/{id}/papers
+    Add a paper to the workspace manually. Used by the
+    frontend's "Upload paper" form. Legal in any state that
+    allows ``add_paper``.
+
+DELETE /workspaces/{id}/papers/{paper_id}
+    Remove a paper from the workspace. Legal in any state
+    that allows ``remove_paper``.
+
 GET /workspaces/{id}/transitions
     Return the FSM status of the workspace (state, allowed
     actions, history).
@@ -52,6 +61,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.schemas.evidence_comparison_response import (
     EvidenceComparisonResponse,
 )
+from app.api.schemas.paper_request import PaperRequest
 from app.api.schemas.workspace_action_request import (
     WorkspaceActionRequest,
 )
@@ -68,6 +78,9 @@ from app.core.exceptions import (
     CitationValidationError,
     IllegalWorkspaceActionError,
 )
+from app.domain.entities.author import Author
+from app.domain.entities.journal import Journal
+from app.domain.entities.paper import Paper
 
 
 router = APIRouter(
@@ -299,3 +312,133 @@ def evidence_comparison(
     return EvidenceComparisonResponse.from_domain(
         workspace.evidence_comparison
     )
+
+
+# ----------------------------------------------------------------------
+# Paper management — manual upload and removal
+# ----------------------------------------------------------------------
+#
+# These endpoints let the user add or remove papers without going
+# through the SEARCH action. They are useful when the user already
+# knows the paper they want to study and does not want to spend
+# API quota on a PubMed query. They are also the only way to add
+# a paper that is not indexed in PubMed.
+
+
+def _paper_request_to_domain(payload: PaperRequest) -> Paper:
+    """Convert the validated request payload into a domain ``Paper``.
+
+    The domain ``Author`` is keyed on ``first_name`` / ``last_name``
+    (its ``full_name`` is a derived property). The request schema
+    exposes ``full_name``, ``given_name``, and ``family_name`` so the
+    user can supply any combination. We resolve them in this order:
+
+    1. If ``first_name`` and ``last_name`` are both set, use them
+       directly.
+    2. Else if ``full_name`` is set, split it on the last whitespace
+       boundary (so "Maria Del Carmen Garcia" becomes first="Maria
+       Del Carmen", last="Garcia").
+    3. Else fall back to whatever partial data is available, with
+       "Unknown Author" as the last-resort default.
+    """
+    authors: list[Author] = []
+    for a in payload.authors:
+        first = (a.given_name or "").strip()
+        last = (a.family_name or "").strip()
+        full = (a.full_name or "").strip()
+        if not first and not last and full:
+            parts = full.rsplit(" ", 1)
+            first = parts[0]
+            last = parts[1] if len(parts) > 1 else ""
+        if not first and not last:
+            first = "Unknown"
+            last = "Author"
+        authors.append(Author(
+            first_name=first,
+            last_name=last,
+            affiliation=None,
+        ))
+    journal = (
+        Journal(
+            name=payload.journal.name,
+            issn=payload.journal.issn,
+            publisher=payload.journal.publisher,
+        )
+        if payload.journal is not None
+        else None
+    )
+    return Paper(
+        title=payload.title,
+        authors=authors,
+        journal=journal,
+        year=payload.year,
+        abstract=payload.abstract,
+        doi=payload.doi,
+        pmid=payload.pmid,
+        keywords=list(payload.keywords),
+        url=payload.url,
+    )
+
+
+@router.post(
+    "/{workspace_id}/papers",
+    response_model=WorkspaceResponse,
+    summary="Add a paper to the workspace manually.",
+)
+def add_paper(
+    workspace_id: UUID,
+    payload: PaperRequest,
+    orchestrator: WorkspaceOrchestrator = Depends(
+        get_workspace_orchestrator
+    ),
+) -> WorkspaceResponse:
+    """Persist a user-supplied paper into the workspace.
+
+    The endpoint accepts the same shape as ``PaperRequest`` from the
+    API. It validates the payload, converts it to a domain ``Paper``,
+    and forwards it to ``WorkspaceOrchestrator.add_paper``.
+
+    The state machine must allow ``add_paper`` in the workspace's
+    current state; otherwise the response is HTTP 409 Conflict with
+    ``allowed_actions`` in the body (same contract as every other
+    action endpoint).
+    """
+    paper = _paper_request_to_domain(payload)
+    try:
+        workspace = orchestrator.add_paper(workspace_id, paper)
+    except IllegalWorkspaceActionError as exc:
+        raise _illegal_action_response(exc) from exc
+    return _to_response(workspace)
+
+
+@router.delete(
+    "/{workspace_id}/papers/{paper_id}",
+    response_model=WorkspaceResponse,
+    summary="Remove a paper from the workspace.",
+)
+def remove_paper(
+    workspace_id: UUID,
+    paper_id: str,
+    orchestrator: WorkspaceOrchestrator = Depends(
+        get_workspace_orchestrator
+    ),
+) -> WorkspaceResponse:
+    """Remove a paper by its PMID or DOI.
+
+    Returns HTTP 404 if the paper isn't in the workspace. Returns
+    HTTP 409 Conflict if the current state doesn't allow
+    ``remove_paper`` (e.g. while a SEARCH is in progress).
+    """
+    # Snapshot the paper count before the call. If it doesn't
+    # change, the paper wasn't in the workspace and we return 404.
+    before = len(orchestrator.get_workspace(workspace_id).papers)
+    try:
+        workspace = orchestrator.remove_paper(workspace_id, paper_id)
+    except IllegalWorkspaceActionError as exc:
+        raise _illegal_action_response(exc) from exc
+    if len(workspace.papers) == before:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No paper with PMID/DOI {paper_id!r} in this workspace.",
+        )
+    return _to_response(workspace)
