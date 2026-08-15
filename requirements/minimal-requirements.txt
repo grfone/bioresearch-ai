@@ -30,5 +30,16 @@ python-dotenv>=1.0,<2.0
 # --- PubMed (NCBI Entrez) client ---
 biopython>=1.83,<2.0
 
+# --- PDF metadata extraction (used by the drag-and-drop PDF
+# tab in the workspace). Pure-Python, ~3 MB, no ML deps. Reads the
+# first page and looks for DOI/PMID patterns to resolve the
+# paper via the existing IdentifierResolver. ---
+pypdf>=4.0,<6.0
+
+# --- Multipart form parsing (used by the PDF upload endpoint).
+# FastAPI requires this at import time when an endpoint declares
+# ``File(...)`` / ``UploadFile``. Tiny pure-Python dep. ---
+python-multipart>=0.0.9,<1.0
+
 # --- OpenAI Python client (used by every OpenAI-compat LLM provider) ---
 openai>=1.40,<2.0

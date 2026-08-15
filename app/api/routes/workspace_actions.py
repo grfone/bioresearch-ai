@@ -56,7 +56,15 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 
 from app.api.schemas.evidence_comparison_response import (
     EvidenceComparisonResponse,
@@ -94,6 +102,9 @@ from app.domain.entities.journal import Journal
 from app.domain.entities.paper import Paper
 from app.infrastructure.pubmed.identifier_resolver import (
     IdentifierResolver,
+)
+from app.infrastructure.pubmed.pdf_extractor import (
+    extract_identifiers_from_pdf,
 )
 
 
@@ -627,4 +638,141 @@ def resolve_and_add_paper(
         )
     except IllegalWorkspaceActionError as exc:
         raise _illegal_action_response(exc) from exc
+    return _to_response(workspace)
+
+
+
+# ----------------------------------------------------------------------
+# PDF upload — extract DOI/PMID from the first page of a user-
+# supplied PDF, resolve via the existing IdentifierResolver, and
+# add the resulting paper to the workspace.
+#
+# This is the user-visible "drag a PDF onto the workspace" flow.
+# The extractor is intentionally lightweight (no ML, no OCR) —
+# it reads the first page text with pypdf and sweeps DOI / PMID
+# patterns. Scanned PDFs come back with an empty identifiers
+# list and the user is told to use the PMID/DOI tab instead.
+# ----------------------------------------------------------------------
+
+
+# 10 MB is a reasonable cap for a single research paper. Anything
+# larger is probably a thesis or a book — those are different
+# workflows and we surface a clear error.
+_PDF_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
+
+
+@router.post(
+    "/{workspace_id}/papers/from-pdf",
+    response_model=WorkspaceResponse,
+    summary="Extract DOI/PMID from a PDF and add the paper to the workspace.",
+)
+async def add_paper_from_pdf(
+    workspace_id: UUID,
+    file: UploadFile = File(
+        ...,
+        description="PDF file to extract identifiers from. "
+                    "Max 10 MB. The first page is scanned for "
+                    "DOI (10.xxxx/...) and PMID patterns.",
+    ),
+    resolver: IdentifierResolver = Depends(get_identifier_resolver),
+    orchestrator: WorkspaceOrchestrator = Depends(
+        get_workspace_orchestrator
+    ),
+) -> WorkspaceResponse:
+    """Upload a PDF, extract DOI/PMID from the first page, and
+    add the resolved paper to the workspace.
+
+    Returns HTTP 422 if the PDF can't be parsed, has no DOI/PMID
+    on the first page, or the identifier fails to resolve. Returns
+    HTTP 413 if the file is larger than 10 MB. Returns HTTP 409 if
+    the current state doesn't allow ``add_paper``.
+    """
+    if file.content_type and not file.content_type.startswith("application/pdf"):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=(
+                f"Unsupported file type {file.content_type!r}. "
+                "Only application/pdf is accepted."
+            ),
+        )
+
+    raw = await file.read()
+    if len(raw) > _PDF_UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"PDF is {len(raw)} bytes; the max is "
+                f"{_PDF_UPLOAD_MAX_BYTES}. Split it or use the "
+                "PMID/DOI tab instead."
+            ),
+        )
+
+    # Extract identifiers from the first page(s).
+    import io
+
+    try:
+        extraction = extract_identifiers_from_pdf(io.BytesIO(raw))
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "pdf_read_failed",
+                "message": str(exc),
+            },
+        ) from exc
+
+    if not extraction.identifiers:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "no_identifiers_found",
+                "message": (
+                    "The PDF didn't contain a recognisable DOI or "
+                    "PMID on the first page. If the paper is a "
+                    "scanned PDF, try the PMID/DOI tab instead."
+                ),
+                "extracted_text_preview": extraction.pdf_text[:500],
+            },
+        )
+
+    # Resolve the extracted identifiers through the same
+    # pipeline that the bulk-paste flow uses.
+    results = resolver.resolve_many(extraction.identifiers)
+    resolved_papers = [
+        result.paper.paper for result in results if result.is_success
+    ]
+    if not resolved_papers:
+        # Surface every failure so the user can see which
+        # identifier broke.
+        failed = [
+            {
+                "identifier": result.failure.identifier,
+                "reason": result.failure.reason,
+            }
+            for result in results
+            if result.failure is not None
+        ]
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error": "all_identifiers_failed",
+                "message": (
+                    "Found identifiers in the PDF but none of "
+                    "them resolved via PubMed or CrossRef."
+                ),
+                "extracted": extraction.identifiers,
+                "failures": failed,
+            },
+        )
+
+    # Add to workspace via the bulk path. The orchestrator
+    # dedupes by PMID/DOI, so uploading the same PDF twice is a
+    # no-op.
+    try:
+        workspace = orchestrator.add_papers_bulk(
+            workspace_id, resolved_papers,
+        )
+    except IllegalWorkspaceActionError as exc:
+        raise _illegal_action_response(exc) from exc
+
     return _to_response(workspace)
