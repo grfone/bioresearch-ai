@@ -93,6 +93,33 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Added
 
+* **PDF drag-and-drop upload.** The PDF tab in the AddPapersPanel
+  is now a real drop zone, not a placeholder. The user drags a
+  PDF (or clicks to pick one) and the new
+  ``POST /workspaces/{id}/papers/from-pdf`` endpoint extracts
+  DOI / PMID from the first page using ``pypdf`` (pure-Python,
+  no ML deps), resolves them through the existing
+  ``IdentifierResolver``, and adds the resulting papers in one
+  transaction. Scanned PDFs surface a clear "no identifier
+  found" error so the user can fall back to the PMID/DOI tab.
+
+* **Select-to-add PubMed search.** ``LiteratureSearch`` now
+  shows results as a checkbox list with "Add selected" — the
+  user picks which papers enter the workspace instead of
+  auto-appending everything. All results are selected by
+  default; the user un-checks the irrelevant ones. The old
+  "fetch and forget" auto-append was the consultant's Workflow
+  C complaint and is now gone.
+
+* **Ctrl/Cmd+K global shortcut.** The workspace now binds a
+  global keyboard shortcut that focuses the right input based
+  on the FSM state — at CREATED with zero papers it focuses
+  the PMID/DOI textarea, otherwise it focuses the PubMed
+  search input. PC users see ``Ctrl+K``; Mac users see ``⌘K``
+  (the binding is the same because browsers on Mac fire
+  ``ctrlKey`` for both Ctrl and Cmd). The hint is shown next
+  to the relevant input and on the empty-state cards.
+
 * **Three-zone empty state.** When a workspace has zero papers
   the page now shows three clickable workflow cards ("I have
   specific papers", "I want to discover papers", "I have PDFs
