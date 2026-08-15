@@ -29,6 +29,35 @@ import type { ReportRequest, ReportResponse } from '../models/report';
 import type { Paper, PaperRequest } from '../models/paper';
 
 /**
+ * Response payload for identifier resolution.
+ *
+ * The backend returns one entry per submitted identifier, in the
+ * same order. Each entry has either ``resolved`` or ``failed``
+ * populated; never both.
+ */
+export interface ResolvePaperResponse {
+  identifier: string;
+  identifier_type: 'pmid' | 'doi';
+  paper: Paper;
+}
+
+export interface FailedResolution {
+  identifier: string;
+  reason: string;
+}
+
+export interface ResolveResultEntry {
+  resolved: ResolvePaperResponse | null;
+  failed: FailedResolution | null;
+}
+
+export interface ResolvePapersResponse {
+  results: ResolveResultEntry[];
+  resolved_count: number;
+  failed_count: number;
+}
+
+/**
  * Request payload for literature search.
  */
 export interface SearchRequest {
@@ -238,6 +267,68 @@ export const api = {
   // ------------------------------------------------------------------
   // Paper management
   // ------------------------------------------------------------------
+
+  /**
+   * Resolve a batch of PMIDs/DOIs to full paper metadata.
+   *
+   * Used by the AddPapersPanel when the user pastes a list of
+   * identifiers. Returns per-identifier status (resolved or
+   * failed) so the frontend can show chips next to each entry.
+   * Does NOT modify the workspace.
+   */
+  resolvePapers: (
+    workspaceId: string,
+    identifiers: string[],
+  ): Promise<ResolvePapersResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/papers/resolve`),
+      {
+        method: 'POST',
+        body: JSON.stringify({ identifiers }),
+      },
+    );
+  },
+
+  /**
+   * Add several papers to the workspace in one transaction.
+   *
+   * Called after ``resolvePapers`` to commit the resolved
+   * metadata. The orchestrator dedupes by PMID/DOI, so duplicate
+   * entries from a mistyped batch are silently dropped.
+   */
+  addPapersBulk: (
+    workspaceId: string,
+    papers: PaperRequest[],
+  ): Promise<WorkspaceResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/papers/bulk`),
+      {
+        method: 'POST',
+        body: JSON.stringify(papers),
+      },
+    );
+  },
+
+  /**
+   * Resolve one PMID/DOI and add the paper to the workspace.
+   *
+   * One-shot "add this paper" endpoint for the simplest workflow.
+   * The identifier is passed as a query parameter (not a path
+   * parameter) because DOIs contain ``/`` which would otherwise
+   * need URL-encoding gymnastics.
+   */
+  resolveAndAddPaper: (
+    workspaceId: string,
+    identifier: string,
+  ): Promise<WorkspaceResponse> => {
+    const params = new URLSearchParams({ identifier });
+    return fetchJson(
+      buildUrl(
+        `/workspaces/${workspaceId}/papers/fetch?${params.toString()}`,
+      ),
+      { method: 'POST' },
+    );
+  },
 
   /**
    * Add a paper to the workspace manually. Used by the frontend's
