@@ -79,12 +79,27 @@ export function shortcutLabel(
   options: ShortcutOptions,
   isMac: boolean = isMacPlatform(),
 ): string {
-  const parts: string[] = [];
-  if (options.ctrl) parts.push(isMac ? '⌘' : 'Ctrl');
-  if (options.alt) parts.push(isMac ? '⌥' : 'Alt');
-  if (options.shift) parts.push(isMac ? '⇧' : 'Shift');
-  parts.push(options.key.toUpperCase());
-  return parts.join('+');
+  // Build the modifier prefix and the key separately so the
+  // platform-specific separator logic stays in one place.
+  //
+  // PC: ``Ctrl+Shift+Alt+K`` — modifiers joined with ``+``,
+  //   the key appended with another ``+``.
+  // Mac: ``⌘⇧⌥K`` — modifier glyphs appended directly to
+  //   each other (no separator), the key appended with no
+  //   separator. This matches the system shortcut shown in
+  //   the macOS menu bar.
+  const modParts: string[] = [];
+  if (options.ctrl) modParts.push(isMac ? '⌘' : 'Ctrl');
+  // PC convention: modifier order is Ctrl, Shift, Alt (or
+  // Ctrl, Alt, Shift on Linux). We use Ctrl -> Shift -> Alt
+  // because that's the cross-platform convention.
+  if (options.shift) modParts.push(isMac ? '⇧' : 'Shift');
+  if (options.alt) modParts.push(isMac ? '⌥' : 'Alt');
+  const key = options.key.toUpperCase();
+  if (isMac) {
+    return [...modParts, key].join('');
+  }
+  return [...modParts, key].join('+');
 }
 
 /**
@@ -121,8 +136,13 @@ function isTypingInField(): boolean {
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
     return true;
   }
-  if (el instanceof HTMLElement && el.isContentEditable) {
-    return true;
+  // Rich-text editors use ``contenteditable``. Check both the
+  // property (real browsers) and the attribute (jsdom and any
+  // framework that sets the attribute directly without
+  // reflecting the property).
+  if (el instanceof HTMLElement) {
+    if (el.isContentEditable) return true;
+    if (el.getAttribute('contenteditable') !== null) return true;
   }
   return false;
 }
