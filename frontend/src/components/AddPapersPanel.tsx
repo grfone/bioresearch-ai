@@ -38,7 +38,7 @@ import {
   X,
   AlertCircle,
 } from 'lucide-react';
-import { api } from '../api/client';
+import { api, APIError } from '../api/client';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import type {
   AuthorRequest,
@@ -123,6 +123,19 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
   const [manual, setManual] = useState(MANUAL_EMPTY);
   const [manualOpen, setManualOpen] = useState(false);
   const [submittingManual, setSubmittingManual] = useState(false);
+
+  // Title-fallback state — set when ``uploadPdf`` returns
+  // ``422 no_identifiers_found``. The PDF didn't yield a DOI or
+  // PMID; we offer the user a second chance by typing the title
+  // and calling ``/papers/from-title``.
+  const [titleFallbackOpen, setTitleFallbackOpen] = useState(false);
+  const [titleFallbackName, setTitleFallbackName] = useState<string | null>(null);
+  const [titleFallbackText, setTitleFallbackText] = useState('');
+  const [titleFallbackYear, setTitleFallbackYear] = useState('');
+  const [titleFallbackJournal, setTitleFallbackJournal] = useState('');
+  const [titleFallbackAuthor, setTitleFallbackAuthor] = useState('');
+  const [titleFallbackBusy, setTitleFallbackBusy] = useState(false);
+  const [titleFallbackError, setTitleFallbackError] = useState<string | null>(null);
 
   const addPapersToCurrent = useWorkspaceStore((s) => s.addPapersToCurrent);
 
@@ -223,6 +236,18 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
   ) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    // The native file picker enforces the ``accept`` attribute
+    // in most browsers, but a determined user can override it
+    // (drag-drop, file type spoofing). Validate again here so
+    // the click-to-pick path is as tight as the drag-drop path.
+    if (file.type !== 'application/pdf') {
+      setPdfError(
+        `Only PDF files are accepted (got ${file.type || 'unknown'}).`,
+      );
+      setPdfSuccess(null);
+      event.target.value = '';
+      return;
+    }
     await uploadPdf(file);
     // Reset the input so picking the same file twice still fires
     // the change event.
@@ -233,6 +258,10 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
     setPdfUploading(file.name);
     setPdfError(null);
     setPdfSuccess(null);
+    // Reset the title-fallback state when the user starts a new
+    // upload; the previous fallback's data is no longer relevant.
+    setTitleFallbackOpen(false);
+    setTitleFallbackError(null);
     try {
       const response = await api.uploadPdf(workspaceId, file);
       addPapersToCurrent(response.papers);
@@ -244,6 +273,25 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
         `Added ${count} paper${count === 1 ? '' : 's'} from ${file.name}.`,
       );
     } catch (err) {
+      // The PDF extractor returns ``422 no_identifiers_found`` when
+      // it can't read a DOI or PMID off the first page. That's the
+      // recovery path — we surface the inline title-fallback form
+      // instead of a generic error chip. Other errors fall through
+      // to the inline error chip + toast as before.
+      if (err instanceof APIError
+          && err.status === 422
+          && (err.detail as { error?: string } | undefined)?.error
+              === 'no_identifiers_found') {
+        setTitleFallbackOpen(true);
+        setTitleFallbackName(file.name);
+        setTitleFallbackError(
+          (err.detail as { message?: string } | undefined)?.message
+            ?? 'We could not find a DOI or PMID on the first page.',
+        );
+        // Don't toast — the inline fallback panel is the feedback.
+        // The user is already looking at the PDF tab.
+        return;
+      }
       const message = err instanceof Error
         ? err.message
         : 'Could not extract identifiers from the PDF.';
@@ -252,6 +300,70 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
     } finally {
       setPdfUploading(null);
     }
+  };
+
+  const submitTitleFallback = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const title = titleFallbackText.trim();
+    if (!title) {
+      setTitleFallbackError('Type the paper title to search PubMed.');
+      return;
+    }
+    const yearNum = titleFallbackYear.trim()
+      ? Number(titleFallbackYear)
+      : null;
+    if (yearNum !== null && (!Number.isFinite(yearNum) || yearNum < 1800 || yearNum > 2100)) {
+      setTitleFallbackError('Year must be between 1800 and 2100.');
+      return;
+    }
+    setTitleFallbackBusy(true);
+    setTitleFallbackError(null);
+    try {
+      const response = await api.addPaperByTitle(workspaceId, {
+        title,
+        first_author: titleFallbackAuthor.trim() || null,
+        journal: titleFallbackJournal.trim() || null,
+        year: yearNum,
+      });
+      addPapersToCurrent(response.papers);
+      const matched = response.papers[response.papers.length - 1];
+      toast.success(
+        `Added "${matched?.title ?? title}" from ${titleFallbackName ?? 'PDF'}.`,
+      );
+      // Reset the fallback panel so a fresh PDF upload starts
+      // from a clean slate.
+      setTitleFallbackOpen(false);
+      setTitleFallbackText('');
+      setTitleFallbackAuthor('');
+      setTitleFallbackJournal('');
+      setTitleFallbackYear('');
+    } catch (err) {
+      if (err instanceof APIError
+          && err.status === 422
+          && (err.detail as { error?: string } | undefined)?.error
+              === 'title_no_confident_match') {
+        setTitleFallbackError(
+          (err.detail as { message?: string } | undefined)?.message
+            ?? 'No paper matched that title. Try a different wording.',
+        );
+        return;
+      }
+      const message = err instanceof Error
+        ? err.message
+        : 'Could not find the paper by title.';
+      setTitleFallbackError(message);
+    } finally {
+      setTitleFallbackBusy(false);
+    }
+  };
+
+  const dismissTitleFallback = () => {
+    setTitleFallbackOpen(false);
+    setTitleFallbackText('');
+    setTitleFallbackAuthor('');
+    setTitleFallbackJournal('');
+    setTitleFallbackYear('');
+    setTitleFallbackError(null);
   };
 
   const handleManualSubmit = async (
@@ -647,6 +759,104 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
               <Check size={14} />
               {pdfSuccess}
             </p>
+          )}
+
+          {titleFallbackOpen && (
+            <form
+              className="add-papers-title-fallback"
+              onSubmit={submitTitleFallback}
+            >
+              <div className="add-papers-title-fallback-header">
+                <span className="add-papers-title-fallback-tag">
+                  No DOI / PMID found
+                </span>
+                <button
+                  type="button"
+                  className="add-papers-title-fallback-dismiss"
+                  onClick={dismissTitleFallback}
+                  aria-label="Dismiss title fallback"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <p className="add-papers-title-fallback-help">
+                {titleFallbackName
+                  ? <>We could not find a DOI or PMID in <code>{titleFallbackName}</code>. Type the paper title and we'll search PubMed for a match.</>
+                  : <>Type the paper title and we'll search PubMed for a match.</>
+                }
+              </p>
+              <label className="add-papers-title-fallback-field">
+                <span>Paper title <span className="required">*</span></span>
+                <input
+                  type="text"
+                  value={titleFallbackText}
+                  onChange={(e) => setTitleFallbackText(e.target.value)}
+                  placeholder="e.g. Amyloid cascade in 2025"
+                  disabled={titleFallbackBusy}
+                  autoFocus
+                />
+              </label>
+              <details className="add-papers-title-fallback-disambiguate">
+                <summary>Disambiguate (optional)</summary>
+                <label className="add-papers-title-fallback-field">
+                  <span>First-author surname</span>
+                  <input
+                    type="text"
+                    value={titleFallbackAuthor}
+                    onChange={(e) => setTitleFallbackAuthor(e.target.value)}
+                    placeholder="e.g. Smith"
+                    disabled={titleFallbackBusy}
+                  />
+                </label>
+                <label className="add-papers-title-fallback-field">
+                  <span>Journal</span>
+                  <input
+                    type="text"
+                    value={titleFallbackJournal}
+                    onChange={(e) => setTitleFallbackJournal(e.target.value)}
+                    placeholder="e.g. Nature"
+                    disabled={titleFallbackBusy}
+                  />
+                </label>
+                <label className="add-papers-title-fallback-field">
+                  <span>Year</span>
+                  <input
+                    type="number"
+                    value={titleFallbackYear}
+                    onChange={(e) => setTitleFallbackYear(e.target.value)}
+                    placeholder="e.g. 2025"
+                    min="1800"
+                    max="2100"
+                    disabled={titleFallbackBusy}
+                  />
+                </label>
+              </details>
+              {titleFallbackError && (
+                <p className="add-papers-title-fallback-error">
+                  <AlertCircle size={14} />
+                  {titleFallbackError}
+                </p>
+              )}
+              <div className="add-papers-title-fallback-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={dismissTitleFallback}
+                  disabled={titleFallbackBusy}
+                >
+                  Dismiss
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={titleFallbackBusy || !titleFallbackText.trim()}
+                >
+                  {titleFallbackBusy
+                    ? <><Loader2 size={14} className="spin" /> Searching…</>
+                    : <>Find paper by title</>}
+                </button>
+              </div>
+            </form>
           )}
         </div>
       )}

@@ -100,6 +100,29 @@ function buildUrl(path: string): string {
 }
 
 /**
+ * Structured error thrown by every API client method when the
+ * backend returns a non-2xx response.
+ *
+ * The shape mirrors FastAPI's ``HTTPException`` body: ``detail``
+ * is either a string (the message) or a structured object
+ * (with ``error`` / ``message`` keys). Callers that want to
+ * distinguish between error codes (e.g. ``no_identifiers_found``
+ * vs ``title_no_confident_match``) can inspect
+ * ``err.detail?.error`` directly.
+ */
+export class APIError extends Error {
+  readonly status: number;
+  readonly detail: unknown;
+
+  constructor(status: number, detail: unknown, message: string) {
+    super(message);
+    this.name = 'APIError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+/**
  * Wrapper for `fetch` that handles JSON serialisation, error responses,
  * and throws consistent errors.
  */
@@ -122,7 +145,11 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
     }
     const detailStr =
       typeof detail === 'string' ? detail : JSON.stringify(detail);
-    throw new Error(`API error ${response.status}: ${detailStr}`);
+    throw new APIError(
+      response.status,
+      detail,
+      `API error ${response.status}: ${detailStr}`,
+    );
   }
 
   return response.json();
@@ -154,7 +181,11 @@ async function fetchMultipart<T>(
     }
     const detailStr =
       typeof detail === 'string' ? detail : JSON.stringify(detail);
-    throw new Error(`API error ${response.status}: ${detailStr}`);
+    throw new APIError(
+      response.status,
+      detail,
+      `API error ${response.status}: ${detailStr}`,
+    );
   }
 
   return response.json();
@@ -379,6 +410,37 @@ export const api = {
     return fetchMultipart<WorkspaceResponse>(
       buildUrl(`/workspaces/${workspaceId}/papers/from-pdf`),
       formData,
+    );
+  },
+
+  /**
+   * Add a paper to the workspace by title.
+   *
+   * Used as the title-driven fallback when the user dropped a
+   * PDF that didn't yield a recognisable DOI or PMID on its
+   * first page. The backend runs PubMed ESearch with the title
+   * (and any optional disambiguation hints), picks the top
+   * match, and adds it to the workspace.
+   *
+   * The backend's response shape is the same WorkspaceResponse
+   * the other ``addPaper*`` methods return, so callers can
+   * feed the result straight into the workspace store.
+   *
+   * Throws an ``Error`` with a parsed ``detail.error`` field
+   * when the backend returns 422 ``title_no_confident_match``
+   * — the frontend catches that to surface a "no precise
+   * match" UI rather than a generic error toast.
+   */
+  addPaperByTitle: (
+    workspaceId: string,
+    payload: import('../models/paper').FindByTitleRequest,
+  ): Promise<WorkspaceResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/papers/from-title`),
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
     );
   },
 

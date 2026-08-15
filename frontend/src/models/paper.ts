@@ -152,3 +152,26 @@ export interface PaperRequest {
   keywords?: string[];
   url?: string | null;
 }
+
+// =====================================================================
+// Title-driven paper discovery — used by the title-fallback flow
+// when the user dropped a PDF that didn't yield a recognisable
+// DOI or PMID on its first page. The frontend offers an inline
+// "Type the paper title" form, submits to
+// ``POST /workspaces/{id}/papers/from-title``, and the backend
+// runs PubMed ESearch with the title (plus optional hints).
+// =====================================================================
+
+/**
+ * Body for ``POST /workspaces/{id}/papers/from-title``.
+ *
+ * Mirrors the backend ``FindByTitleRequest`` schema. ``title``
+ * is required; the other fields are optional disambiguation
+ * hints that the backend folds into the PubMed ESearch query.
+ */
+export interface FindByTitleRequest {
+  title: string;
+  first_author?: string | null;
+  journal?: string | null;
+  year?: number | null;
+}
