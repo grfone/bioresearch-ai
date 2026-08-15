@@ -106,3 +106,49 @@ export function formatPaperCitation(paper: Paper, maxAuthors = 3): string {
   const yearPart = paper.year ? ` (${paper.year})` : '';
   return `${authorPart}${yearPart}. ${paper.title}`;
 }
+
+// =====================================================================
+// Manual upload types — used by the "Upload paper" form to add a paper
+// to a workspace without going through PubMed. These mirror the
+// backend PaperRequest schema.
+// =====================================================================
+
+/**
+ * Author submitted by the user via the upload form.
+ *
+ * ``full_name`` is what the backend persists; ``given_name`` and
+ * ``family_name`` are optional and only used when ``full_name`` is
+ * empty (in which case the backend joins them with a space).
+ */
+export interface AuthorRequest {
+  full_name: string;
+  given_name?: string | null;
+  family_name?: string | null;
+}
+
+/**
+ * Journal submitted by the user via the upload form.
+ */
+export interface JournalRequest {
+  name: string;
+  issn?: string | null;
+  publisher?: string | null;
+}
+
+/**
+ * Payload the frontend sends to ``POST /workspaces/{id}/papers``.
+ *
+ * Only ``title`` is required; everything else is optional and may be
+ * fleshed out later. The backend validates each field with Pydantic.
+ */
+export interface PaperRequest {
+  title: string;
+  authors?: AuthorRequest[];
+  journal?: JournalRequest | null;
+  year?: number | null;
+  abstract?: string;
+  doi?: string | null;
+  pmid?: string | null;
+  keywords?: string[];
+  url?: string | null;
+}

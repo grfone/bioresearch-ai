@@ -26,7 +26,7 @@ import type {
   EvidenceComparisonResponse,
 } from '../models/comparison';
 import type { ReportRequest, ReportResponse } from '../models/report';
-import type { Paper } from '../models/paper';
+import type { Paper, PaperRequest } from '../models/paper';
 
 /**
  * Request payload for literature search.
@@ -232,6 +232,43 @@ export const api = {
   ): Promise<EvidenceComparisonResponse> => {
     return fetchJson(
       buildUrl(`/workspaces/${workspaceId}/evidence-comparison`),
+    );
+  },
+
+  // ------------------------------------------------------------------
+  // Paper management
+  // ------------------------------------------------------------------
+
+  /**
+   * Add a paper to the workspace manually. Used by the frontend's
+   * "Upload paper" form for papers that aren't in PubMed (or that
+   * the user already knows the metadata for). Returns the updated
+   * workspace.
+   */
+  addPaper: (
+    workspaceId: string,
+    paper: PaperRequest,
+  ): Promise<WorkspaceResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/papers`),
+      {
+        method: 'POST',
+        body: JSON.stringify(paper),
+      },
+    );
+  },
+
+  /**
+   * Remove a paper from the workspace by PMID or DOI. Returns the
+   * updated workspace.
+   */
+  removePaper: (
+    workspaceId: string,
+    paperId: string,
+  ): Promise<WorkspaceResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/papers/${encodeURIComponent(paperId)}`),
+      { method: 'DELETE' },
     );
   },
 };
