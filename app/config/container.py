@@ -96,12 +96,43 @@ from app.infrastructure.llm.report_mapper import (
     ReportMapper,
 )
 from app.infrastructure.pubmed.client import PubMedClient
+from app.infrastructure.pubmed.identifier_resolver import (
+    IdentifierResolver,
+)
 from app.infrastructure.pubmed.provider import PubMedProvider
 from app.infrastructure.storage.sqlite_workspace_repository import (
     SqliteWorkspaceRepository,
 )
 
 from app.config.settings import settings
+
+# Resolve the DATABASE_URL setting to a real on-disk path. The
+# settings object exposes the URL as ``sqlite:///relative/path`` or
+# ``sqlite:////absolute/path``. We convert that to a path string
+# the SqliteWorkspaceRepository can open.
+def _sqlite_path_from_settings() -> str:
+    """Resolve the ``DATABASE_URL`` to an on-disk file path.
+
+    The settings object exposes the URL as ``sqlite:///relative/path``
+    (three slashes, relative) or ``sqlite:////absolute/path`` (four
+    slashes, absolute — SQLAlchemy's convention). We strip the
+    prefix to recover the file path that ``sqlite3.connect()`` can
+    open.
+    """
+    url = settings.database.url
+    # Absolute path: ``sqlite:////absolute/path`` — drop the
+    # ``sqlite://`` prefix (9 chars) and keep the leading slash.
+    if url.startswith("sqlite:////"):
+        return url[len("sqlite://"):]
+    # Relative path: ``sqlite:///relative/path`` — drop the host
+    # part (the empty segment between ``://`` and the third slash).
+    if url.startswith("sqlite:///"):
+        return url[len("sqlite:///"):]
+    # Plain ``sqlite://path`` (no host/relative marker) — drop
+    # the prefix.
+    if url.startswith("sqlite://"):
+        return url[len("sqlite://"):]
+    return url
 from app.core.enums.llm_provider import LLMProviderEnum
 
 
@@ -130,7 +161,7 @@ class Container:
     def get_workspace_repository(cls) -> SqliteWorkspaceRepository:
         if cls._workspace_repository is None:
             cls._workspace_repository = SqliteWorkspaceRepository(
-                db_path="bioresearch.db"
+                db_path=_sqlite_path_from_settings(),
             )
         assert cls._workspace_repository is not None
         return cls._workspace_repository
@@ -257,6 +288,32 @@ def get_workspace_orchestrator() -> WorkspaceOrchestrator:
         _orchestrator = Container.build_orchestrator()
     assert _orchestrator is not None
     return _orchestrator
+
+
+_identifier_resolver: IdentifierResolver | None = None
+
+
+def get_identifier_resolver() -> IdentifierResolver:
+    """Provide the configured :class:`IdentifierResolver`.
+
+    The resolver is the only component that talks to CrossRef and
+    to the low-level PubMedClient. It is independent of the
+    orchestrator because the resolve endpoint is read-only — it
+    does not advance the FSM, just returns metadata that the
+    frontend will then POST to /papers.
+    """
+    global _identifier_resolver
+    if _identifier_resolver is None:
+        pubmed_client = PubMedClient(
+            email=settings.pubmed.email,
+            api_key=settings.pubmed.api_key,
+        )
+        provider = PubMedProvider(client=pubmed_client)
+        _identifier_resolver = IdentifierResolver(
+            pubmed_provider=provider,
+        )
+    assert _identifier_resolver is not None
+    return _identifier_resolver
 
 
 def get_research_assistant() -> ResearchAssistant:

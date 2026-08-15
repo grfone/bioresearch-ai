@@ -244,6 +244,47 @@ class WorkspaceOrchestrator:
         session.add_papers([paper])
         return self._repository.update(session)
 
+    def add_papers_bulk(
+        self,
+        workspace_id: UUID,
+        papers: list[Paper],
+    ) -> ResearchSession:
+        """
+        Add several papers to the workspace in one operation.
+
+        The user-facing entry point for the "I have a list of
+        PMIDs/DOIs" workflow. After resolving identifiers (PMID
+        lookup in PubMed, DOI lookup in CrossRef) the frontend
+        collects the resolved papers and POSTs them here. The
+        session dedupes by PMID/DOI, so duplicates from a
+        mistyped batch are silently dropped.
+
+        Parameters
+        ----------
+        workspace_id : UUID
+            Workspace identifier.
+
+        papers : list[Paper]
+            Papers to add. The list may be empty (e.g. when every
+            identifier failed to resolve); an empty list is a
+            no-op that still validates the FSM transition.
+
+        Returns
+        -------
+        ResearchSession
+            The updated workspace.
+        """
+        session = self._repository.get(workspace_id)
+        if WorkspaceAction.ADD_PAPER not in allowed_actions(session.state):
+            raise IllegalWorkspaceActionError(
+                current_state=session.state.value,
+                action=WorkspaceAction.ADD_PAPER.value,
+                allowed=[a.value for a in allowed_actions(session.state)],
+            )
+        if papers:
+            session.add_papers(papers)
+        return self._repository.update(session)
+
     def remove_paper(
         self,
         workspace_id: UUID,

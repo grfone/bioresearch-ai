@@ -56,12 +56,20 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.schemas.evidence_comparison_response import (
     EvidenceComparisonResponse,
 )
 from app.api.schemas.paper_request import PaperRequest
+from app.api.schemas.resolve_request import (
+    FailedResolutionResponse,
+    ResolutionEntryResponse,
+    ResolveIdentifiersRequest,
+    ResolveIdentifiersResponse,
+    ResolvedPaperResponse,
+)
+from app.api.schemas.search_response import PaperResponse
 from app.api.schemas.workspace_action_request import (
     WorkspaceActionRequest,
 )
@@ -72,7 +80,10 @@ from app.api.schemas.workspace_status_response import (
 from app.application.services.workspace_orchestrator import (
     WorkspaceOrchestrator,
 )
-from app.config.container import get_workspace_orchestrator
+from app.config.container import (
+    get_identifier_resolver,
+    get_workspace_orchestrator,
+)
 from app.core.enums.workspace_state import WorkspaceAction
 from app.core.exceptions import (
     CitationValidationError,
@@ -81,6 +92,9 @@ from app.core.exceptions import (
 from app.domain.entities.author import Author
 from app.domain.entities.journal import Journal
 from app.domain.entities.paper import Paper
+from app.infrastructure.pubmed.identifier_resolver import (
+    IdentifierResolver,
+)
 
 
 router = APIRouter(
@@ -441,4 +455,176 @@ def remove_paper(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No paper with PMID/DOI {paper_id!r} in this workspace.",
         )
+    return _to_response(workspace)
+
+
+
+# ----------------------------------------------------------------------
+# Identifier resolution — PMID/DOI auto-fetch
+# ----------------------------------------------------------------------
+#
+# These endpoints exist so the user can paste a PMID or DOI and
+# have the system pull the full metadata automatically. The
+# previous /papers endpoint required the user to fill in every
+# field by hand, which is friction researchers hate. The new
+# flow is:
+#
+# 1. User pastes 8 PMIDs into the "Add Paper" panel.
+# 2. Frontend POSTs /papers/resolve and gets a per-identifier
+#    status report (green/amber/red).
+# 3. User clicks "Add 7 resolved papers" — frontend POSTs the
+#    resolved papers to /papers/bulk in one go.
+# Or, for the "one PMID and go" workflow, the frontend just
+# POSTs /papers/fetch/{pmid} which resolves AND adds in one call.
+
+
+def _domain_to_response_dict(paper: Paper) -> dict:
+    """Convert a domain Paper to the JSON-friendly dict that
+    :class:`PaperResponse` expects.
+
+    We use the existing PaperResponse model so the wire format
+    matches what /papers/search already returns.
+    """
+    return PaperResponse.model_validate(paper).model_dump(
+        mode="json",
+    )
+
+
+@router.post(
+    "/{workspace_id}/papers/resolve",
+    response_model=ResolveIdentifiersResponse,
+    summary="Resolve PMIDs/DOIs to full paper metadata.",
+)
+def resolve_identifiers(
+    workspace_id: UUID,
+    payload: ResolveIdentifiersRequest,
+    resolver: IdentifierResolver = Depends(get_identifier_resolver),
+) -> ResolveIdentifiersResponse:
+    """Resolve a batch of PMIDs and DOIs.
+
+    Returns per-identifier feedback so the frontend can show a
+    status chip next to each entry. The endpoint never aborts
+    the batch on a single failure; one mistyped PMID returns
+    a ``FailedResolution`` and the other identifiers still
+    resolve.
+
+    Does not modify the workspace. To actually persist the
+    resolved papers, the frontend then POSTs them to
+    ``/papers/bulk``.
+    """
+    del workspace_id  # not needed for read-only resolution
+    raw_results = resolver.resolve_many(payload.identifiers)
+    entries: list[ResolutionEntryResponse] = []
+    resolved_count = 0
+    failed_count = 0
+    for result in raw_results:
+        if result.is_success and result.paper is not None:
+            entries.append(
+                ResolutionEntryResponse(
+                    resolved=ResolvedPaperResponse(
+                        identifier=result.paper.identifier,
+                        identifier_type=result.paper.identifier_type,
+                        paper=_domain_to_response_dict(
+                            result.paper.paper,
+                        ),
+                    )
+                )
+            )
+            resolved_count += 1
+        else:
+            failure = result.failure
+            assert failure is not None  # mypy
+            entries.append(
+                ResolutionEntryResponse(
+                    failed=FailedResolutionResponse(
+                        identifier=failure.identifier,
+                        reason=failure.reason,
+                    )
+                )
+            )
+            failed_count += 1
+    return ResolveIdentifiersResponse(
+        results=entries,
+        resolved_count=resolved_count,
+        failed_count=failed_count,
+    )
+
+
+@router.post(
+    "/{workspace_id}/papers/bulk",
+    response_model=WorkspaceResponse,
+    summary="Add several papers to the workspace in one call.",
+)
+def add_papers_bulk(
+    workspace_id: UUID,
+    papers: list[PaperRequest],
+    orchestrator: WorkspaceOrchestrator = Depends(
+        get_workspace_orchestrator
+    ),
+) -> WorkspaceResponse:
+    """Persist a batch of papers in a single transaction.
+
+    Used by the frontend after ``/papers/resolve`` returns the
+    resolved metadata. The orchestrator dedupes by PMID/DOI so
+    duplicates are silently dropped. Returns the updated
+    workspace. HTTP 409 if the current state doesn't allow
+    ``add_paper``.
+    """
+    domain_papers = [_paper_request_to_domain(p) for p in papers]
+    try:
+        workspace = orchestrator.add_papers_bulk(
+            workspace_id, domain_papers,
+        )
+    except IllegalWorkspaceActionError as exc:
+        raise _illegal_action_response(exc) from exc
+    return _to_response(workspace)
+
+
+@router.post(
+    "/{workspace_id}/papers/fetch",
+    response_model=WorkspaceResponse,
+    summary="Resolve one PMID or DOI and add the paper to the workspace.",
+)
+def resolve_and_add_paper(
+    workspace_id: UUID,
+    identifier: str = Query(
+        ...,
+        description="PMID (1-8 digits) or DOI (10.xxxx/yyyy).",
+        min_length=1,
+        max_length=500,
+    ),
+    resolver: IdentifierResolver = Depends(get_identifier_resolver),
+    orchestrator: WorkspaceOrchestrator = Depends(
+        get_workspace_orchestrator
+    ),
+) -> WorkspaceResponse:
+    """One-shot "add this PMID/DOI" endpoint.
+
+    Resolves the identifier (PMID via PubMed EFetch, DOI via
+    CrossRef), then adds the resulting paper to the workspace.
+    Returns HTTP 422 if the identifier format is unrecognised,
+    HTTP 502 if the upstream API fails, HTTP 409 if the FSM
+    forbids ``add_paper`` in the current state.
+
+    The identifier is passed as a query parameter so DOIs
+    (which contain ``/``) are accepted without URL-encoding
+    gymnastics.
+    """
+    result = resolver.resolve_one(identifier)
+    if result.failure is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "identifier_resolution_failed",
+                "reason": result.failure.reason,
+                "identifier": result.failure.identifier,
+            },
+        )
+    assert result.paper is not None
+    try:
+        workspace = orchestrator.add_paper(
+            workspace_id, result.paper.paper,
+        )
+    except IllegalWorkspaceActionError as exc:
+        raise _illegal_action_response(exc) from exc
     return _to_response(workspace)
