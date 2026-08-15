@@ -13,6 +13,13 @@ from app.api.schemas.paper_request import (
     PaperRequest,
 )
 from app.api.schemas.report_request import ReportRequest
+from app.api.schemas.resolve_request import (
+    FailedResolutionResponse,
+    ResolutionEntryResponse,
+    ResolvedPaperResponse,
+    ResolveIdentifiersRequest,
+    ResolveIdentifiersResponse,
+)
 from app.api.schemas.report_response import ReportResponse
 from app.api.schemas.search_request import SearchRequest
 from app.api.schemas.search_response import (
@@ -30,12 +37,17 @@ __all__ = [
     "AuthorRequest",
     "AuthorResponse",
     "EvidenceComparisonResponse",
+    "FailedResolutionResponse",
     "JournalRequest",
     "JournalResponse",
     "PaperRequest",
     "PaperResponse",
     "ReportRequest",
     "ReportResponse",
+    "ResolutionEntryResponse",
+    "ResolvedPaperResponse",
+    "ResolveIdentifiersRequest",
+    "ResolveIdentifiersResponse",
     "SearchRequest",
     "SearchResponse",
     "WorkspaceActionRequest",
