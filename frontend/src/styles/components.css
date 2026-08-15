@@ -4138,6 +4138,112 @@ Includes
 
 
 /*=============================================================================
+    PaperUpload form
+    -----------------
+    Inline form for adding a paper to a workspace manually, without
+    going through PubMed. Rendered below the LiteratureSearch
+    component when the user clicks the "Upload Paper" button.
+==============================================================================*/
+
+.paper-upload {
+    margin-top: var(--space-3);
+}
+
+.paper-upload-toggle {
+    background: var(--color-bg-elevated);
+    border: 1px dashed var(--color-border);
+    color: var(--color-text-secondary);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: border-color 150ms ease, color 150ms ease;
+}
+
+.paper-upload-toggle:hover {
+    border-color: var(--color-accent);
+    color: var(--color-text-primary);
+}
+
+.paper-upload--disabled {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-bg-elevated);
+    border-radius: var(--radius-md);
+}
+
+.paper-upload--open {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.paper-upload-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.paper-upload-header h4 {
+    margin: 0;
+    font-size: var(--font-size-base);
+}
+
+.paper-upload-close {
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    font-size: 1.25rem;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.paper-upload-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: var(--space-3);
+}
+
+.paper-upload label {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.paper-upload input,
+.paper-upload textarea {
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-primary);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2) var(--space-3);
+    font: inherit;
+}
+
+.paper-upload input:focus,
+.paper-upload textarea:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+.paper-upload-error {
+    color: var(--color-error);
+    font-size: var(--font-size-sm);
+    margin: 0;
+}
+
+.paper-upload-footer {
+    display: flex;
+    gap: var(--space-2);
+    justify-content: flex-end;
+}
+
+/*=============================================================================
     End of File
 ===============================================================================
 

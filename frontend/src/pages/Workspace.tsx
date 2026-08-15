@@ -26,14 +26,14 @@
  * ============================================================================
  */
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../hooks/useWorkspace';
 import { LiteratureSearch } from '../components/LiteratureSearch';
 import { PaperList } from '../components/PaperList';
 import { WorkspaceStatusBar } from '../components/WorkspaceStatusBar';
 import { EvidenceComparisonPanel } from '../components/EvidenceComparisonPanel';
-import { BookOpen, Clock, FileText, Trash2, Play, Sparkles, GitCompareArrows, FilePlus2, RotateCcw } from 'lucide-react';
+import { BookOpen, Clock, FileText, Trash2, Play, Sparkles, GitCompareArrows, FilePlus2, RotateCcw, Upload } from 'lucide-react';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { toast } from '../state/toastStore';
 import type { WorkspaceAction } from '../models/workspace';
@@ -97,6 +97,9 @@ export const Workspace: React.FC = () => {
       toast.info('Paper removed');
     }
   };
+
+  const [showUpload, setShowUpload] = useState(false);
+  const handleUploadPaperClick = () => setShowUpload((v) => !v);
 
   const handleClearPapers = () => {
     if (window.confirm('Remove all papers from this workspace?')) {
