@@ -1804,6 +1804,73 @@ def open_browser() -> None:
 # ---------------------------------------------------------------------------
 
 
+def load_config_from_env(conda_channel: str | None = None) -> GuiConfig:
+    """Build a ``GuiConfig`` from an existing ``.env`` file.
+
+    Used by the ``--skip-gui`` path in :func:`main`. The user has
+    an explicit ``.env`` on disk, so we read it and trust the
+    choices there — no further prompting.
+
+    The crucial invariant is that ``proceed=True`` is set so the
+    ``if not config.proceed`` guard at the bottom of
+    :func:`_gui_collect_config` doesn't cancel setup. The
+    ``--skip-gui`` flag is an explicit "I already configured my
+    env, just bring up the container" signal — the user has
+    already done the equivalent of clicking the GUI's Save
+    button.
+
+    Parameters
+    ----------
+    conda_channel : str | None
+        Optional conda channel to persist into ``.env`` so
+        subsequent runs reuse the same mirror.
+    """
+    log_info(f"Using existing {ENV_FILE}")
+    config = GuiConfig()
+    # See the docstring above for why this matters.
+    config.proceed = True
+    # Persist the conda channel back to .env so subsequent runs
+    # reuse the same channel without prompting.
+    if conda_channel is not None:
+        _persist_conda_channel(conda_channel)
+    # Build an env-var fallback list per provider so we pick up
+    # the right key no matter which provider was selected.
+    from app.core.enums.llm_provider import LLMProviderEnum
+    from app.application.services.llm_provider_catalog import (
+        get_provider_meta,
+    )
+
+    # Parse the .env into a dict for easy lookup.
+    env_values: dict[str, str] = {}
+    for raw in ENV_FILE.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        env_values[k.strip()] = v.strip()
+
+    slug = env_values.get("DEFAULT_LLM_PROVIDER", "openai")
+    config.llm_provider = slug
+    config.api_key = env_values.get("API_KEY", "")
+    # If the provider has a more specific env var, prefer it.
+    try:
+        meta = get_provider_meta(LLMProviderEnum(slug))
+        config.api_key = env_values.get(meta.api_key_env, config.api_key)
+    except Exception:
+        pass
+    config.base_url = env_values.get("BASE_URL", "")
+    config.model = env_values.get("DEFAULT_LLM_MODEL", "")
+    config.pubmed_email = env_values.get("PUBMED_EMAIL", "")
+    config.pubmed_api_key = env_values.get("PUBMED_API_KEY", "")
+    config.selected_local_model = env_values.get("OLLAMA_MODEL")
+    target = env_values.get("BUILD_TARGET", "minimal")
+    if target in ("minimal", "local"):
+        config.build_target = target
+    return config
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bootstrap BioResearch AI")
     parser.add_argument(
@@ -1906,46 +1973,7 @@ def main() -> int:
     # 4. First-run GUI (unless --skip-gui)
     have_env = ENV_FILE.is_file()
     if args.skip_gui and have_env:
-        log_info(f"Using existing {ENV_FILE}")
-        config = GuiConfig()
-        # Persist the conda channel back to .env so subsequent runs
-        # reuse the same channel without prompting.
-        _persist_conda_channel(conda_channel)
-        # Build an env-var fallback list per provider so we pick up
-        # the right key no matter which provider was selected.
-        from app.core.enums.llm_provider import LLMProviderEnum
-        from app.application.services.llm_provider_catalog import (
-            get_provider_meta,
-        )
-
-        # Parse the .env into a dict for easy lookup.
-        env_values: dict[str, str] = {}
-        for raw in ENV_FILE.read_text().splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                continue
-            k, _, v = line.partition("=")
-            env_values[k.strip()] = v.strip()
-
-        slug = env_values.get("DEFAULT_LLM_PROVIDER", "openai")
-        config.llm_provider = slug
-        config.api_key = env_values.get("API_KEY", "")
-        # If the provider has a more specific env var, prefer it.
-        try:
-            meta = get_provider_meta(LLMProviderEnum(slug))
-            config.api_key = env_values.get(meta.api_key_env, config.api_key)
-        except Exception:
-            pass
-        config.base_url = env_values.get("BASE_URL", "")
-        config.model = env_values.get("DEFAULT_LLM_MODEL", "")
-        config.pubmed_email = env_values.get("PUBMED_EMAIL", "")
-        config.pubmed_api_key = env_values.get("PUBMED_API_KEY", "")
-        config.selected_local_model = env_values.get("OLLAMA_MODEL")
-        target = env_values.get("BUILD_TARGET", "minimal")
-        if target in ("minimal", "local"):
-            config.build_target = target
+        config = load_config_from_env(conda_channel)
     else:
         config = _gui_collect_config(hw)
         # When the user picks Local, the GUI sets
