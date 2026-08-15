@@ -4244,6 +4244,433 @@ Includes
 }
 
 /*=============================================================================
+    AddPapersPanel
+    ---------------
+    Primary paper-entry surface for the workspace. Visible when the
+    FSM allows ``add_paper``. Three tabs:
+        - PMID / DOI  (identifier-first, bulk-resolves via backend)
+        - Manual      (fill every field, slow path)
+        - PDF         (placeholder, future work)
+    The PMID/DOI tab is the recommended default; it's the workflow
+    researchers actually do (paste from a Zotero export or a
+    colleague's email).
+==============================================================================*/
+
+.add-papers-panel {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    margin-bottom: var(--space-4);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.add-papers-header {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+}
+
+.add-papers-title {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    font-size: var(--font-size-base);
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.add-papers-subtitle {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+.add-papers-tabs {
+    display: flex;
+    gap: var(--space-1);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.add-papers-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--color-text-secondary);
+    padding: var(--space-2) var(--space-3);
+    cursor: pointer;
+    font: inherit;
+    transition: border-color 150ms ease, color 150ms ease;
+}
+
+.add-papers-tab:hover {
+    color: var(--color-text-primary);
+}
+
+.add-papers-tab.is-active {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+}
+
+.add-papers-tab-badge {
+    background: var(--color-bg-base);
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    padding: 1px 6px;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.add-papers-tab-body {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.add-papers-bulk-input {
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-primary);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    font-family: var(--font-family-mono, monospace);
+    font-size: var(--font-size-sm);
+    line-height: 1.5;
+    min-height: 100px;
+    resize: vertical;
+}
+
+.add-papers-bulk-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+.add-papers-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.add-papers-results {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+}
+
+.add-papers-results-summary {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.add-papers-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 2px var(--space-2);
+    border-radius: 999px;
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+}
+
+.add-papers-chip--success {
+    background: rgba(34, 197, 94, 0.15);
+    color: rgb(74, 222, 128);
+}
+
+.add-papers-chip--error {
+    background: rgba(239, 68, 68, 0.15);
+    color: rgb(248, 113, 113);
+}
+
+.add-papers-results-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-1);
+    max-height: 280px;
+    overflow-y: auto;
+}
+
+.add-papers-result {
+    display: grid;
+    grid-template-columns: minmax(120px, max-content) 1fr;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-sm);
+    background: var(--color-bg-elevated);
+}
+
+.add-papers-result.is-failed {
+    border-left: 3px solid rgb(248, 113, 113);
+}
+
+.add-papers-result.is-success {
+    border-left: 3px solid rgb(74, 222, 128);
+}
+
+.add-papers-result-id {
+    font-family: var(--font-family-mono, monospace);
+    color: var(--color-text-secondary);
+    word-break: break-all;
+}
+
+.add-papers-result-meta {
+    color: var(--color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.add-papers-result-meta--failed {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    color: rgb(248, 113, 113);
+    white-space: normal;
+}
+
+/* Manual entry tab */
+
+.add-papers-manual-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    background: transparent;
+    border: 1px dashed var(--color-border);
+    color: var(--color-text-secondary);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.add-papers-manual-toggle:hover {
+    border-color: var(--color-accent);
+    color: var(--color-text-primary);
+}
+
+.add-papers-manual-form {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.add-papers-manual-form label {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.add-papers-manual-form input,
+.add-papers-manual-form textarea {
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-primary);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2) var(--space-3);
+    font: inherit;
+}
+
+.add-papers-manual-form input:focus,
+.add-papers-manual-form textarea:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+.add-papers-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: var(--space-3);
+}
+
+.add-papers-manual-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+}
+
+/* PDF placeholder */
+
+.add-papers-pdf-placeholder {
+    display: grid;
+    place-items: center;
+    gap: var(--space-2);
+    padding: var(--space-6);
+    color: var(--color-text-secondary);
+    text-align: center;
+}
+
+.add-papers-pdf-note {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    margin: 0;
+}
+
+/*=============================================================================
+    WorkspaceEmptyState
+    --------------------
+    Three-zone empty state shown when a workspace has zero papers.
+    Each card names a real workflow ("I have specific papers")
+    rather than describing the absence of papers. Cards are
+    clickable and pre-focus the matching entry mode.
+==============================================================================*/
+
+.workspace-empty {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-5);
+    background: var(--color-bg-elevated);
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-4);
+}
+
+.workspace-empty-header {
+    display: grid;
+    gap: var(--space-1);
+}
+
+.workspace-empty-title {
+    margin: 0;
+    font-size: var(--font-size-lg);
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.workspace-empty-subtitle {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    max-width: 640px;
+}
+
+.workspace-empty-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--space-3);
+}
+
+.workspace-empty-card {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+    color: var(--color-text-primary);
+    transition: border-color 150ms ease, transform 150ms ease;
+}
+
+.workspace-empty-card:hover {
+    border-color: var(--color-accent);
+    transform: translateY(-1px);
+}
+
+.workspace-empty-card--primary {
+    border-color: var(--color-accent);
+}
+
+.workspace-empty-card-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: rgba(94, 227, 214, 0.12);
+    color: var(--color-accent);
+}
+
+.workspace-empty-card-title {
+    font-size: var(--font-size-base);
+    font-weight: 600;
+}
+
+.workspace-empty-card-body {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: 1.5;
+}
+
+.workspace-empty-card-hint {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-style: italic;
+}
+
+/*=============================================================================
+    Action bar — primary tier always visible, secondary tier collapsible
+==============================================================================*/
+
+.lab-bench-action-bar {
+    display: grid;
+    gap: var(--space-2);
+}
+
+/* The primary tier (Search PubMed + collapse/expand toggle) is
+   always visible. */
+.lab-bench-action-bar-primary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.lab-bench-action-bar-primary-label {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.lab-bench-action-bar-secondary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--color-border);
+}
+
+.lab-bench-action-bar-toggle {
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-sm);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+}
+
+.lab-bench-action-bar-toggle:hover {
+    color: var(--color-text-primary);
+    background: var(--color-bg-elevated);
+}
+
+.lab-bench-action-bar-secondary[hidden] {
+    display: none;
+}
+
+/*=============================================================================
     End of File
 ===============================================================================
 

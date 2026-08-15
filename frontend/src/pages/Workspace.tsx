@@ -31,9 +31,30 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../hooks/useWorkspace';
 import { LiteratureSearch } from '../components/LiteratureSearch';
 import { PaperList } from '../components/PaperList';
+import { AddPapersPanel } from '../components/AddPapersPanel';
+import { WorkspaceEmptyState } from '../components/WorkspaceEmptyState';
 import { WorkspaceStatusBar } from '../components/WorkspaceStatusBar';
 import { EvidenceComparisonPanel } from '../components/EvidenceComparisonPanel';
-import { BookOpen, Clock, FileText, Trash2, Play, Sparkles, GitCompareArrows, FilePlus2, RotateCcw, Upload } from 'lucide-react';
+import {
+  AlertCircle,
+  BookOpen,
+  Check,
+  ChevronDown,
+  Clock,
+  FilePlus2,
+  FileText,
+  FileUp,
+  GitCompareArrows,
+  Hash,
+  Loader2,
+  Play,
+  Plus,
+  RotateCcw,
+  Sparkles,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { toast } from '../state/toastStore';
 import type { WorkspaceAction } from '../models/workspace';
@@ -98,8 +119,36 @@ export const Workspace: React.FC = () => {
     }
   };
 
-  const [showUpload, setShowUpload] = useState(false);
-  const handleUploadPaperClick = () => setShowUpload((v) => !v);
+  // The processing-action tier (Summarize, Compare, Generate Report)
+  // is collapsed by default at CREATED so the bar stays focused on
+  // the paper-entry workflow. Once papers exist it auto-expands so
+  // returning users see their next actions immediately.
+  const [showProcessingActions, setShowProcessingActions] =
+    useState(!!workspace?.total_papers);
+
+  // Refs into the entry surfaces so the empty-state cards can
+  // scroll the relevant one into view on click.
+  const papersSectionRef = React.useRef<HTMLDivElement | null>(null);
+  const identifierInputRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const searchInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const focusIdentifierInput = () => {
+    papersSectionRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+    // The AddPapersPanel textarea is the second textarea in the
+    // panel — finding it by ref would require prop drilling, so
+    // we just scroll and let the user click into it.
+  };
+
+  const focusSearchInput = () => {
+    papersSectionRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+    setTimeout(() => searchInputRef.current?.focus(), 350);
+  };
 
   const handleClearPapers = () => {
     if (window.confirm('Remove all papers from this workspace?')) {
@@ -173,81 +222,113 @@ export const Workspace: React.FC = () => {
         lastError={currentWorkspace.last_error}
       />
 
-      {/* Action buttons (FSM-aware) */}
+      {/* AddPapersPanel — always visible when FSM allows add_paper.
+          This is the primary paper-entry surface for the
+          "I have a list of PMIDs/DOIs" workflow. */}
+      <AddPapersPanel
+        workspaceId={currentWorkspace.workspace_id}
+        enabled={can('add_paper')}
+      />
+
+      {/* Action bar — two-tier per UX consultant.
+          Primary tier (Search) is always visible because it's the
+          default workflow at CREATED. Secondary tier (Summarize /
+          Compare / Generate Report / Complete / Retry / Clear All)
+          collapses behind a toggle so the bar stays clean while
+          the user is still in the paper-entry phase. */}
       <div className="lab-bench-action-bar" role="toolbar" aria-label="Workspace actions">
-        <button
-          className="btn btn-primary"
-          onClick={() => handleRunAction('search', 'PubMed search')}
-          disabled={!can('search')}
-          data-action="search"
-          title={
-            can('search')
-              ? 'Run a new PubMed search for this workspace'
-              : 'Search is not allowed in the current state'
-          }
-        >
-          <Play size={16} />
-          Search
-        </button>
+        <div className="lab-bench-action-bar-primary">
+          <span className="lab-bench-action-bar-primary-label">Retrieve</span>
+          <button
+            className="btn btn-primary"
+            onClick={() => handleRunAction('search', 'PubMed search')}
+            disabled={!can('search')}
+            data-action="search"
+            title={
+              can('search')
+                ? 'Run a new PubMed search for this workspace'
+                : 'Search is not allowed in the current state'
+            }
+          >
+            <Play size={16} />
+            Search PubMed
+          </button>
+          <button
+            type="button"
+            className="lab-bench-action-bar-toggle"
+            onClick={() => setShowProcessingActions((v) => !v)}
+            aria-expanded={showProcessingActions}
+          >
+            <ChevronDown
+              size={14}
+              style={{
+                transform: showProcessingActions ? 'rotate(180deg)' : 'rotate(0deg)',
+                transition: 'transform 150ms ease',
+              }}
+            />
+            {showProcessingActions ? 'Hide' : 'Show'} processing actions
+          </button>
+        </div>
 
-        <button
-          className="btn btn-primary"
-          onClick={() => handleRunAction('summarize', 'Summarization')}
-          disabled={!can('summarize')}
-          data-action="summarize"
+        <div
+          className="lab-bench-action-bar-secondary"
+          hidden={!showProcessingActions}
         >
-          <Sparkles size={16} />
-          Summarize
-        </button>
-
-        <button
-          className="btn btn-primary"
-          onClick={() => handleRunAction('compare', 'Evidence comparison')}
-          disabled={!can('compare')}
-          data-action="compare"
-        >
-          <GitCompareArrows size={16} />
-          Compare
-        </button>
-
-        <button
-          className="btn btn-primary"
-          onClick={handleGenerateReport}
-          disabled={!can('report')}
-          data-action="report"
-        >
-          <FileText size={16} />
-          Generate Report
-        </button>
-
-        <button
-          className="btn btn-secondary"
-          onClick={() => handleRunAction('complete', 'Completion')}
-          disabled={!can('complete')}
-          data-action="complete"
-        >
-          <FilePlus2 size={16} />
-          Complete
-        </button>
-
-        <button
-          className="btn btn-secondary"
-          onClick={() => handleRunAction('retry', 'Retry')}
-          disabled={!can('retry')}
-          data-action="retry"
-        >
-          <RotateCcw size={16} />
-          Retry
-        </button>
-
-        <button
-          className="btn btn-secondary"
-          onClick={handleClearPapers}
-          disabled={currentWorkspace.total_papers === 0}
-        >
-          <Trash2 size={16} />
-          Clear All
-        </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => handleRunAction('summarize', 'Summarization')}
+            disabled={!can('summarize')}
+            data-action="summarize"
+          >
+            <Sparkles size={16} />
+            Summarize
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => handleRunAction('compare', 'Evidence comparison')}
+            disabled={!can('compare')}
+            data-action="compare"
+          >
+            <GitCompareArrows size={16} />
+            Compare
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={handleGenerateReport}
+            disabled={!can('report')}
+            data-action="report"
+          >
+            <FileText size={16} />
+            Generate Report
+          </button>
+          <span style={{ flex: 1 }} />
+          <button
+            className="btn btn-secondary"
+            onClick={() => handleRunAction('complete', 'Completion')}
+            disabled={!can('complete')}
+            data-action="complete"
+          >
+            <FilePlus2 size={16} />
+            Complete
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => handleRunAction('retry', 'Retry')}
+            disabled={!can('retry')}
+            data-action="retry"
+          >
+            <RotateCcw size={16} />
+            Retry
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={handleClearPapers}
+            disabled={currentWorkspace.total_papers === 0}
+          >
+            <Trash2 size={16} />
+            Clear All
+          </button>
+        </div>
       </div>
 
       {/* Summary */}
@@ -268,30 +349,50 @@ export const Workspace: React.FC = () => {
         />
       </div>
 
-      {/* Literature Search */}
-      <div className="mb-6">
-        <LiteratureSearch
-          initialQuery={currentWorkspace.question}
-          onSearchComplete={(count) => {
-            toast.success(`Added ${count} papers`);
-          }}
-        />
-      </div>
+      {/* Literature Search + Papers List, wrapped in a ref so the
+          empty-state cards above can scroll into view. */}
+      <div ref={papersSectionRef}>
+        {/* Three-zone empty state — only shown when the workspace
+            has zero papers. Each card names a real workflow and
+            brings the matching entry surface into view. */}
+        {currentWorkspace.total_papers === 0 && (
+          <WorkspaceEmptyState
+            onChooseIdentifier={focusIdentifierInput}
+            onChooseSearch={focusSearchInput}
+            onChoosePdf={() => {
+              toast.info(
+                "Drag-and-drop PDF parsing is on the roadmap. " +
+                "For now, paste a DOI or PMID instead.",
+              );
+              focusIdentifierInput();
+            }}
+          />
+        )}
 
-      {/* Papers List */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold text-primary flex items-center gap-2">
-            <BookOpen size={20} />
-            Literature ({currentWorkspace.total_papers})
-          </h2>
+        <div className="mb-6">
+          <LiteratureSearch
+            initialQuery={currentWorkspace.question}
+            onSearchComplete={(count) => {
+              toast.success(`Added ${count} papers`);
+            }}
+            inputRef={searchInputRef}
+          />
         </div>
 
-        <PaperList
-          papers={currentWorkspace.papers}
-          emptyMessage="No papers retrieved yet. Use the search above."
-          onRemovePaper={handleRemovePaper}
-        />
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold text-primary flex items-center gap-2">
+              <BookOpen size={20} />
+              Literature ({currentWorkspace.total_papers})
+            </h2>
+          </div>
+
+          <PaperList
+            papers={currentWorkspace.papers}
+            emptyMessage="No papers retrieved yet."
+            onRemovePaper={handleRemovePaper}
+          />
+        </div>
       </div>
     </div>
   );
