@@ -12,6 +12,72 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Added
 
+* **Title-driven paper recovery.**
+  ``POST /workspaces/{id}/papers/from-title`` accepts a free-text
+  title (plus optional first-author / journal / year hints) and
+  resolves it via PubMed ESearch. This is the catch-all for the
+  PDF upload flow: when the first page doesn't contain a
+  recognisable DOI or PMID, the frontend offers an inline
+  "Type the paper title" form that hits this endpoint.
+  ``WorkspaceOrchestrator.resolve_and_add_by_title`` is a
+  recording action — it layers one paper on top of whatever the
+  workspace already has, no FSM advance required.
+
+* **IdentifierResolver for PMIDs and DOIs.** New
+  ``app/infrastructure/pubmed/identifier_resolver.py``
+  classifies PMIDs (1-8 digits) and DOIs (10.xxxx/yyyy), routes
+  each to its native upstream (PubMed EFetch for PMIDs, CrossRef
+  REST for DOIs), and returns a uniform ``Paper`` list. Used by
+  the bulk paste, one-shot fetch, and PDF upload flows.
+
+* **PDF drag-and-drop uploader.** The PDF tab in
+  ``AddPapersPanel`` is now a real drag-and-drop surface backed by
+  ``POST /workspaces/{id}/papers/from-pdf``. The endpoint extracts
+  the first page with ``pypdf`` and runs it through the
+  ``IdentifierResolver``. Scanned PDFs with no recognisable
+  identifiers get the inline title-fallback form.
+
+* **Manual paper upload routes.**
+  ``POST /workspaces/{id}/papers`` and
+  ``DELETE /workspaces/{id}/papers/{paper_id}`` expose
+  ``ADD_PAPER`` / ``REMOVE_PAPER`` over HTTP so the frontend
+  can add papers that aren't in PubMed.
+
+* **Vitest frontend test runner.** New ``npm test`` target runs
+  56+ component / hook tests under jsdom. Includes jest-dom
+  matchers, ``@testing-library/react`` for component tests, and
+  ``useKeyboardShortcut`` (20), ``AddPapersPanel`` (28),
+  ``LiteratureSearch`` (14), plus a smoke test for the setup
+  itself.
+
+* **PC-first keyboard shortcut hook.** New
+  ``useKeyboardShortcut`` hook with ``Ctrl+K`` (PC) / ``⌘K`` (Mac)
+  hint detection. The hook is wired into ``Workspace`` so the
+  right input is focused based on FSM state — PMID/DOI textarea
+  at CREATED, PubMed search input otherwise.
+
+* **Inline API error class.** New ``APIError`` exported from
+  ``client.ts`` exposes ``status`` and ``detail`` so callers can
+  distinguish error codes (``no_identifiers_found``,
+  ``title_no_confident_match``) without string-matching messages.
+
+* **Conftest for test environment.** ``tests/conftest.py`` sets
+  ``PUBMED_EMAIL``, ``OPENAI_API_KEY``, and other settings so the
+  test suite runs on a clean machine without operator setup.
+
+### Changed
+
+* **WorkspaceOrchestrator.add_papers_bulk** is now a thin wrapper
+  around a new private ``_add_papers_bulk`` helper. The
+  ``resolve_and_add_by_title`` path shares the same dedupe /
+  FSM-guard logic instead of duplicating it.
+
+* **docker-compose.yml** mounts the parent directory
+  (``./:/app/data``) instead of the database file, and passes
+  ``DATABASE_URL`` so the container writes the SQLite file in
+  the right place. See ``tests/unit/test_database_path.py`` for
+  the regression guards.
+
 * **Finite State Machine for Research Workspaces.** The workspace
   moves through a deterministic FSM
   (``CREATED → SEARCHING → PAPERS_RETRIEVED → SUMMARIZING →

@@ -14,8 +14,21 @@ services:
       - LLM_PROVIDER=${DEFAULT_LLM_PROVIDER:-openai}
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-deepseek-coder-v2-lite-instruct}
+      # Always point the SQLite file inside the writable
+      # directory that the bootstrap volume mounts at
+      # ``/app/data``. Without this, the container fails with
+      # ``sqlite3.OperationalError: unable to open database file``
+      # when the host path is missing or is a directory.
+      - DATABASE_URL=sqlite:////app/data/bioresearch.db
     volumes:
-      - ./bioresearch.db:/app/bioresearch.db
+      # Mount the parent directory, not the file. SQLite needs
+      # to be able to create ``bioresearch.db`` (and its WAL/SHM
+      # siblings) inside a writable directory. Binding the file
+      # itself is fragile: if the host path is missing or is a
+      # directory (e.g. the bootstrap created the directory by
+      # mistake), the container fails with ``unable to open database
+      # file``.
+      - ./:/app/data
     ports:
       - "8000:8000"
     # Only depend on Ollama when the user picked the local LLM.
