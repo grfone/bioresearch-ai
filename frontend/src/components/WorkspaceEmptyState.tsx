@@ -27,13 +27,16 @@ interface WorkspaceEmptyStateProps {
   onChooseIdentifier: () => void;
   onChooseSearch: () => void;
   onChoosePdf: () => void;
+  /** Keyboard shortcut hint surfaced on the primary card. PC
+   *  default is ``Ctrl+K``; Mac users see ``⌘K``. */
+  shortcutHint?: string;
 }
 
 interface ChoiceCardProps {
   icon: React.ReactNode;
   title: string;
   body: string;
-  hint: string;
+  hint: React.ReactNode;
   onClick: () => void;
   accent?: 'primary' | 'secondary';
 }
@@ -65,6 +68,7 @@ export const WorkspaceEmptyState: React.FC<WorkspaceEmptyStateProps> = ({
   onChooseIdentifier,
   onChooseSearch,
   onChoosePdf,
+  shortcutHint = 'Ctrl+K',
 }) => (
   <section className="workspace-empty" aria-label="Get started">
     <header className="workspace-empty-header">
@@ -82,7 +86,12 @@ export const WorkspaceEmptyState: React.FC<WorkspaceEmptyStateProps> = ({
         body="Paste PMIDs or DOIs from a colleague's email, grant
               reference list, or your Zotero library. Bulk paste works
               — one per line, mixed formats OK."
-        hint="Auto-fetches full metadata from PubMed or CrossRef."
+        hint={
+          <>
+            Auto-fetches full metadata from PubMed or CrossRef. Press{' '}
+            <kbd>{shortcutHint}</kbd> from anywhere to focus this input.
+          </>
+        }
         onClick={onChooseIdentifier}
         accent="primary"
       />

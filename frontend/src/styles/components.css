@@ -4503,20 +4503,63 @@ Includes
 
 /* PDF placeholder */
 
-.add-papers-pdf-placeholder {
+
+/* PDF drag-and-drop zone. The whole label is clickable; the
+   hidden <input type="file"> opens the native file picker when
+   the user clicks. Drop events are intercepted via onDragOver +
+   onDrop. */
+.add-papers-pdf-drop {
     display: grid;
     place-items: center;
     gap: var(--space-2);
-    padding: var(--space-6);
+    padding: var(--space-6) var(--space-4);
+    border: 2px dashed var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
     color: var(--color-text-secondary);
     text-align: center;
+    cursor: pointer;
+    transition: border-color 150ms ease, background 150ms ease;
+}
+
+.add-papers-pdf-drop:hover,
+.add-papers-pdf-drop.is-dragover {
+    border-color: var(--color-accent);
+    background: rgba(94, 227, 214, 0.05);
+    color: var(--color-text-primary);
+}
+
+.add-papers-pdf-title {
+    margin: 0;
+    font-size: var(--font-size-base);
+    font-weight: 500;
+    color: var(--color-text-primary);
 }
 
 .add-papers-pdf-note {
+    margin: 0;
     color: var(--color-text-muted);
     font-size: var(--font-size-sm);
-    margin: 0;
+    max-width: 480px;
 }
+
+.add-papers-pdf-status {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.add-papers-pdf-status--success {
+    color: rgb(74, 222, 128);
+}
+
+.add-papers-pdf-status--error {
+    color: rgb(248, 113, 113);
+}
+
 
 /*=============================================================================
     WorkspaceEmptyState
@@ -4668,6 +4711,206 @@ Includes
 
 .lab-bench-action-bar-secondary[hidden] {
     display: none;
+}
+
+/*=============================================================================
+    Keyboard shortcut hints
+    ------------------------
+    Small inline tips that show the user the platform-aware shortcut
+    for the current action. PC users see ``Ctrl+K``; Mac users see
+    ``⌘K`` via the JavaScript isMacPlatform() helper.
+==============================================================================*/
+
+.add-papers-shortcut-hint {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+}
+
+.add-papers-shortcut-hint kbd {
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-family: var(--font-family-mono, monospace);
+    font-size: 0.78rem;
+    color: var(--color-text-primary);
+    box-shadow: 0 1px 0 var(--color-border);
+    margin: 0 2px;
+}
+
+.workspace-empty-card-hint kbd {
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-family: var(--font-family-mono, monospace);
+    font-size: 0.72rem;
+    color: var(--color-text-primary);
+}
+
+/*=============================================================================
+    LiteratureSearch — select-to-add results panel
+    -----------------------------------------------
+    When the user runs a PubMed search, the results are shown as a
+    checkbox list. The user picks the relevant ones and clicks
+    "Add N papers". Selected rows get a coloured border so the
+    user can see what they've picked.
+==============================================================================*/
+
+.literature-search {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.literature-search-shortcut-hint {
+    margin: var(--space-2) 0 0;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+}
+
+.literature-search-shortcut-hint kbd {
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-family: var(--font-family-mono, monospace);
+    font-size: 0.78rem;
+    color: var(--color-text-primary);
+    box-shadow: 0 1px 0 var(--color-border);
+    margin: 0 2px;
+}
+
+.literature-search-results {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.literature-search-results-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.literature-search-results-title {
+    margin: 0;
+    font-size: var(--font-size-base);
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.literature-search-select-all {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-secondary);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-sm);
+}
+
+.literature-search-select-all:hover {
+    border-color: var(--color-accent);
+    color: var(--color-text-primary);
+}
+
+.literature-search-results-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-1);
+    max-height: 360px;
+    overflow-y: auto;
+}
+
+.literature-search-result {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-base);
+    cursor: pointer;
+    transition: border-color 150ms ease;
+}
+
+.literature-search-result:hover {
+    border-color: var(--color-text-secondary);
+}
+
+.literature-search-result.is-selected {
+    border-color: var(--color-accent);
+    background: rgba(94, 227, 214, 0.05);
+}
+
+.literature-search-result-check {
+    display: flex;
+    align-items: flex-start;
+    padding-top: 2px;
+}
+
+.literature-search-result-check input[type='checkbox'] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    accent-color: var(--color-accent);
+}
+
+.literature-search-result-meta {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+}
+
+.literature-search-result-title {
+    color: var(--color-text-primary);
+    line-height: 1.4;
+    /* Clamp to two lines so the list stays scannable. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.literature-search-result-sub {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+}
+
+.literature-search-result-pmid {
+    font-family: var(--font-family-mono, monospace);
+}
+
+.literature-search-results-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--color-border);
+}
+
+.literature-search-results-count {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+/* Spin animation for the loading icon. */
+.spin {
+    animation: spin-keyframes 1s linear infinite;
+}
+
+@keyframes spin-keyframes {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }
 
 /*=============================================================================

@@ -129,6 +129,38 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 /**
+ * Multipart upload variant. The browser computes the
+ * Content-Type (with boundary) so we deliberately do NOT set
+ * a ``Content-Type`` header — the body must be a ``FormData``
+ * instance, which the browser serialises with the right
+ * ``multipart/form-data; boundary=…`` header.
+ */
+async function fetchMultipart<T>(
+  url: string,
+  formData: FormData,
+): Promise<T> {
+  const response = await fetch(url, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    let detail: unknown = 'Unknown error';
+    try {
+      const errorBody = await response.json();
+      detail = (errorBody as { detail?: unknown }).detail ?? errorBody;
+    } catch {
+      detail = response.statusText || `HTTP ${response.status}`;
+    }
+    const detailStr =
+      typeof detail === 'string' ? detail : JSON.stringify(detail);
+    throw new Error(`API error ${response.status}: ${detailStr}`);
+  }
+
+  return response.json();
+}
+
+/**
  * API client object containing methods for each backend endpoint.
  */
 export const api = {
@@ -327,6 +359,26 @@ export const api = {
         `/workspaces/${workspaceId}/papers/fetch?${params.toString()}`,
       ),
       { method: 'POST' },
+    );
+  },
+
+  /**
+   * Upload a PDF, extract DOI/PMID from the first page, and
+   * add the resolved paper to the workspace.
+   *
+   * The backend uses the same IdentifierResolver that the
+   * bulk-paste and one-shot-fetch flows use, so the response is
+   * a normal WorkspaceResponse (same shape as ``addPaper``).
+   */
+  uploadPdf: (
+    workspaceId: string,
+    file: File,
+  ): Promise<WorkspaceResponse> => {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    return fetchMultipart<WorkspaceResponse>(
+      buildUrl(`/workspaces/${workspaceId}/papers/from-pdf`),
+      formData,
     );
   },
 

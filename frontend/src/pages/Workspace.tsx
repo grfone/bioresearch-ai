@@ -57,6 +57,11 @@ import {
 } from 'lucide-react';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { toast } from '../state/toastStore';
+import {
+  isMacPlatform,
+  shortcutLabel,
+  useKeyboardShortcut,
+} from '../hooks/useKeyboardShortcut';
 import type { WorkspaceAction } from '../models/workspace';
 
 export const Workspace: React.FC = () => {
@@ -150,6 +155,28 @@ export const Workspace: React.FC = () => {
     setTimeout(() => searchInputRef.current?.focus(), 350);
   };
 
+  // Global Ctrl/Cmd+K shortcut. PC-first default: the binding is
+  // just ``Ctrl+K`` and Mac fires the same ``ctrlKey`` event for
+  // both Ctrl and Cmd. The display string switches to ``⌘K``
+  // on Mac so users see the platform-appropriate hint.
+  //
+  // What gets focused depends on the FSM state: at CREATED with
+  // zero papers, the PMID/DOI input is the most useful entry
+  // surface (the consultant's "I have specific papers" workflow).
+  // Once papers exist, the PubMed search input is the more
+  // useful next step.
+  const focusShortcutTarget = () => {
+    const isEmptyWorkspace =
+      !currentWorkspace || currentWorkspace.total_papers === 0;
+    if (isEmptyWorkspace) {
+      focusIdentifierInput();
+      setTimeout(() => identifierInputRef.current?.focus(), 350);
+    } else {
+      focusSearchInput();
+    }
+  };
+  useKeyboardShortcut({ key: 'k', ctrl: true }, focusShortcutTarget);
+
   const handleClearPapers = () => {
     if (window.confirm('Remove all papers from this workspace?')) {
       clearPapers();
@@ -228,6 +255,8 @@ export const Workspace: React.FC = () => {
       <AddPapersPanel
         workspaceId={currentWorkspace.workspace_id}
         enabled={can('add_paper')}
+        bulkInputRef={identifierInputRef}
+        shortcutHint={shortcutLabel({ key: 'k', ctrl: true }, isMacPlatform())}
       />
 
       {/* Action bar — two-tier per UX consultant.
@@ -361,21 +390,25 @@ export const Workspace: React.FC = () => {
             onChooseSearch={focusSearchInput}
             onChoosePdf={() => {
               toast.info(
-                "Drag-and-drop PDF parsing is on the roadmap. " +
-                "For now, paste a DOI or PMID instead.",
+                "PDF parsing is on the roadmap. For now, paste a " +
+                "DOI or PMID instead.",
               );
               focusIdentifierInput();
             }}
+            shortcutHint={shortcutLabel({ key: 'k', ctrl: true }, isMacPlatform())}
           />
         )}
 
         <div className="mb-6">
           <LiteratureSearch
             initialQuery={currentWorkspace.question}
-            onSearchComplete={(count) => {
-              toast.success(`Added ${count} papers`);
+            onSelectComplete={(count) => {
+              toast.success(
+                `Added ${count} paper${count === 1 ? '' : 's'}.`,
+              );
             }}
             inputRef={searchInputRef}
+            shortcutHint={shortcutLabel({ key: 'k', ctrl: true }, isMacPlatform())}
           />
         </div>
 

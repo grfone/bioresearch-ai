@@ -52,6 +52,12 @@ interface AddPapersPanelProps {
   workspaceId: string;
   /** Whether the FSM allows ``add_paper`` in the current state. */
   enabled: boolean;
+  /** Optional ref forwarded to the bulk PMID/DOI textarea so
+   *  the global Ctrl/Cmd+K shortcut can focus it. */
+  bulkInputRef?: React.Ref<HTMLTextAreaElement>;
+  /** Optional keyboard-shortcut hint displayed in the textarea's
+   *  placeholder. PC-first default; Mac users see ``⌘K``. */
+  shortcutHint?: string;
 }
 
 type Tab = 'identifier' | 'manual' | 'pdf';
@@ -100,8 +106,14 @@ function parseIdentifiers(raw: string): string[] {
 export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
   workspaceId,
   enabled,
+  bulkInputRef,
+  shortcutHint = 'Ctrl+K',
 }) => {
   const [tab, setTab] = useState<Tab>('identifier');
+  const [pdfDragOver, setPdfDragOver] = useState(false);
+  const [pdfUploading, setPdfUploading] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [pdfSuccess, setPdfSuccess] = useState<string | null>(null);
   const [bulkText, setBulkText] = useState('');
   const [results, setResults] = useState<ResolveResultEntry[]>([]);
   const [resolving, setResolving] = useState(false);
@@ -186,6 +198,59 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
       );
     } finally {
       setCommitting(false);
+    }
+  };
+
+  const handlePdfDrop = async (
+    event: React.DragEvent<HTMLLabelElement>,
+  ) => {
+    event.preventDefault();
+    setPdfDragOver(false);
+    const file = event.dataTransfer.files?.[0];
+    if (!file) return;
+    if (file.type !== 'application/pdf') {
+      setPdfError(
+        `Only PDF files are accepted (got ${file.type || 'unknown'}).`,
+      );
+      setPdfSuccess(null);
+      return;
+    }
+    await uploadPdf(file);
+  };
+
+  const handlePdfPick = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    await uploadPdf(file);
+    // Reset the input so picking the same file twice still fires
+    // the change event.
+    event.target.value = '';
+  };
+
+  const uploadPdf = async (file: File) => {
+    setPdfUploading(file.name);
+    setPdfError(null);
+    setPdfSuccess(null);
+    try {
+      const response = await api.uploadPdf(workspaceId, file);
+      addPapersToCurrent(response.papers);
+      const count = response.papers.length;
+      setPdfSuccess(
+        `Added ${count} paper${count === 1 ? '' : 's'} from ${file.name}.`,
+      );
+      toast.success(
+        `Added ${count} paper${count === 1 ? '' : 's'} from ${file.name}.`,
+      );
+    } catch (err) {
+      const message = err instanceof Error
+        ? err.message
+        : 'Could not extract identifiers from the PDF.';
+      setPdfError(message);
+      toast.error(message);
+    } finally {
+      setPdfUploading(null);
     }
   };
 
@@ -291,11 +356,17 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
           <textarea
             className="add-papers-bulk-input"
             rows={5}
+            ref={bulkInputRef}
             placeholder={'40000001\n10.1038/s41593-025-00001-1\nPMID: 40000002'}
             value={bulkText}
             onChange={(e) => setBulkText(e.target.value)}
             aria-label="PMID or DOI list"
           />
+
+          <p className="add-papers-shortcut-hint">
+            Tip: press <kbd>{shortcutHint}</kbd> from anywhere to focus
+            this input.
+          </p>
 
           <div className="add-papers-actions">
             <button
@@ -533,13 +604,50 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
       )}
 
       {tab === 'pdf' && (
-        <div className="add-papers-tab-body add-papers-pdf-placeholder">
-          <FileUp size={32} />
-          <p>Drag-and-drop PDF parsing is on the roadmap.</p>
-          <p className="add-papers-pdf-note">
-            For now, paste a PMID or DOI — that's faster than re-typing
-            the metadata anyway.
-          </p>
+        <div className="add-papers-tab-body">
+          <label
+            className={`add-papers-pdf-drop${pdfDragOver ? ' is-dragover' : ''}`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setPdfDragOver(true);
+            }}
+            onDragLeave={() => setPdfDragOver(false)}
+            onDrop={handlePdfDrop}
+          >
+            <FileUp size={32} />
+            <p className="add-papers-pdf-title">
+              Drop a PDF here, or click to choose a file
+            </p>
+            <p className="add-papers-pdf-note">
+              We read the first page and look for a DOI or PMID. The
+              full metadata is fetched from PubMed or CrossRef.
+            </p>
+            <input
+              type="file"
+              accept="application/pdf"
+              onChange={handlePdfPick}
+              style={{ display: 'none' }}
+            />
+          </label>
+
+          {pdfUploading && (
+            <p className="add-papers-pdf-status">
+              <Loader2 size={14} className="spin" />
+              Extracting identifiers from {pdfUploading}…
+            </p>
+          )}
+          {pdfError && (
+            <p className="add-papers-pdf-status add-papers-pdf-status--error">
+              <AlertCircle size={14} />
+              {pdfError}
+            </p>
+          )}
+          {pdfSuccess && (
+            <p className="add-papers-pdf-status add-papers-pdf-status--success">
+              <Check size={14} />
+              {pdfSuccess}
+            </p>
+          )}
         </div>
       )}
     </section>
