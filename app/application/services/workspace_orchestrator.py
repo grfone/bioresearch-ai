@@ -274,6 +274,124 @@ class WorkspaceOrchestrator:
         ResearchSession
             The updated workspace.
         """
+        return self._add_papers_bulk(workspace_id, papers)
+
+    def resolve_and_add_by_title(
+        self,
+        workspace_id: UUID,
+        title: str,
+        first_author: str | None = None,
+        journal: str | None = None,
+        year: int | None = None,
+    ) -> tuple[ResearchSession, Paper | None]:
+        """Title-driven paper recovery.
+
+        This is the catch-all when the user has a paper they
+        can't paste an identifier for: a scanned PDF, a citation
+        from a non-PubMed source, or a paper whose DOI looks
+        wrong. We feed the title to the literature searcher,
+        pull the top match (filtered by author / journal / year
+        when the user provided them), and add it to the
+        workspace through the same ``add_papers_bulk`` path that
+        the DOI/PMID flow uses.
+
+        Unlike ``search()`` this method does NOT advance the
+        FSM. It only writes a paper into the existing session.
+        ``search()`` runs the SEARCH action and replaces papers;
+        ``resolve_and_add_by_title`` is a recording action that
+        layers one paper on top of whatever the workspace
+        already has.
+
+        Parameters
+        ----------
+        workspace_id : UUID
+            Workspace identifier.
+
+        title : str
+            Free-text title to search for.
+
+        first_author, journal, year : optional
+            Disambiguation hints. When at least one of these is
+            provided, we filter the searcher candidates to
+            those whose metadata matches. When none match, we
+            return ``(session, None)`` so the frontend can show
+            a "no precise match" message.
+
+        Returns
+        -------
+        (ResearchSession, Paper | None)
+            The updated workspace, plus the matched Paper (or
+            ``None`` when we couldn't pin a confident match).
+        """
+        # Build a slightly tighter PubMed query from the
+        # optional hints. The literature searcher's existing
+        # ``search()`` does no filtering, so we apply simple
+        # AND-of-fields in the question text. PubMed accepts
+        # ``[Author]``, ``[Journal]`` and ``[Date]`` tags in
+        # the same query string.
+        parts: list[str] = [f'"{title}"[Title]']
+        if first_author:
+            parts.append(f'{first_author}[Author]')
+        if journal:
+            parts.append(f'{journal}[Journal]')
+        if year is not None:
+            parts.append(f'{year}[Date - Publication]')
+
+        question = ResearchQuestion(question=" AND ".join(parts))
+        candidates = self._literature_searcher.search(question)
+        if not candidates:
+            return self._repository.update(
+                self._repository.get(workspace_id)
+            ), None
+
+        # If the user supplied disambiguation hints, prefer the
+        # candidate that matches the most fields. We score each
+        # candidate instead of trusting PubMed's relevance order
+        # alone because the title is often not unique.
+        if any([first_author, journal, year is not None]):
+            def score(paper: Paper) -> int:
+                hit = 0
+                if first_author and any(
+                    first_author.casefold()
+                    in a.full_name.casefold() if a.full_name else ""
+                    for a in paper.authors
+                ):
+                    hit += 1
+                if journal and paper.journal and journal.casefold() in paper.journal.name.casefold():
+                    hit += 1
+                if year is not None and paper.year == year:
+                    hit += 1
+                return hit
+            ranked = sorted(candidates, key=score, reverse=True)
+            chosen = ranked[0]
+            # If the best candidate scored 0 on every hint the
+            # user gave us, the title matched something but the
+            # other fields didn't. Surface that as a soft miss.
+            if score(chosen) == 0:
+                return self._repository.update(
+                    self._repository.get(workspace_id)
+                ), None
+        else:
+            chosen = candidates[0]
+
+        try:
+            session = self._add_papers_bulk(workspace_id, [chosen])
+        except IllegalWorkspaceActionError:
+            raise
+        return session, chosen
+
+    def _add_papers_bulk(
+        self,
+        workspace_id: UUID,
+        papers: list[Paper],
+    ) -> ResearchSession:
+        """Internal bulk-add that the public methods wrap.
+
+        Centralises the "guard transition + dedupe + persist"
+        logic so ``add_papers_bulk`` (public) and
+        ``resolve_and_add_by_title`` (private to this module) can
+        share it without duplication.
+        """
         session = self._repository.get(workspace_id)
         if WorkspaceAction.ADD_PAPER not in allowed_actions(session.state):
             raise IllegalWorkspaceActionError(

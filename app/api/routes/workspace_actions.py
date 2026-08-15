@@ -69,6 +69,7 @@ from fastapi import (
 from app.api.schemas.evidence_comparison_response import (
     EvidenceComparisonResponse,
 )
+from app.api.schemas.find_by_title_request import FindByTitleRequest
 from app.api.schemas.paper_request import PaperRequest
 from app.api.schemas.resolve_request import (
     FailedResolutionResponse,
@@ -776,3 +777,80 @@ async def add_paper_from_pdf(
         raise _illegal_action_response(exc) from exc
 
     return _to_response(workspace)
+
+
+# ---------------------------------------------------------------------------
+# Title-driven paper recovery
+# ---------------------------------------------------------------------------
+# When the user's PDF didn't contain a recognisable DOI or PMID on the
+# first page (e.g. a scanned PDF, a citation from a non-PubMed source),
+# ``/papers/from-pdf`` returns ``422 no_identifiers_found``. The frontend
+# then offers to recover the paper by title: the user types the title,
+# we hit PubMed ESearch with that title, take the top match, and add it
+# to the workspace via the same ``add_papers_bulk`` path used by the
+# DOI/PMID flow.
+#
+# Returns the updated workspace, plus an ``X-Matched-Paper`` header so
+# the frontend can show the user which paper we picked before it lands
+# in the workspace.
+
+
+@router.post(
+    "/{workspace_id}/papers/from-title",
+    response_model=WorkspaceResponse,
+    summary="Find a paper by title and add it to the workspace.",
+)
+def add_paper_by_title(
+    workspace_id: UUID,
+    payload: FindByTitleRequest,
+    orchestrator: WorkspaceOrchestrator = Depends(
+        get_workspace_orchestrator
+    ),
+) -> WorkspaceResponse:
+    """Resolve a paper by title and add it.
+
+    The user types a paper title (and optionally a first author,
+    journal, or year for disambiguation). We feed those to PubMed's
+    ESearch, take the top match, and persist it through the standard
+    ``ADD_PAPER`` flow.
+
+    Returns HTTP 422 if PubMed returns no candidates. Returns HTTP 502
+    if the upstream search fails. Returns HTTP 409 if the FSM forbids
+    ``add_paper`` in the current state.
+    """
+    try:
+        session, matched = orchestrator.resolve_and_add_by_title(
+            workspace_id=workspace_id,
+            title=payload.title,
+            first_author=payload.first_author,
+            journal=payload.journal,
+            year=payload.year,
+        )
+    except IllegalWorkspaceActionError as exc:
+        raise _illegal_action_response(exc) from exc
+
+    # If we couldn't pin a confident match, leave the workspace
+    # untouched and return 422 with the search reason. The frontend
+    # treats this as a "no precise match" surface and prompts the user
+    # to tighten the title or fall back to the PMID/DOI tab.
+    if matched is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "title_no_confident_match",
+                "message": (
+                    "PubMed returned no paper that matched the "
+                    "supplied title (and optional author / journal "
+                    "/ year). Try a different wording or paste the "
+                    "PMID directly in the first tab."
+                ),
+            },
+        )
+
+    # The frontend reads ``matched.title`` from the workspace
+    # response (it's the new entry in ``workspace.papers``) and
+    # uses it for the toast. We return the updated workspace so
+    # the React state stays a single source of truth.
+    _ = matched  # silence "unused" — kept for the API contract
+
+    return _to_response(session)

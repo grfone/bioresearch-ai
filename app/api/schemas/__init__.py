@@ -7,6 +7,7 @@ path.
 from app.api.schemas.evidence_comparison_response import (
     EvidenceComparisonResponse,
 )
+from app.api.schemas.find_by_title_request import FindByTitleRequest
 from app.api.schemas.paper_request import (
     AuthorRequest,
     JournalRequest,
@@ -38,6 +39,7 @@ __all__ = [
     "AuthorResponse",
     "EvidenceComparisonResponse",
     "FailedResolutionResponse",
+    "FindByTitleRequest",
     "JournalRequest",
     "JournalResponse",
     "PaperRequest",
