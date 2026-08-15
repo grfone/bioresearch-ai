@@ -20,11 +20,15 @@ interface LiteratureSearchProps {
   initialQuery?: string;
   /** Callback fired after successful search */
   onSearchComplete?: (count: number) => void;
+  /** Optional ref forwarded to the underlying <input> so parents
+   *  can focus it programmatically (e.g. from an empty-state card). */
+  inputRef?: React.Ref<HTMLInputElement>;
 }
 
 export const LiteratureSearch: React.FC<LiteratureSearchProps> = ({
   initialQuery = '',
   onSearchComplete,
+  inputRef,
 }) => {
   const [query, setQuery] = useState(initialQuery);
   const [loading, setLoading] = useState(false);
@@ -60,6 +64,7 @@ export const LiteratureSearch: React.FC<LiteratureSearchProps> = ({
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={18} />
           <input
             type="text"
+            ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search for additional papers…"
