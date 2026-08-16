@@ -107,9 +107,73 @@ class PdfExtractionResult:
     pages_scanned: int
 
 
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------
+# Candidate normalisation
+# -------------------------------------------------------------------
+
+
+# Trailing fragments we strip from a DOI candidate before lookup.
+# PDFs (especially bioRxiv preprints) commonly render the DOI on
+# the same line as the next word, with no whitespace between the
+# DOI and the literal prefix that follows. For example:
+#
+#     "...https://doi.org/10.64898/2026.03.31.715296doi: bioRxiv"
+#
+# The greedy regex captures ``10.64898/2026.03.31.715296doi`` —
+# everything up to the colon is treated as part of the DOI. We
+# peel those trailing fragments off before handing the candidate
+# to the resolver, otherwise CrossRef returns 404.
+#
+# The keys are matched case-insensitively; values are the literal
+# fragments we strip. The order matters: longer fragments first
+# (``https`` before ``http``, ``pmid`` before ``doi``) so the
+# strip is greedy and exact.
+_DOI_TRAILING_FRAGMENTS = (
+    "https:",
+    "http:",
+    "pmid:",
+    "doi:",
+    "pmid",
+    "doi",
+)
+
+
+def _clean_doi_candidate(raw: str) -> str:
+    """Strip trailing junk from a DOI regex capture.
+
+    The DOI regex is intentionally greedy — it captures
+    ``10\\.\\d{4,9}/[^\\s\\\"'<>]+`` so the longest possible DOI is
+    captured even when the PDF renders it with whitespace
+    inconsistencies. The greedy capture can pick up trailing URL
+    scheme prefixes (``https:`` / ``http:``) or the literal word
+    ``doi`` / ``pmid`` when the DOI is immediately followed by
+    one of those tokens. We peel those off, then strip terminal
+    punctuation.
+
+    Returns the cleaned DOI, or an empty string if nothing
+    remains (so the caller can drop the candidate).
+    """
+    candidate = raw
+    # Strip the literal trailing fragments, repeatedly, in case
+    # ``doi:doi:doi`` was captured (defensive — never observed
+    # but cheap to handle).
+    changed = True
+    while changed:
+        changed = False
+        for fragment in _DOI_TRAILING_FRAGMENTS:
+            if candidate.lower().endswith(fragment) and len(
+                candidate
+            ) > len(fragment):
+                candidate = candidate[: -len(fragment)]
+                changed = True
+    # Strip terminal punctuation that PDFs attach.
+    candidate = candidate.rstrip(".,;)]}>\"'")
+    return candidate
+
+
+# -------------------------------------------------------------------
 # Public API
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------
 
 
 def extract_identifiers_from_pdf(
@@ -187,10 +251,8 @@ def extract_identifiers_from_pdf(
     seen: set[str] = set()
 
     for match in _DOI_RE.finditer(pdf_text):
-        candidate = match.group(0).rstrip(".,;)")
-        if candidate.lower().endswith(")"):
-            candidate = candidate[:-1]
-        if candidate not in seen:
+        candidate = _clean_doi_candidate(match.group(0))
+        if candidate and candidate not in seen:
             seen.add(candidate)
             identifiers.append(candidate)
 

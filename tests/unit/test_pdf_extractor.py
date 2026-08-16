@@ -159,6 +159,66 @@ def test_extract_strips_trailing_punctuation() -> None:
     assert all("10.1038/nature12373" in ident for ident in result.identifiers)
 
 
+def test_extract_strips_trailing_doi_keyword() -> None:
+    """bioRxiv preprint boilerplate often renders the DOI on the
+    same line as the next ``doi:`` literal with no whitespace
+    between them — ``https://doi.org/10.64898/...doi: bioRxiv``.
+
+    The greedy DOI regex captures everything up to the next
+    whitespace, including the literal ``doi`` and ``:``. The
+    extractor must peel those off before lookup, otherwise
+    CrossRef returns 404 for a DOI that exists.
+
+    This is the exact regression the user hit with their PDF.
+    """
+    from app.infrastructure.pubmed.pdf_extractor import (
+        extract_identifiers_from_pdf,
+    )
+
+    pdf = _pdf_with_text(
+        "bioRxiv preprint doi: https://doi.org/10.64898/2026.03.31.715296doi: "
+        "bioRxiv preprint"
+    )
+    result = extract_identifiers_from_pdf(io.BytesIO(pdf))
+
+    # The trailing ``doi:`` and any trailing colons are stripped.
+    assert "10.64898/2026.03.31.715296" in result.identifiers
+    # No candidate ends with the literal "doi" word.
+    assert all(not ident.lower().endswith("doi") for ident in result.identifiers)
+    assert all(not ident.lower().endswith("doi:") for ident in result.identifiers)
+    # No candidate contains ``doi:`` glued to the DOI suffix.
+    assert all("715296doi" not in ident for ident in result.identifiers)
+
+
+def test_extract_strips_trailing_https_keyword() -> None:
+    """Same as the doi-keyword case but with ``https:`` glued to
+    the DOI suffix."""
+    from app.infrastructure.pubmed.pdf_extractor import (
+        extract_identifiers_from_pdf,
+    )
+
+    pdf = _pdf_with_text("10.1038/nature12373https: see https://example.com")
+    result = extract_identifiers_from_pdf(io.BytesIO(pdf))
+
+    assert "10.1038/nature12373" in result.identifiers
+    assert all(not ident.lower().endswith("https:") for ident in result.identifiers)
+    assert all("12373https" not in ident for ident in result.identifiers)
+
+
+def test_extract_strips_repeated_trailing_keyword() -> None:
+    """Defensive: if the PDF renders ``doi:doi:doi`` after the
+    DOI (never observed in practice but cheap to handle), the
+    extractor peels all of them off."""
+    from app.infrastructure.pubmed.pdf_extractor import (
+        extract_identifiers_from_pdf,
+    )
+
+    pdf = _pdf_with_text("10.1038/nature12373doi:doi:doi:")
+    result = extract_identifiers_from_pdf(io.BytesIO(pdf))
+
+    assert "10.1038/nature12373" in result.identifiers
+
+
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
