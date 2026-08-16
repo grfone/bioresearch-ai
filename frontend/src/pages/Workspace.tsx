@@ -134,10 +134,10 @@ export const Workspace: React.FC = () => {
   // Refs into the entry surfaces so the empty-state cards can
   // scroll the relevant one into view on click.
   const papersSectionRef = React.useRef<HTMLDivElement | null>(null);
-  const identifierInputRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const doiInputRef = React.useRef<HTMLTextAreaElement | null>(null);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
 
-  const focusIdentifierInput = () => {
+  const focusDoiInput = () => {
     papersSectionRef.current?.scrollIntoView({
       behavior: "smooth",
       block: "start",
@@ -161,7 +161,7 @@ export const Workspace: React.FC = () => {
   // on Mac so users see the platform-appropriate hint.
   //
   // What gets focused depends on the FSM state: at CREATED with
-  // zero papers, the PMID/DOI input is the most useful entry
+  // zero papers, the DOI input is the most useful entry
   // surface (the consultant's "I have specific papers" workflow).
   // Once papers exist, the PubMed search input is the more
   // useful next step.
@@ -169,8 +169,8 @@ export const Workspace: React.FC = () => {
     const isEmptyWorkspace =
       !currentWorkspace || currentWorkspace.total_papers === 0;
     if (isEmptyWorkspace) {
-      focusIdentifierInput();
-      setTimeout(() => identifierInputRef.current?.focus(), 350);
+      focusDoiInput();
+      setTimeout(() => doiInputRef.current?.focus(), 350);
     } else {
       focusSearchInput();
     }
@@ -250,12 +250,13 @@ export const Workspace: React.FC = () => {
       />
 
       {/* AddPapersPanel — always visible when FSM allows add_paper.
-          This is the primary paper-entry surface for the
-          "I have a list of PMIDs/DOIs" workflow. */}
+          This is the primary paper-entry surface. Researchers
+          paste DOIs into the bulk input or drop a PDF onto the
+          dropzone; both paths go through the same resolver. */}
       <AddPapersPanel
         workspaceId={currentWorkspace.workspace_id}
         enabled={can('add_paper')}
-        bulkInputRef={identifierInputRef}
+        bulkInputRef={doiInputRef}
         shortcutHint={shortcutLabel({ key: 'k', ctrl: true }, isMacPlatform())}
       />
 
@@ -386,14 +387,13 @@ export const Workspace: React.FC = () => {
             brings the matching entry surface into view. */}
         {currentWorkspace.total_papers === 0 && (
           <WorkspaceEmptyState
-            onChooseIdentifier={focusIdentifierInput}
+            onChooseIdentifier={focusDoiInput}
             onChooseSearch={focusSearchInput}
             onChoosePdf={() => {
-              toast.info(
-                "PDF parsing is on the roadmap. For now, paste a " +
-                "DOI or PMID instead.",
-              );
-              focusIdentifierInput();
+              // The PDF dropzone is real now — clicking this card
+              // focuses the DOI input as a fallback since the
+              // PDF dropzone doesn't have a forwarded ref yet.
+              focusDoiInput();
             }}
             shortcutHint={shortcutLabel({ key: 'k', ctrl: true }, isMacPlatform())}
           />

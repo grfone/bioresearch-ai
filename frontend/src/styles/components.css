@@ -2284,6 +2284,134 @@ application.
 }
 
 
+.paper-abstract--truncated {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.paper-abstract-toggle {
+    background: transparent;
+    border: none;
+    color: var(--color-primary-light, #93c5fd);
+    font-size: var(--font-size-sm, 0.875rem);
+    cursor: pointer;
+    padding: 0;
+    align-self: flex-start;
+}
+.paper-abstract-toggle:hover {
+    text-decoration: underline;
+}
+
+.paper-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2, 0.5rem);
+    flex-shrink: 0;
+}
+
+.paper-action-button {
+    background: transparent;
+    border: 1px solid var(--color-border-default, #1f2937);
+    border-radius: var(--radius-medium, 8px);
+    color: var(--color-text-secondary, #9ca3af);
+    padding: 0.4rem 0.5rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition:
+        background var(--duration-normal, 150ms),
+        border-color var(--duration-normal, 150ms),
+        color var(--duration-normal, 150ms);
+}
+.paper-action-button:hover {
+    background: rgba(255,255,255,0.05);
+    color: var(--color-text-primary, #f9fafb);
+}
+.paper-action-button--remove:hover {
+    color: var(--color-error, #f87171);
+    border-color: var(--color-error, #f87171);
+}
+
+.paper-identifiers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2, 0.5rem);
+}
+
+.paper-identifier {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: var(--radius-medium, 8px);
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: var(--font-size-xs, 0.75rem);
+    text-decoration: none;
+    transition: opacity var(--duration-normal, 150ms);
+}
+.paper-identifier:hover {
+    opacity: 0.85;
+}
+.paper-identifier--doi {
+    background: rgba(59, 130, 246, 0.15);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+.paper-identifier--pmid {
+    background: rgba(16, 185, 129, 0.15);
+    color: #6ee7b7;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+/* Partial-metadata marker — asterisk next to the title and a
+   warning banner under the metadata. The marker appears when the
+   paper has thin metadata: no authors AND no abstract. The banner
+   explains why the asterisk is there so the user knows the LLM
+   stages will have less to work with. */
+.paper-title-partial-marker {
+    color: var(--color-warning, #f59e0b);
+    font-weight: var(--font-weight-bold, 700);
+    margin-left: 0.25rem;
+}
+
+.paper-thin-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2, 0.5rem);
+    padding: 0.5rem 0.75rem;
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px dashed rgba(245, 158, 11, 0.4);
+    border-radius: var(--radius-medium, 8px);
+    color: var(--color-warning, #fbbf24);
+    font-size: var(--font-size-sm, 0.875rem);
+    line-height: 1.4;
+}
+.paper-thin-warning svg {
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+}
+
+.paper-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4, 1rem);
+}
+
+.paper-list-empty {
+    padding: var(--space-8, 2rem) var(--space-6, 1.5rem);
+    border-radius: var(--radius-large, 12px);
+    background: rgba(255,255,255,0.02);
+    border: 1px dashed var(--color-border-default, #1f2937);
+    color: var(--color-text-muted, #6b7280);
+    text-align: center;
+    font-size: var(--font-size-sm, 0.875rem);
+}
+
 /*=============================================================================
     Citation Card
 =============================================================================*/
@@ -4247,11 +4375,11 @@ Includes
     AddPapersPanel
     ---------------
     Primary paper-entry surface for the workspace. Visible when the
-    FSM allows ``add_paper``. Three tabs:
-        - PMID / DOI  (identifier-first, bulk-resolves via backend)
-        - Manual      (fill every field, slow path)
-        - PDF         (placeholder, future work)
-    The PMID/DOI tab is the recommended default; it's the workflow
+    FSM allows ``add_paper``. Two tabs:
+        - DOI    (identifier-first, bulk-resolves via backend)
+        - PDF    (drag-and-drop, extracts DOI from first page, falls
+                  back to a title-search form if no DOI is found)
+    The DOI tab is the recommended default; it's the workflow
     researchers actually do (paste from a Zotero export or a
     colleague's email).
 ==============================================================================*/
@@ -4440,69 +4568,6 @@ Includes
     color: rgb(248, 113, 113);
     white-space: normal;
 }
-
-/* Manual entry tab */
-
-.add-papers-manual-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    background: transparent;
-    border: 1px dashed var(--color-border);
-    color: var(--color-text-secondary);
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-}
-
-.add-papers-manual-toggle:hover {
-    border-color: var(--color-accent);
-    color: var(--color-text-primary);
-}
-
-.add-papers-manual-form {
-    display: grid;
-    gap: var(--space-3);
-}
-
-.add-papers-manual-form label {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-}
-
-.add-papers-manual-form input,
-.add-papers-manual-form textarea {
-    background: var(--color-bg-base);
-    border: 1px solid var(--color-border);
-    color: var(--color-text-primary);
-    border-radius: var(--radius-sm);
-    padding: var(--space-2) var(--space-3);
-    font: inherit;
-}
-
-.add-papers-manual-form input:focus,
-.add-papers-manual-form textarea:focus {
-    outline: none;
-    border-color: var(--color-accent);
-}
-
-.add-papers-row {
-    display: grid;
-    grid-template-columns: 2fr 1fr;
-    gap: var(--space-3);
-}
-
-.add-papers-manual-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--space-2);
-}
-
-/* PDF placeholder */
-
 
 /* PDF drag-and-drop zone. The whole label is clickable; the
    hidden <input type="file"> opens the native file picker when

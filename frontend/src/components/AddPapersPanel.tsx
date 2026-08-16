@@ -4,35 +4,33 @@
  * ------------------
  * The primary paper-entry surface for a BioResearch workspace.
  *
- * Researchers almost always start from a known artifact (a PMID
- * they copied from a colleague's email, a DOI from a PDF, or a
- * paper already in their Zotero library) rather than from a
- * free-text search. This panel is designed around that workflow.
+ * Researchers add papers in one of two ways:
  *
- * It exposes three entry modes, plus a results list that shows
- * per-identifier status (green = resolved, red = failed, amber
- * = partial). The results list is the visible feedback the
- * "reviewing a grant, need to add 8 references" workflow needs:
+ *   1. Paste one or more DOIs into the bulk field and click
+ *      "Resolve". CrossRef is queried for each DOI; resolved
+ *      papers appear in the results list with green chips and
+ *      can be added in one click.
  *
- *   1. paste 8 PMIDs/DOIs into the bulk field
- *   2. click "Resolve all"
- *   3. green/red chips appear, the user sees what worked
- *   4. click "Add 7 resolved papers" — the workspace advances
+ *   2. Drag-and-drop a PDF onto the dropzone. The backend
+ *      extracts the DOI from the first page and routes it
+ *      through the same resolver. If no DOI is found the
+ *      inline title-fallback form lets the user search PubMed
+ *      by free-text title instead.
  *
- * Manual entry (single paper, fill every field) is hidden in
- * a collapsed section because it is the slow path. PDF upload
- * is a placeholder card — drag-drop parsing is future work.
+ * The bulk input accepts DOIs only. PMIDs still resolve on the
+ * backend (PDF extraction can surface a PMID) but there is no
+ * dedicated PMID entry surface — researchers who already have a
+ * PMID can paste the corresponding DOI from
+ * ``pubmed.ncbi.nlm.nih.gov`` instead.
  *
  * @module components/AddPapersPanel
  */
 
 import React, { useState } from 'react';
 import {
-  BookOpen,
   Check,
-  ChevronDown,
   FileUp,
-  Hash,
+  Link2,
   Loader2,
   Plus,
   X,
@@ -40,11 +38,7 @@ import {
 } from 'lucide-react';
 import { api, APIError } from '../api/client';
 import { useWorkspaceStore } from '../state/workspaceStore';
-import type {
-  AuthorRequest,
-  JournalRequest,
-  PaperRequest,
-} from '../models/paper';
+import type { PaperRequest } from '../models/paper';
 import { toast } from '../state/toastStore';
 
 interface AddPapersPanelProps {
@@ -52,7 +46,7 @@ interface AddPapersPanelProps {
   workspaceId: string;
   /** Whether the FSM allows ``add_paper`` in the current state. */
   enabled: boolean;
-  /** Optional ref forwarded to the bulk PMID/DOI textarea so
+  /** Optional ref forwarded to the bulk DOI textarea so
    *  the global Ctrl/Cmd+K shortcut can focus it. */
   bulkInputRef?: React.Ref<HTMLTextAreaElement>;
   /** Optional keyboard-shortcut hint displayed in the textarea's
@@ -60,7 +54,7 @@ interface AddPapersPanelProps {
   shortcutHint?: string;
 }
 
-type Tab = 'identifier' | 'manual' | 'pdf';
+type Tab = 'doi' | 'pdf';
 
 interface ResolveResultEntry {
   identifier: string;
@@ -69,34 +63,10 @@ interface ResolveResultEntry {
   paper?: PaperRequest;
 }
 
-const MANUAL_EMPTY: {
-  title: string;
-  author_name: string;
-  year: string;
-  journal_name: string;
-  abstract: string;
-  doi: string;
-  pmid: string;
-} = {
-  title: '',
-  author_name: '',
-  year: '',
-  journal_name: '',
-  abstract: '',
-  doi: '',
-  pmid: '',
-};
-
 /**
- * Parse a textarea of identifiers into a clean list.
- *
- * Accepts:
- *   - one identifier per line
- *   - comma-separated identifiers on a single line
- *   - "doi:..." or "https://doi.org/..." prefixes
- *   - whitespace anywhere
+ * Parse a textarea of DOIs.
  */
-function parseIdentifiers(raw: string): string[] {
+function parseDois(raw: string): string[] {
   return raw
     .split(/[\n,]+/)
     .map((s) => s.trim())
@@ -109,7 +79,7 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
   bulkInputRef,
   shortcutHint = 'Ctrl+K',
 }) => {
-  const [tab, setTab] = useState<Tab>('identifier');
+  const [tab, setTab] = useState<Tab>('doi');
   const [pdfDragOver, setPdfDragOver] = useState(false);
   const [pdfUploading, setPdfUploading] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
@@ -118,11 +88,6 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
   const [results, setResults] = useState<ResolveResultEntry[]>([]);
   const [resolving, setResolving] = useState(false);
   const [committing, setCommitting] = useState(false);
-
-  // Manual form state
-  const [manual, setManual] = useState(MANUAL_EMPTY);
-  const [manualOpen, setManualOpen] = useState(false);
-  const [submittingManual, setSubmittingManual] = useState(false);
 
   // Title-fallback state — set when ``uploadPdf`` returns
   // ``422 no_identifiers_found``. The PDF didn't yield a DOI or
@@ -140,9 +105,9 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
   const addPapersToCurrent = useWorkspaceStore((s) => s.addPapersToCurrent);
 
   const handleResolve = async () => {
-    const ids = parseIdentifiers(bulkText);
+    const ids = parseDois(bulkText);
     if (ids.length === 0) {
-      toast.error('Paste at least one PMID or DOI.');
+      toast.error('Paste at least one DOI.');
       return;
     }
     setResolving(true);
@@ -169,13 +134,13 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
       const failedCount = response.failed_count;
       if (resolvedCount === 0) {
         toast.error(
-          `Could not resolve any of the ${ids.length} identifiers.`,
+          `Could not resolve any of the ${ids.length} DOIs.`,
         );
       } else if (failedCount === 0) {
-        toast.success(`Resolved all ${resolvedCount} identifiers.`);
+        toast.success(`Resolved all ${resolvedCount} DOIs.`);
       } else {
         toast.success(
-          `Resolved ${resolvedCount}/${ids.length} identifiers.`,
+          `Resolved ${resolvedCount}/${ids.length} DOIs.`,
         );
       }
     } catch (err) {
@@ -366,46 +331,6 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
     setTitleFallbackError(null);
   };
 
-  const handleManualSubmit = async (
-    event: React.FormEvent,
-  ) => {
-    event.preventDefault();
-    if (!manual.title.trim()) {
-      toast.error('Title is required.');
-      return;
-    }
-    setSubmittingManual(true);
-    try {
-      const author: AuthorRequest | null = manual.author_name.trim()
-        ? { full_name: manual.author_name.trim() }
-        : null;
-      const journal: JournalRequest | null = manual.journal_name.trim()
-        ? { name: manual.journal_name.trim() }
-        : null;
-      const payload: PaperRequest = {
-        title: manual.title.trim(),
-        authors: author ? [author] : [],
-        journal,
-        year: manual.year.trim() ? Number(manual.year) : null,
-        abstract: manual.abstract.trim(),
-        doi: manual.doi.trim() || null,
-        pmid: manual.pmid.trim() || null,
-        keywords: [],
-        url: null,
-      };
-      const response = await api.addPaper(workspaceId, payload);
-      addPapersToCurrent(response.papers);
-      toast.success('Paper added.');
-      setManual(MANUAL_EMPTY);
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : 'Failed to add paper.',
-      );
-    } finally {
-      setSubmittingManual(false);
-    }
-  };
-
   if (!enabled) {
     return null;
   }
@@ -424,8 +349,8 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
           Add papers
         </h3>
         <p className="add-papers-subtitle">
-          Paste PMIDs or DOIs to pull full metadata automatically. One per
-          line, or comma-separated — mixed formats OK.
+          Paste one DOI per line, or comma-separated. The full
+          metadata is fetched from CrossRef.
         </p>
       </header>
 
@@ -433,22 +358,12 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
         <button
           type="button"
           role="tab"
-          aria-selected={tab === 'identifier'}
-          className={`add-papers-tab ${tab === 'identifier' ? 'is-active' : ''}`}
-          onClick={() => setTab('identifier')}
+          aria-selected={tab === 'doi'}
+          className={`add-papers-tab ${tab === 'doi' ? 'is-active' : ''}`}
+          onClick={() => setTab('doi')}
         >
-          <Hash size={14} />
-          PMID / DOI
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'manual'}
-          className={`add-papers-tab ${tab === 'manual' ? 'is-active' : ''}`}
-          onClick={() => setTab('manual')}
-        >
-          <BookOpen size={14} />
-          Manual
+          <Link2 size={14} />
+          DOI
         </button>
         <button
           type="button"
@@ -459,20 +374,19 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
         >
           <FileUp size={14} />
           PDF
-          <span className="add-papers-tab-badge">soon</span>
         </button>
       </div>
 
-      {tab === 'identifier' && (
+      {tab === 'doi' && (
         <div className="add-papers-tab-body">
           <textarea
             className="add-papers-bulk-input"
             rows={5}
             ref={bulkInputRef}
-            placeholder={'40000001\n10.1038/s41593-025-00001-1\nPMID: 40000002'}
+            placeholder={'10.1038/s41593-025-00001-1\ndi:10.1126/science.1566067'}
             value={bulkText}
             onChange={(e) => setBulkText(e.target.value)}
-            aria-label="PMID or DOI list"
+            aria-label="DOI list"
           />
 
           <p className="add-papers-shortcut-hint">
@@ -494,8 +408,8 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
                 </>
               ) : (
                 <>
-                  <Hash size={14} />
-                  Resolve identifiers
+                  <Link2 size={14} />
+                  Resolve DOIs
                 </>
               )}
             </button>
@@ -578,143 +492,6 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
         </div>
       )}
 
-      {tab === 'manual' && (
-        <div className="add-papers-tab-body">
-          {!manualOpen ? (
-            <button
-              type="button"
-              className="add-papers-manual-toggle"
-              onClick={() => setManualOpen(true)}
-            >
-              <ChevronDown size={14} />
-              Open the manual entry form
-            </button>
-          ) : (
-            <form
-              className="add-papers-manual-form"
-              onSubmit={handleManualSubmit}
-            >
-              <label>
-                Title *
-                <input
-                  type="text"
-                  required
-                  value={manual.title}
-                  onChange={(e) =>
-                    setManual({ ...manual, title: e.target.value })
-                  }
-                  placeholder="Amyloid clearance mechanisms."
-                />
-              </label>
-              <div className="add-papers-row">
-                <label>
-                  Author
-                  <input
-                    type="text"
-                    value={manual.author_name}
-                    onChange={(e) =>
-                      setManual({
-                        ...manual,
-                        author_name: e.target.value,
-                      })
-                    }
-                    placeholder="Maria Garcia"
-                  />
-                </label>
-                <label>
-                  Year
-                  <input
-                    type="number"
-                    min="1500"
-                    max="2200"
-                    value={manual.year}
-                    onChange={(e) =>
-                      setManual({ ...manual, year: e.target.value })
-                    }
-                    placeholder="2025"
-                  />
-                </label>
-              </div>
-              <label>
-                Journal
-                <input
-                  type="text"
-                  value={manual.journal_name}
-                  onChange={(e) =>
-                    setManual({
-                      ...manual,
-                      journal_name: e.target.value,
-                    })
-                  }
-                  placeholder="Nature Neuroscience"
-                />
-              </label>
-              <label>
-                Abstract
-                <textarea
-                  rows={3}
-                  value={manual.abstract}
-                  onChange={(e) =>
-                    setManual({ ...manual, abstract: e.target.value })
-                  }
-                  placeholder="We review the major pathways…"
-                />
-              </label>
-              <div className="add-papers-row">
-                <label>
-                  DOI
-                  <input
-                    type="text"
-                    value={manual.doi}
-                    onChange={(e) =>
-                      setManual({ ...manual, doi: e.target.value })
-                    }
-                    placeholder="10.1038/s41593-025-00001-1"
-                  />
-                </label>
-                <label>
-                  PMID
-                  <input
-                    type="text"
-                    value={manual.pmid}
-                    onChange={(e) =>
-                      setManual({ ...manual, pmid: e.target.value })
-                    }
-                    placeholder="40000001"
-                  />
-                </label>
-              </div>
-              <div className="add-papers-manual-actions">
-                <button
-                  type="button"
-                  onClick={() => setManualOpen(false)}
-                  disabled={submittingManual}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={submittingManual}
-                >
-                  {submittingManual ? (
-                    <>
-                      <Loader2 size={14} className="spin" />
-                      Adding…
-                    </>
-                  ) : (
-                    <>
-                      <Plus size={14} />
-                      Add paper
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
-      )}
-
       {tab === 'pdf' && (
         <div className="add-papers-tab-body">
           <label
@@ -731,8 +508,10 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
               Drop a PDF here, or click to choose a file
             </p>
             <p className="add-papers-pdf-note">
-              We read the first page and look for a DOI or PMID. The
-              full metadata is fetched from PubMed or CrossRef.
+              We read the first page and look for a DOI. The full
+              metadata is fetched from CrossRef. If the PDF is
+              scanned, the title-fallback form below lets you
+              search PubMed by free-text title instead.
             </p>
             <input
               type="file"
