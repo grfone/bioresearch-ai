@@ -127,9 +127,31 @@ export const Workspace: React.FC = () => {
   // The processing-action tier (Summarize, Compare, Generate Report)
   // is collapsed by default at CREATED so the bar stays focused on
   // the paper-entry workflow. Once papers exist it auto-expands so
-  // returning users see their next actions immediately.
+  // returning users see their next actions immediately — not
+  // "once papers exist on mount" (which would miss papers added
+  // after the user navigates to this page), but "as soon as the
+  // workspace has any papers at all".
   const [showProcessingActions, setShowProcessingActions] =
     useState(!!workspace?.total_papers);
+
+  // Auto-expand the processing-action bar whenever papers appear
+  // in the workspace. Without this effect, the initial
+  // ``useState`` only runs on mount — if the workspace is empty
+  // when the user lands on the page (very common: they always
+  // start by running Search), the bar stays collapsed even
+  // after Search returns 20 papers and the user is staring at
+  // the Literature list wondering why Summarize / Compare /
+  // Generate Report look disabled (they're not — they're
+  // hidden behind the toggle).
+  useEffect(() => {
+    if (
+      workspace &&
+      workspace.total_papers > 0 &&
+      !showProcessingActions
+    ) {
+      setShowProcessingActions(true);
+    }
+  }, [workspace?.total_papers, showProcessingActions, workspace]);
 
   // Refs into the entry surfaces so the empty-state cards can
   // scroll the relevant one into view on click.
