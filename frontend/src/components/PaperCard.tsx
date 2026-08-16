@@ -1,27 +1,62 @@
 // components/PaperCard.tsx
 /**
  * PaperCard.tsx
- * -------------
- * Card component displaying a single scientific publication.
+ * ------------
+ * Renders a single scientific publication as a card.
  *
- * Renders the paper's title, authors, journal, year, abstract, and metadata
- * badges (PMID, DOI). Designed to be used inside a PaperList.
- *
- * Uses CSS classes from the design system:
- * - .paper-card, .paper-header, .paper-title, .paper-authors, etc.
+ * Layout:
+ * - Header: title + external-link / remove buttons.
+ * - Authors: comma-separated full names. Truncates with "et
+ *   al." after the first three.
+ * - Journal / year: "Nature, 2025" style citation.
+ * - Abstract: truncated to ~3 lines with a "Show more" toggle.
+ * - Identifiers: DOI and PMID badges, each linking to its
+ *   canonical resolver.
+ * - Partial-metadata marker: an asterisk (*) right after the
+ *   title when the paper was added with thin metadata (no
+ *   abstract AND no authors). This is the user-visible cue
+ *   for the failure mode the consultant flagged: the user
+ *   inserts a DOI, CrossRef returns whatever it has (sometimes
+ *   just the title), and the workspace must signal that this
+ *   paper won't have enough material for the LLM stages.
  *
  * @module components/PaperCard
  */
 
 import React from 'react';
 import type { Paper } from '../models/paper';
-import { ExternalLink, X } from 'lucide-react';
+import { formatPaperCitation, hasDoi } from '../models/paper';
+import { ExternalLink, X, AlertTriangle } from 'lucide-react';
 
 interface PaperCardProps {
   paper: Paper;
+  /** Truncate the abstract after this many lines. ``false``
+   *  disables truncation. Default: ``true`` (truncate). */
   truncateAbstract?: boolean;
+  /** Tailwind/CSS className to append to the card. */
   className?: string;
-  onRemove?: (paper: Paper) => void; // NEW
+  /** Called when the user clicks the remove button. */
+  onRemove?: (paper: Paper) => void;
+  /** Show the partial-metadata asterisk. Default: ``true``.
+   *  Callers (e.g. ``PaperList`` for the "all papers" view)
+   *  can opt out when they're rendering papers that haven't
+   *  gone through the resolver yet. */
+  showPartialMarker?: boolean;
+}
+
+const ABSTRACT_TRUNCATE_LINES = 3;
+
+/**
+ * A paper has "thin metadata" if BOTH authors AND abstract are
+ * empty. CrossRef's bare-minimum record is just a title, so a
+ * thin paper is the common failure mode when a DOI resolves but
+ * the publisher doesn't expose the full record.
+ */
+export function isThinPaper(paper: Paper): boolean {
+  const noAuthors = paper.authors.length === 0;
+  const noAbstract =
+    !paper.abstract || paper.abstract.trim().length === 0;
+  return noAuthors && noAbstract;
 }
 
 export const PaperCard: React.FC<PaperCardProps> = ({
@@ -29,34 +64,143 @@ export const PaperCard: React.FC<PaperCardProps> = ({
   truncateAbstract = true,
   className = '',
   onRemove,
+  showPartialMarker = true,
 }) => {
-  // ... existing logic for abstract truncation
+  const [expanded, setExpanded] = React.useState(false);
+  const hasAbstract =
+    paper.abstract && paper.abstract.trim().length > 0;
+  const showTruncation = truncateAbstract && hasAbstract && !expanded;
+  const thin = isThinPaper(paper);
+
+  // Construct a short author list — comma-separated, "et al."
+  // once we exceed the visible limit.
+  const authorLine =
+    paper.authors.length === 0
+      ? null
+      : paper.authors.length <= 3
+        ? paper.authors.map((a) => a.full_name).join(', ')
+        : `${paper.authors
+            .slice(0, 3)
+            .map((a) => a.full_name)
+            .join(', ')} et al.`;
+
+  // Journal/year citation.
+  const journalLine =
+    paper.journal || paper.year
+      ? `${paper.journal?.name ?? 'Unknown journal'}${
+          paper.year ? `, ${paper.year}` : ''
+        }`
+      : null;
 
   return (
-    <div className={`paper-card ${className}`}>
+    <div
+      className={`paper-card ${className}`}
+      data-paper-pmid={paper.pmid ?? ''}
+      data-paper-doi={paper.doi ?? ''}
+      data-thin-metadata={thin ? 'true' : 'false'}
+    >
       <div className="paper-header">
-        <div className="flex-1">
-          <h3 className="paper-title">{paper.title}</h3>
-          {/* ... */}
+        <div className="flex-1 min-w-0">
+          <h3 className="paper-title">
+            {paper.title}
+            {showPartialMarker && thin && (
+              <span
+                className="paper-title-partial-marker"
+                title="Partial metadata — CrossRef returned only the title. The LLM stages won't have authors or an abstract to work with."
+                aria-label="Partial metadata — no authors and no abstract were returned."
+              >
+                {' *'}
+              </span>
+            )}
+          </h3>
+          {authorLine && (
+            <p className="paper-authors">{authorLine}</p>
+          )}
+          {journalLine && (
+            <p className="paper-journal">{journalLine}</p>
+          )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="paper-actions">
           {paper.url && (
-            <a href={paper.url} target="_blank" rel="noopener noreferrer">
-              <ExternalLink size={18} />
+            <a
+              href={paper.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="paper-action-button"
+              aria-label="Open paper in a new tab"
+              title={paper.url}
+            >
+              <ExternalLink size={16} />
             </a>
           )}
           {onRemove && (
             <button
+              type="button"
               onClick={() => onRemove(paper)}
-              className="text-muted hover:text-error transition-colors"
-              aria-label="Remove paper"
+              className="paper-action-button paper-action-button--remove"
+              aria-label="Remove paper from workspace"
             >
-              <X size={18} />
+              <X size={16} />
             </button>
           )}
         </div>
       </div>
-      {/* rest of the card */}
+
+      {hasAbstract && (
+        <div
+          className={`paper-abstract ${
+            showTruncation ? 'paper-abstract--truncated' : ''
+          }`}
+        >
+          {paper.abstract}
+        </div>
+      )}
+
+      {showPartialMarker && thin && (
+        <div className="paper-thin-warning">
+          <AlertTriangle size={14} />
+          <span>
+            CrossRef returned only the title for this DOI. The
+            paper will not have authors or an abstract, so
+            summarisation and comparison may be thin.
+          </span>
+        </div>
+      )}
+
+      <div className="paper-identifiers">
+        {hasDoi(paper) && (
+          <a
+            className="paper-identifier paper-identifier--doi"
+            href={`https://doi.org/${paper.doi}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={paper.doi ?? ''}
+          >
+            DOI: {paper.doi}
+          </a>
+        )}
+        {paper.pmid && (
+          <a
+            className="paper-identifier paper-identifier--pmid"
+            href={`https://pubmed.ncbi.nlm.nih.gov/${paper.pmid}/`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={paper.pmid}
+          >
+            PMID: {paper.pmid}
+          </a>
+        )}
+      </div>
+
+      {truncateAbstract && hasAbstract && paper.abstract && paper.abstract.length > 200 && (
+        <button
+          type="button"
+          className="paper-abstract-toggle"
+          onClick={() => setExpanded((prev) => !prev)}
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
     </div>
   );
 };
