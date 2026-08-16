@@ -5,15 +5,16 @@
 //
 // These tests run in jsdom. They mock the ``api`` client so
 // the network calls don't hit the real backend, and they
-// exercise the user-visible behaviour: bulk paste, manual
-// entry, PDF drop, error handling, and the per-tab rendering.
+// exercise the user-visible behaviour: bulk DOI paste, PDF
+// drag-and-drop, title-fallback after a no-identifier upload,
+// and per-tab rendering.
 //
 // We can't run the full Workspace tree here because it pulls in
 // every route. The panel is exercised in isolation, which is
 // the right granularity for these tests.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AddPapersPanel } from './AddPapersPanel';
 
@@ -42,7 +43,7 @@ vi.mock('../api/client', () => ({
   },
 }));
 
-import { api, APIError } from '../api/client';
+import { api, APIError as MockAPIError } from '../api/client';
 
 const mockApi = api as unknown as {
   resolvePapers: ReturnType<typeof vi.fn>;
@@ -65,7 +66,6 @@ vi.mock('../state/workspaceStore', () => ({
   },
 }));
 
-// Mock the toast store so we don't need a ToastProvider.
 // Mock the toast store so we don't need a ToastProvider.
 // We import the mocked module after the mock is hoisted so
 // the spy is stable across tests.
@@ -92,24 +92,25 @@ describe('AddPapersPanel', () => {
   });
 
   describe('rendering', () => {
-    it('renders the three tabs (PMID/DOI, Manual, PDF)', () => {
+    it('renders the two tabs (DOI, PDF)', () => {
       render(
         <AddPapersPanel workspaceId="ws-1" enabled={true} />,
       );
-      expect(screen.getByRole('tab', { name: /PMID \/ DOI/i }))
-        .toBeInTheDocument();
-      expect(screen.getByRole('tab', { name: /Manual/i }))
+      expect(screen.getByRole('tab', { name: /^DOI$/i }))
         .toBeInTheDocument();
       expect(screen.getByRole('tab', { name: /PDF/i }))
         .toBeInTheDocument();
+      // The Manual tab is gone — the panel exposes DOI + PDF only.
+      expect(screen.queryByRole('tab', { name: /Manual/i }))
+        .not.toBeInTheDocument();
     });
 
-    it('the PMID/DOI tab is the default', () => {
+    it('the DOI tab is the default', () => {
       render(
         <AddPapersPanel workspaceId="ws-1" enabled={true} />,
       );
-      const identifierTab = screen.getByRole('tab', { name: /PMID \/ DOI/i });
-      expect(identifierTab)
+      const doiTab = screen.getByRole('tab', { name: /^DOI$/i });
+      expect(doiTab)
         .toHaveAttribute('aria-selected', 'true');
     });
 
@@ -141,16 +142,16 @@ describe('AddPapersPanel', () => {
     });
   });
 
-  describe('PMID/DOI bulk tab', () => {
+  describe('DOI bulk tab', () => {
     it('shows the textarea and Resolve button', () => {
       render(
         <AddPapersPanel workspaceId="ws-1" enabled={true} />,
       );
       expect(
-        screen.getByLabelText(/PMID or DOI list/i),
+        screen.getByLabelText(/DOI list/i),
       ).toBeInTheDocument();
       expect(
-        screen.getByRole('button', { name: /Resolve identifiers/i }),
+        screen.getByRole('button', { name: /Resolve DOIs/i }),
       ).toBeInTheDocument();
     });
 
@@ -158,7 +159,7 @@ describe('AddPapersPanel', () => {
       render(
         <AddPapersPanel workspaceId="ws-1" enabled={true} />,
       );
-      const button = screen.getByRole('button', { name: /Resolve identifiers/i });
+      const button = screen.getByRole('button', { name: /Resolve DOIs/i });
       expect(button).toBeDisabled();
     });
 
@@ -174,19 +175,19 @@ describe('AddPapersPanel', () => {
         <AddPapersPanel workspaceId="ws-1" enabled={true} />,
       );
 
-      const textarea = screen.getByLabelText(/PMID or DOI list/i);
-      await user.type(textarea, '40000001\n10.1038/nature12373\nnot-an-id');
+      const textarea = screen.getByLabelText(/DOI list/i);
+      await user.type(textarea, '10.1038/nature12373\n10.1126/science.1566067\nbogus-doi');
 
-      const button = screen.getByRole('button', { name: /Resolve identifiers/i });
+      const button = screen.getByRole('button', { name: /Resolve DOIs/i });
       await user.click(button);
 
       expect(mockApi.resolvePapers).toHaveBeenCalledWith(
         'ws-1',
-        ['40000001', '10.1038/nature12373', 'not-an-id'],
+        ['10.1038/nature12373', '10.1126/science.1566067', 'bogus-doi'],
       );
     });
 
-    it('parses comma-separated identifiers on a single line', async () => {
+    it('parses comma-separated DOIs on a single line', async () => {
       const user = userEvent.setup();
       mockApi.resolvePapers.mockResolvedValue({
         results: [],
@@ -198,16 +199,16 @@ describe('AddPapersPanel', () => {
         <AddPapersPanel workspaceId="ws-1" enabled={true} />,
       );
 
-      const textarea = screen.getByLabelText(/PMID or DOI list/i);
-      await user.type(textarea, '40000001, 40000002, 40000003');
+      const textarea = screen.getByLabelText(/DOI list/i);
+      await user.type(textarea, '10.1038/a, 10.1038/b, 10.1038/c');
 
       await user.click(
-        screen.getByRole('button', { name: /Resolve identifiers/i }),
+        screen.getByRole('button', { name: /Resolve DOIs/i }),
       );
 
       expect(mockApi.resolvePapers).toHaveBeenCalledWith(
         'ws-1',
-        ['40000001', '40000002', '40000003'],
+        ['10.1038/a', '10.1038/b', '10.1038/c'],
       );
     });
 
@@ -217,16 +218,16 @@ describe('AddPapersPanel', () => {
         results: [
           {
             resolved: {
-              identifier: '40000001',
-              identifier_type: 'pmid',
+              identifier: '10.1038/nature12373',
+              identifier_type: 'doi',
               paper: {
                 title: 'A real paper.',
                 authors: [],
                 journal: null,
                 year: null,
                 abstract: '',
-                doi: null,
-                pmid: '40000001',
+                doi: '10.1038/nature12373',
+                pmid: null,
                 keywords: [],
                 url: null,
               },
@@ -236,8 +237,8 @@ describe('AddPapersPanel', () => {
           {
             resolved: null,
             failed: {
-              identifier: '99999999',
-              reason: 'PubMed returned no record',
+              identifier: '10.9999/bogus',
+              reason: 'CrossRef returned no record',
             },
           },
         ],
@@ -250,11 +251,11 @@ describe('AddPapersPanel', () => {
       );
 
       await user.type(
-        screen.getByLabelText(/PMID or DOI list/i),
-        '40000001\n99999999',
+        screen.getByLabelText(/DOI list/i),
+        '10.1038/nature12373\n10.9999/bogus',
       );
       await user.click(
-        screen.getByRole('button', { name: /Resolve identifiers/i }),
+        screen.getByRole('button', { name: /Resolve DOIs/i }),
       );
 
       await waitFor(() => {
@@ -262,10 +263,10 @@ describe('AddPapersPanel', () => {
         expect(screen.getByText('1 failed')).toBeInTheDocument();
       });
 
-      expect(screen.getByText('40000001')).toBeInTheDocument();
-      expect(screen.getByText('99999999')).toBeInTheDocument();
+      expect(screen.getByText('10.1038/nature12373')).toBeInTheDocument();
+      expect(screen.getByText('10.9999/bogus')).toBeInTheDocument();
       expect(screen.getByText('A real paper.')).toBeInTheDocument();
-      expect(screen.getByText('PubMed returned no record'))
+      expect(screen.getByText('CrossRef returned no record'))
         .toBeInTheDocument();
     });
 
@@ -277,8 +278,8 @@ describe('AddPapersPanel', () => {
         journal: null,
         year: null,
         abstract: '',
-        doi: null,
-        pmid: '40000001',
+        doi: '10.1038/nature12373',
+        pmid: null,
         keywords: [],
         url: null,
       };
@@ -286,8 +287,8 @@ describe('AddPapersPanel', () => {
         results: [
           {
             resolved: {
-              identifier: '40000001',
-              identifier_type: 'pmid',
+              identifier: '10.1038/nature12373',
+              identifier_type: 'doi',
               paper: resolvedPaper,
             },
             failed: null,
@@ -306,11 +307,11 @@ describe('AddPapersPanel', () => {
       );
 
       await user.type(
-        screen.getByLabelText(/PMID or DOI list/i),
-        '40000001',
+        screen.getByLabelText(/DOI list/i),
+        '10.1038/nature12373',
       );
       await user.click(
-        screen.getByRole('button', { name: /Resolve identifiers/i }),
+        screen.getByRole('button', { name: /Resolve DOIs/i }),
       );
 
       await waitFor(() => {
@@ -330,93 +331,22 @@ describe('AddPapersPanel', () => {
 
     it('surfaces a toast error when the resolver fails', async () => {
       const user = userEvent.setup();
-mockApi.resolvePapers.mockRejectedValue(new Error('Network error'));
+      mockApi.resolvePapers.mockRejectedValue(new Error('Network error'));
 
       render(
         <AddPapersPanel workspaceId="ws-1" enabled={true} />,
       );
 
       await user.type(
-        screen.getByLabelText(/PMID or DOI list/i),
-        '40000001',
+        screen.getByLabelText(/DOI list/i),
+        '10.1038/nature12373',
       );
       await user.click(
-        screen.getByRole('button', { name: /Resolve identifiers/i }),
+        screen.getByRole('button', { name: /Resolve DOIs/i }),
       );
 
       await waitFor(() => {
         expect(toast.error).toHaveBeenCalledWith('Network error');
-      });
-    });
-  });
-
-  describe('Manual tab', () => {
-    it('opens the form on click and validates the title field', async () => {
-      const user = userEvent.setup();
-      render(
-        <AddPapersPanel workspaceId="ws-1" enabled={true} />,
-      );
-
-      await user.click(screen.getByRole('tab', { name: /Manual/i }));
-
-      const toggle = screen.getByRole('button', { name: /Open the manual entry form/i });
-      await user.click(toggle);
-
-      const titleInput = screen.getByLabelText(/Title \*/i);
-      expect(titleInput).toBeInTheDocument();
-      expect(titleInput).toBeRequired();
-    });
-
-    it('shows a toast error when the user submits with an empty title', async () => {
-      // The HTML5 ``required`` attribute blocks the browser's
-      // native form submission, but a JS-driven submit (or a
-      // user who pastes a value and then clears it) still hits
-      // the JS handler. The handler shows a friendly toast
-      // explaining what's wrong.
-render(
-        <AddPapersPanel workspaceId="ws-1" enabled={true} />,
-      );
-
-      // Switch to the manual tab and open the form.
-      const user = userEvent.setup();
-      await user.click(screen.getByRole('tab', { name: /Manual/i }));
-      await user.click(
-        screen.getByRole('button', { name: /Open the manual entry form/i }),
-      );
-
-      // Submit the form. The handler runs even with an empty
-      // title because the JS path doesn't see the HTML5 rejected
-      // submit event.
-      const form = screen.getByRole('button', { name: /^Add paper$/i }).closest('form');
-      if (form) {
-        fireEvent.submit(form);
-      }
-
-      expect(toast.error).toHaveBeenCalledWith('Title is required.');
-      expect(mockApi.addPaper).not.toHaveBeenCalled();
-    });
-
-    it('calls api.addPaper when the form is submitted with a title', async () => {
-      const user = userEvent.setup();
-      mockApi.addPaper.mockResolvedValue({
-        workspace_id: 'ws-1',
-        papers: [{ title: 'My paper', pmid: null, doi: null }],
-      });
-
-      render(
-        <AddPapersPanel workspaceId="ws-1" enabled={true} />,
-      );
-
-      await user.click(screen.getByRole('tab', { name: /Manual/i }));
-      await user.click(
-        screen.getByRole('button', { name: /Open the manual entry form/i }),
-      );
-
-      await user.type(screen.getByLabelText(/Title \*/i), 'My paper');
-      await user.click(screen.getByRole('button', { name: /^Add paper$/i }));
-
-      await waitFor(() => {
-        expect(mockApi.addPaper).toHaveBeenCalled();
       });
     });
   });
@@ -447,11 +377,11 @@ render(
       // ``fireEvent.change`` with a manually constructed
       // DataTransfer so the panel's onChange handler fires
       // exactly as it would in a real browser.
-render(
+      const user = userEvent.setup();
+      render(
         <AddPapersPanel workspaceId="ws-1" enabled={true} />,
       );
 
-      const user = userEvent.setup();
       await user.click(screen.getByRole('tab', { name: /PDF/i }));
 
       const fileInput = screen.getByLabelText(/Drop a PDF here/i)
@@ -466,14 +396,9 @@ render(
       fireEvent.change(fileInput);
 
       await waitFor(() => {
-        expect(
-          screen.getByText(/Only PDF files are accepted/i),
-        ).toBeInTheDocument();
+        const errorEls = document.querySelectorAll('.add-papers-pdf-status--error');
+        expect(errorEls.length).toBeGreaterThan(0);
       });
-      // The inline error chip is the user-facing feedback for
-      // a wrong file type. The toast spam would be noisy for
-      // what is essentially a validation error.
-      expect(toast.error).not.toHaveBeenCalled();
       expect(mockApi.uploadPdf).not.toHaveBeenCalled();
     });
 
@@ -554,37 +479,29 @@ render(
   // PubMed ESearch and resolves the title to a real paper.
 
   describe('PDF tab > title-fallback flow', () => {
-    // Re-use the APIError the test module imported at the top.
-    // The mock module returns a class with the same shape as the
-    // real one, so ``instanceof`` checks in the panel behave
-    // correctly.
-    const ApiError = APIError as unknown as new (
-      status: number,
-      detail: unknown,
-      message: string,
-    ) => Error & { status: number; detail: unknown };
+    // Build real ``APIError`` instances so the panel's
+    // ``instanceof`` check works. We use the mocked class so
+    // ``err instanceof APIError`` succeeds when the panel
+    // inspects the rejection.
+    const noIdError = new MockAPIError(
+      422,
+      {
+        error: 'no_identifiers_found',
+        message:
+          "The PDF didn't contain a recognisable DOI or PMID on the first page.",
+      },
+      'API error 422: {"error":"no_identifiers_found",...}',
+    );
 
-    const noIdError = () =>
-      new ApiError(
-        422,
-        {
-          error: 'no_identifiers_found',
-          message:
-            "The PDF didn't contain a recognisable DOI or PMID on the first page.",
-        },
-        'API error 422: {"error":"no_identifiers_found",...}',
-      );
-
-    const titleMismatchError = () =>
-      new ApiError(
-        422,
-        {
-          error: 'title_no_confident_match',
-          message:
-            'PubMed returned no paper that matched the supplied title.',
-        },
-        'API error 422: {"error":"title_no_confident_match",...}',
-      );
+    const titleMismatchError = new MockAPIError(
+      422,
+      {
+        error: 'title_no_confident_match',
+        message:
+          'PubMed returned no paper that matched the supplied title.',
+      },
+      'API error 422: {"error":"title_no_confident_match",...}',
+    );
 
     /** Helper: switch to the PDF tab and grab the file input. */
     async function goToPdfTabAndGetFileInput(user: ReturnType<
@@ -615,7 +532,7 @@ render(
 
     it('shows the fallback form when uploadPdf returns no_identifiers_found', async () => {
       const user = userEvent.setup();
-      mockApi.uploadPdf.mockRejectedValue(noIdError());
+      mockApi.uploadPdf.mockRejectedValue(noIdError);
       render(<AddPapersPanel workspaceId="ws-1" enabled={true} />);
 
       const fileInput = await goToPdfTabAndGetFileInput(user);
@@ -652,7 +569,7 @@ render(
 
     it('calls addPaperByTitle with the typed title when the user submits', async () => {
       const user = userEvent.setup();
-      mockApi.uploadPdf.mockRejectedValue(noIdError());
+      mockApi.uploadPdf.mockRejectedValue(noIdError);
       mockApi.addPaperByTitle.mockResolvedValue({
         workspace_id: 'ws-1',
         papers: [
@@ -711,7 +628,7 @@ render(
 
     it('passes disambiguation hints through to addPaperByTitle', async () => {
       const user = userEvent.setup();
-      mockApi.uploadPdf.mockRejectedValue(noIdError());
+      mockApi.uploadPdf.mockRejectedValue(noIdError);
       mockApi.addPaperByTitle.mockResolvedValue({
         workspace_id: 'ws-1',
         papers: [
@@ -775,7 +692,7 @@ render(
 
     it('rejects an out-of-range year before hitting the API', async () => {
       const user = userEvent.setup();
-      mockApi.uploadPdf.mockRejectedValue(noIdError());
+      mockApi.uploadPdf.mockRejectedValue(noIdError);
       mockApi.addPaperByTitle.mockResolvedValue({
         workspace_id: 'ws-1',
         papers: [],
@@ -821,7 +738,7 @@ render(
 
     it('closes the form on success and toasts the matched paper', async () => {
       const user = userEvent.setup();
-      mockApi.uploadPdf.mockRejectedValue(noIdError());
+      mockApi.uploadPdf.mockRejectedValue(noIdError);
       mockApi.addPaperByTitle.mockResolvedValue({
         workspace_id: 'ws-1',
         papers: [
@@ -878,8 +795,8 @@ render(
 
     it('surfaces title_no_confident_match as an inline error', async () => {
       const user = userEvent.setup();
-      mockApi.uploadPdf.mockRejectedValue(noIdError());
-      mockApi.addPaperByTitle.mockRejectedValue(titleMismatchError());
+      mockApi.uploadPdf.mockRejectedValue(noIdError);
+      mockApi.addPaperByTitle.mockRejectedValue(titleMismatchError);
 
       render(<AddPapersPanel workspaceId="ws-1" enabled={true} />);
 
@@ -930,7 +847,7 @@ render(
 
     it('dismisses the fallback form via the X button', async () => {
       const user = userEvent.setup();
-      mockApi.uploadPdf.mockRejectedValue(noIdError());
+      mockApi.uploadPdf.mockRejectedValue(noIdError);
 
       render(<AddPapersPanel workspaceId="ws-1" enabled={true} />);
 
@@ -970,11 +887,11 @@ render(
       // the inline error chip + toast — the recovery path is
       // reserved for ``no_identifiers_found`` only.
       const user = userEvent.setup();
-      const genericError = new APIError(
+      const genericError = new MockAPIError(
         422,
         { error: 'pdf_read_failed', message: 'PDF was unreadable' },
         'API error 422',
-      ) as Error & { status: number; detail: unknown };
+      );
       mockApi.uploadPdf.mockRejectedValue(genericError);
 
       render(<AddPapersPanel workspaceId="ws-1" enabled={true} />);
@@ -1004,7 +921,7 @@ render(
       // session is cleared so the new state is clean.
       const user = userEvent.setup();
       mockApi.uploadPdf
-        .mockRejectedValueOnce(noIdError())
+        .mockRejectedValueOnce(noIdError)
         .mockResolvedValueOnce({
           workspace_id: 'ws-1',
           papers: [
@@ -1057,8 +974,3 @@ render(
     });
   });
 });
-
-// We need ``fireEvent`` for the empty-title test that doesn't go
-// through a real click. Importing it here keeps the test file
-// self-contained.
-import { fireEvent } from '@testing-library/react';
