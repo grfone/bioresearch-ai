@@ -54,6 +54,7 @@ Guillermo Ramajo Fernández
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from fastapi import (
@@ -107,12 +108,17 @@ from app.infrastructure.pubmed.identifier_resolver import (
 from app.infrastructure.pubmed.pdf_extractor import (
     extract_identifiers_from_pdf,
 )
+from app.infrastructure.pubmed.pdf_structured_extractor import (
+    extract_paper_from_pdf as extract_structured_paper_from_pdf,
+)
 
 
 router = APIRouter(
     prefix="/workspaces",
     tags=["Workspace Actions"],
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------
@@ -742,39 +748,80 @@ async def add_paper_from_pdf(
     resolved_papers = [
         result.paper.paper for result in results if result.is_success
     ]
+
     if not resolved_papers:
-        # Surface every failure so the user can see which
-        # identifier broke.
-        failed = [
-            {
-                "identifier": result.failure.identifier,
-                "reason": result.failure.reason,
-            }
-            for result in results
-            if result.failure is not None
-        ]
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "error": "all_identifiers_failed",
-                "message": (
-                    "Found identifiers in the PDF but none of "
-                    "them resolved via PubMed or CrossRef."
-                ),
-                "extracted": extraction.identifiers,
-                "failures": failed,
-            },
+        # External lookup failed for every identifier. The user
+        # uploaded the PDF for a reason — they want the paper
+        # in the workspace. Fall back to structured extraction
+        # from the PDF text itself. The :class:`PaperCard`
+        # component renders a partial-metadata marker for thin
+        # papers so the user knows what they're getting.
+        structured = extract_structured_paper_from_pdf(
+            io.BytesIO(raw),
+            max_pages=1,
         )
+        if structured is None or not structured.paper.title.strip():
+            # Surface every failure so the user can see which
+            # identifier broke AND why the structured fallback
+            # didn't yield a title.
+            failed = [
+                {
+                    "identifier": result.failure.identifier,
+                    "reason": result.failure.reason,
+                }
+                for result in results
+                if result.failure is not None
+            ]
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "all_identifiers_failed",
+                    "message": (
+                        "Found identifiers in the PDF but none of "
+                        "them resolved via PubMed or CrossRef, and "
+                        "the PDF text didn't contain a recognisable "
+                        "title for fallback extraction."
+                    ),
+                    "extracted": extraction.identifiers,
+                    "failures": failed,
+                    "extracted_text_preview": (
+                        extraction.pdf_text[:500]
+                        if not structured
+                        else ""
+                    ),
+                },
+            )
+        # Use the structured paper as the fallback. We surface
+        # a header so the frontend can flag it as "no external
+        # metadata — partial data from the PDF".
+        papers_to_add = [structured.paper]
+        pdf_fallback_used = True
+    else:
+        papers_to_add = resolved_papers
+        pdf_fallback_used = False
 
     # Add to workspace via the bulk path. The orchestrator
     # dedupes by PMID/DOI, so uploading the same PDF twice is a
     # no-op.
     try:
         workspace = orchestrator.add_papers_bulk(
-            workspace_id, resolved_papers,
+            workspace_id, papers_to_add,
         )
     except IllegalWorkspaceActionError as exc:
         raise _illegal_action_response(exc) from exc
+
+    if pdf_fallback_used:
+        # Tell the caller the paper was added from PDF text
+        # only, with no external metadata. The PaperCard's
+        # partial-metadata marker will surface this visually.
+        logger.info(
+            "PDF upload for workspace %s fell back to "
+            "structured extraction (no CrossRef/PubMed match); "
+            "added paper title=%r doi=%r",
+            workspace_id,
+            papers_to_add[0].title,
+            papers_to_add[0].doi,
+        )
 
     return _to_response(workspace)
 
