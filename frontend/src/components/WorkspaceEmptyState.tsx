@@ -83,12 +83,12 @@ export const WorkspaceEmptyState: React.FC<WorkspaceEmptyStateProps> = ({
       <ChoiceCard
         icon={<Hash size={20} />}
         title="I have specific papers"
-        body="Paste PMIDs or DOIs from a colleague's email, grant
-              reference list, or your Zotero library. Bulk paste works
-              — one per line, mixed formats OK."
+        body="Paste DOIs from a colleague's email, grant reference
+              list, or your Zotero library. Bulk paste works — one per
+              line, comma-separated is also OK."
         hint={
           <>
-            Auto-fetches full metadata from PubMed or CrossRef. Press{' '}
+            Auto-fetches full metadata from CrossRef. Press{' '}
             <kbd>{shortcutHint}</kbd> from anywhere to focus this input.
           </>
         }
@@ -108,9 +108,9 @@ export const WorkspaceEmptyState: React.FC<WorkspaceEmptyStateProps> = ({
         icon={<FileUp size={20} />}
         title="I have PDFs on my machine"
         body="Drop one or more PDFs and we'll extract the DOI from
-              the first page, fetch the rest of the metadata, and
-              let you fix the gaps inline."
-        hint="Coming soon — for now, paste a DOI instead."
+              the first page. If the PDF has no DOI a title-search
+              form lets you resolve it through PubMed."
+        hint="Scanned PDFs fall back to a free-text title search."
         onClick={onChoosePdf}
       />
     </div>
