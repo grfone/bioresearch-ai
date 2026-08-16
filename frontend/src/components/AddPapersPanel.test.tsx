@@ -140,6 +140,25 @@ describe('AddPapersPanel', () => {
       const kbd = document.querySelector('.add-papers-shortcut-hint kbd');
       expect(kbd?.textContent).toBe('⌘K');
     });
+
+    it('DOI textarea placeholder shows both valid DOI forms (no bad prefix examples)', () => {
+      render(
+        <AddPapersPanel workspaceId="ws-1" enabled={true} />,
+      );
+      const textarea = screen.getByLabelText(/DOI list/i);
+      const placeholder = textarea.getAttribute('placeholder') ?? '';
+      // Bare DOI form
+      expect(placeholder).toMatch(/10\.1038\/s41591-023-02505-2/);
+      // Full https://doi.org/... form
+      expect(placeholder).toMatch(
+        /https:\/\/doi\.org\/10\.1038\/s41591-023-02505-2/,
+      );
+      // Neither the bad "di:" nor the old "doi:" prefix should
+      // appear in the placeholder — researchers have to type
+      // the bare DOI or paste the full https://doi.org/... URL.
+      expect(placeholder).not.toMatch(/^\s*di:/im);
+      expect(placeholder).not.toMatch(/^\s*doi:/im);
+    });
   });
 
   describe('DOI bulk tab', () => {

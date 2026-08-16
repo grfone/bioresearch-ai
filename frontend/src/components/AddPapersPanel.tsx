@@ -383,7 +383,7 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
             className="add-papers-bulk-input"
             rows={5}
             ref={bulkInputRef}
-            placeholder={'10.1038/s41593-025-00001-1\ndi:10.1126/science.1566067'}
+            placeholder={'10.1038/s41591-023-02505-2\nhttps://doi.org/10.1038/s41591-023-02505-2'}
             value={bulkText}
             onChange={(e) => setBulkText(e.target.value)}
             aria-label="DOI list"
