@@ -12,6 +12,54 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Added
 
+* **Two-tab paper entry surface.** The ``AddPapersPanel`` now
+  exposes only DOI bulk-paste and PDF drag-and-drop. The
+  previous "Manual" tab was removed — researchers don't
+  manually fill every field; they paste DOIs or drop PDFs. The
+  bulk input accepts DOIs only; PMIDs are still accepted on
+  the backend (PDF extraction can surface one) but the
+  user-visible entry surface is DOI-first.
+* **PaperCard and PaperList.** The card / list components
+  were stubs (61 / 44 lines of incomplete logic). They now
+  render real paper metadata: title, authors (truncated to
+  "et al." after three), journal + year, abstract (truncated
+  to 3 lines with a "Show more" toggle), DOI / PMID identifier
+  badges each linking to their canonical resolver, and an
+  external-link icon to ``paper.url``.
+* **Partial-metadata marker.** Papers with thin metadata
+  (no authors AND no abstract — the typical CrossRef fallback
+  when the DOI resolves but the publisher doesn't expose the
+  full record) get an amber asterisk (``*``) next to the
+  title and a warning banner below the metadata. The
+  ``isThinPaper(paper)`` helper centralises the predicate and
+  is unit-tested. Callers can disable the marker via the
+  ``showPartialMarker`` prop.
+
+### Removed
+
+* **AddPapersPanel — "Manual" tab.** Replaced by the DOI +
+  PDF two-tab layout. The form had a slow "fill every field"
+  workflow that real researchers almost never do.
+* **AddPapersPanel — "PMID / DOI" tab label.** Now "DOI"
+  (single label, single identifier type, single icon).
+* **"PDF parsing is on the roadmap" toast.** The PDF tab is
+  real now, so the "PDF" card in the empty-state workflow
+  picker drops a file instead of showing the placeholder.
+
+### Changed
+
+* **Workspace.tsx — identifier naming.** ``identifierInputRef``
+  / ``focusIdentifierInput`` are now ``doiInputRef`` /
+  ``focusDoiInput`` for clarity (the input is DOI-only).
+  Comments referencing PMID are updated.
+
+### Fixed
+
+* **CSS dead-code cleanup.** Removed unused
+  ``.add-papers-manual-toggle`` / ``.add-papers-manual-form`` /
+  ``.add-papers-manual-actions`` / ``.add-papers-row`` rules
+  (the JSX that used them was deleted).
+
 * **Title-driven paper recovery.**
   ``POST /workspaces/{id}/papers/from-title`` accepts a free-text
   title (plus optional first-author / journal / year hints) and
