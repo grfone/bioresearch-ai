@@ -58,6 +58,43 @@ export interface ResolvePapersResponse {
 }
 
 /**
+ * Advanced Search filter bundle.
+ *
+ * Mirrors the backend ``AdvancedSearchFilters`` Pydantic model.
+ * All fields are optional — the orchestrator's defaults apply
+ * when a field is omitted.
+ */
+export interface AdvancedSearchFilters {
+  /** Inclusive lower bound on publication year. */
+  since_year?: number | null;
+  /** Inclusive upper bound on publication year. */
+  until_year?: number | null;
+  /** Maximum number of results to return. 1-200. */
+  max_results?: number;
+  /** Result ordering: "relevance" or "newest_first". */
+  sort_by?: 'relevance' | 'newest_first';
+  /** Hint to providers that strip abstracts by default. */
+  include_abstracts?: boolean;
+  /** Only return papers with a public PDF. */
+  open_access_only?: boolean;
+  /** Document-type filter. Empty array = no filter. */
+  document_types?: AdvancedSearchDocumentType[];
+  /** Restricted source set. Empty array = use defaults. */
+  sources?: AdvancedSearchSource[];
+}
+
+export type AdvancedSearchDocumentType =
+  | 'journal-article'
+  | 'review'
+  | 'preprint'
+  | 'dataset'
+  | 'conference-paper'
+  | 'book-chapter'
+  | 'thesis';
+
+export type AdvancedSearchSource = 'pubmed' | 'openalex' | 'europe_pmc' | 'biorxiv';
+
+/**
  * Request payload for literature search.
  */
 export interface SearchRequest {
@@ -259,16 +296,35 @@ export const api = {
 
   /**
    * Run the SEARCH action on a workspace.
+   *
+   * Two shapes are accepted by the backend:
+   * - Legacy: just ``query`` — runs against the default
+   *   source set (PubMed + OpenAlex + Europe PMC).
+   * - Advanced: ``query`` + ``filters`` — runs against the
+   *   filter-restricted source set, year bounds, sort order,
+   *   etc.
+   *
+   * When ``filters`` is provided, the backend dispatches
+   * through ``WorkspaceOrchestrator.search_with_filters``;
+   * otherwise it falls through to the legacy
+   * ``search(query)`` method.
    */
   runSearchAction: (
     workspaceId: string,
-    query?: string,
+    query?: string | null,
+    filters?: AdvancedSearchFilters | null,
   ): Promise<WorkspaceResponse> => {
+    const body: Record<string, unknown> = {
+      query: query ?? null,
+    };
+    if (filters) {
+      body.filters = filters;
+    }
     return fetchJson(
       buildUrl(`/workspaces/${workspaceId}/actions/search`),
       {
         method: 'POST',
-        body: JSON.stringify({ query: query ?? null }),
+        body: JSON.stringify(body),
       },
     );
   },

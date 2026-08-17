@@ -32,6 +32,7 @@ import { useWorkspace } from '../hooks/useWorkspace';
 import { LiteratureSearch } from '../components/LiteratureSearch';
 import { PaperList } from '../components/PaperList';
 import { AddPapersPanel } from '../components/AddPapersPanel';
+import { AdvancedSearchModal } from '../components/AdvancedSearchModal';
 import { WorkspaceEmptyState } from '../components/WorkspaceEmptyState';
 import { WorkspaceStatusBar } from '../components/WorkspaceStatusBar';
 import { EvidenceComparisonPanel } from '../components/EvidenceComparisonPanel';
@@ -152,6 +153,13 @@ export const Workspace: React.FC = () => {
       setShowProcessingActions(true);
     }
   }, [workspace?.total_papers, showProcessingActions, workspace]);
+
+  // The Advanced Search modal opens when the user clicks
+  // "Search PubMed" in the action bar. The modal's primary
+  // CTA posts the filter bundle to the same backend endpoint
+  // — when ``filters`` is supplied, the route dispatches
+  // through ``WorkspaceOrchestrator.search_with_filters``.
+  const [advancedSearchOpen, setAdvancedSearchOpen] = useState(false);
 
   // Refs into the entry surfaces so the empty-state cards can
   // scroll the relevant one into view on click.
@@ -293,12 +301,12 @@ export const Workspace: React.FC = () => {
           <span className="lab-bench-action-bar-primary-label">Retrieve</span>
           <button
             className="btn btn-primary"
-            onClick={() => handleRunAction('search', 'PubMed search')}
+            onClick={() => setAdvancedSearchOpen(true)}
             disabled={!can('search')}
             data-action="search"
             title={
               can('search')
-                ? 'Run a new PubMed search for this workspace'
+                ? 'Open the Advanced Search modal to pick sources, year range, and filters'
                 : 'Search is not allowed in the current state'
             }
           >
@@ -449,6 +457,20 @@ export const Workspace: React.FC = () => {
           />
         </div>
       </div>
+
+      {/* Advanced Search modal — opens from the "Search
+          PubMed" button. The modal's primary CTA calls
+          ``api.runSearchAction`` with the chosen filter
+          bundle; when filters are non-default, the backend
+          dispatches through
+          ``WorkspaceOrchestrator.search_with_filters`` for
+          multi-source fan-out. */}
+      <AdvancedSearchModal
+        workspaceId={currentWorkspace.workspace_id}
+        workspaceQuestion={currentWorkspace.question}
+        isOpen={advancedSearchOpen}
+        onClose={() => setAdvancedSearchOpen(false)}
+      />
     </div>
   );
 };

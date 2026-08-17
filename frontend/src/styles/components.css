@@ -4038,6 +4038,204 @@ Includes
 
 
 /*=============================================================================
+    Advanced Search Modal
+=============================================================================*/
+
+.advanced-search-modal {
+    max-width: 720px;
+    width: min(720px, 92vw);
+    max-height: 88vh;
+    overflow-y: auto;
+    padding: var(--space-6);
+}
+
+.advanced-search-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-4);
+    margin-bottom: var(--space-5);
+}
+
+.advanced-search-modal-subtitle {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    margin-top: var(--space-2);
+    max-width: 560px;
+}
+
+.advanced-search-modal-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-bottom: var(--space-4);
+}
+
+.advanced-search-modal-label {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.advanced-search-modal-hint {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.advanced-search-modal-hint em {
+    color: var(--color-text-primary);
+    font-style: normal;
+    font-weight: var(--font-weight-medium);
+}
+
+.advanced-search-modal-sources {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: var(--space-2);
+}
+
+.advanced-search-modal-source {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-medium);
+    background: transparent;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+    user-select: none;
+}
+
+.advanced-search-modal-source.is-active {
+    background: rgba(96, 165, 250, 0.10);
+    border-color: var(--color-accent, #60a5fa);
+}
+
+.advanced-search-modal-source.is-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.advanced-search-modal-source input[type='checkbox'] {
+    margin: 0;
+}
+
+.advanced-search-modal-source-label {
+    font-weight: var(--font-weight-medium);
+}
+
+.advanced-search-modal-source-locked {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.advanced-search-modal-year-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.advanced-search-modal-year-row .select {
+    flex: 1;
+}
+
+.advanced-search-modal-year-sep {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+}
+
+.advanced-search-modal-sort-row {
+    display: flex;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+}
+
+.advanced-search-modal-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border-default);
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: var(--font-size-sm);
+    user-select: none;
+}
+
+.advanced-search-modal-pill input[type='radio'] {
+    margin: 0;
+}
+
+.advanced-search-modal-pill.is-active {
+    background: rgba(96, 165, 250, 0.10);
+    border-color: var(--color-accent, #60a5fa);
+}
+
+.advanced-search-modal-max-results {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.advanced-search-modal-num {
+    width: 90px;
+}
+
+.advanced-search-modal-doctypes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.advanced-search-modal-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border: 1px solid var(--color-border-default);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+}
+
+.advanced-search-modal-chip:hover {
+    border-color: var(--color-text-secondary);
+}
+
+.advanced-search-modal-chip.is-active {
+    background: rgba(96, 165, 250, 0.10);
+    border-color: var(--color-accent, #60a5fa);
+    color: var(--color-text-primary);
+}
+
+.advanced-search-modal-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+    user-select: none;
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+}
+
+.advanced-search-modal-toggle input[type='checkbox'] {
+    margin: 0;
+}
+
+/*=============================================================================
     Scrollable Panel
 =============================================================================*/
 
