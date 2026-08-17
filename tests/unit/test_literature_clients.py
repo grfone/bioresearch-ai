@@ -251,6 +251,50 @@ class TestOpenAlexSearcher:
             "sort=publication_date" in first_url
         )
 
+    def test_search_strips_wildcards_from_query(self):
+        """Research questions often end with ``?`` — OpenAlex
+        interprets it as a wildcard character and 400s. We
+        strip wildcards from the query before passing it to
+        OpenAlex so the search succeeds. This is a
+        regression for the user-attached bioRxiv workspace
+        question (``'What is the amyloid cascade
+        hypothesis?'``), which silently returned zero
+        results.
+        """
+        import re as _re
+        from urllib.parse import unquote
+
+        transport = _MockTransport(
+            [httpx.Response(200, json={"results": []})]
+        )
+        http_client, mock = _client_with_mock(transport)
+        client = OpenAlexSearcher(client=http_client)
+        try:
+            client.search_with_filters(
+                SearchFilters(
+                    query="What is the amyloid cascade hypothesis?",
+                )
+            )
+        finally:
+            client.close()
+        assert mock._calls, "no HTTP call was made"
+        first_url = str(mock._calls[0].url)
+        # The trailing ``?`` would normally be URL-encoded as
+        # ``%3F`` in the search= param. After stripping, the
+        # cleaned query (with ``?`` replaced by space, then
+        # trimmed) should not contain ``?`` at all.
+        match = _re.search(r"search=([^&]*)", first_url)
+        assert match, "no search= param found"
+        decoded_search = unquote(match.group(1))
+        assert "?" not in decoded_search, (
+            f"OpenAlex will reject query with '?': {decoded_search!r}"
+        )
+        assert "*" not in decoded_search
+        # The non-wildcard content is preserved.
+        assert "amyloid" in decoded_search
+        assert "cascade" in decoded_search
+        assert "hypothesis" in decoded_search
+
     def test_get_by_id_returns_paper(self):
         record = _openalex_record(doi="10.1126/science.1566067")
         transport = _MockTransport([httpx.Response(200, json=record)])

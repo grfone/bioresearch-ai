@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 from urllib.parse import urlencode
 
@@ -264,11 +265,25 @@ def _build_query_params(
     preserves duplicate keys (``filter=…`` can appear
     multiple times for OR semantics).
     """
+    # Strip wildcards (``?``, ``*``) from the query so
+    # OpenAlex's stemmed search doesn't reject it as a
+    # wildcard-pattern request.
+    cleaned_query = re.sub(r"[?*]", " ", filters.query).strip()
     out: list[tuple[str, str]] = [
-        ("search", filters.query),
+        ("search", cleaned_query),
         ("per_page", str(filters.max_results)),
         ("select", _SELECT_FIELDS),
     ]
+    # OpenAlex's stemmed-search (``search=``) interprets
+    # ``?`` and ``*`` as wildcard characters and 400s unless
+    # we set ``search.exact=true``. Research questions often
+    # end with ``?`` ("What is the amyloid cascade
+    # hypothesis?"), so we strip wildcards from the query
+    # before passing it to OpenAlex. The resulting search is
+    # still stemmed, just without literal wildcard
+    # characters. This is a regression for the user's
+    # bioRxiv workspace question, which silently returned
+    # zero results because of this.
     # Year filter: single year or range.
     if filters.since_year is not None and filters.until_year is not None:
         if filters.since_year == filters.until_year:
