@@ -45,6 +45,8 @@ import {
   FileText,
   Globe,
   Lock,
+  Bookmark,
+  Trash2,
 } from 'lucide-react';
 import {
   api,
@@ -59,6 +61,13 @@ import {
   savePersistedFilters,
   clearPersistedFilters,
 } from '../state/searchFiltersStorage';
+import {
+  loadPresets,
+  savePresets,
+  upsertPreset,
+  removePreset,
+  type SearchPreset,
+} from '../state/searchPresetsStorage';
 
 interface AdvancedSearchModalProps {
   /** ID of the workspace the search runs against. */
@@ -138,6 +147,15 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
   const [overrideQuery, setOverrideQuery] = useState<string>('');
   const [submitting, setSubmitting] = useState<boolean>(false);
 
+  // Named presets. Loaded from localStorage on mount and
+  // whenever the modal opens (so a researcher who saves a
+  // preset in another workspace sees it here too).
+  const [presets, setPresets] = useState<SearchPreset[]>([]);
+  // Name typed into the "Save as preset" input. Tracked
+  // separately from the dropdown so the rename UI is
+  // independent from the apply UI.
+  const [presetName, setPresetName] = useState<string>('');
+
   // When the user clicks the Reset button we want to wipe
   // localStorage cleanly. The persistence effect runs on
   // every ``draftFilters`` change, which would re-save the
@@ -165,6 +183,11 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
       const persisted = loadPersistedFilters();
       setDraftFilters(persisted ?? DEFAULT_FILTERS);
       setOverrideQuery('');
+      // Refresh the saved presets list whenever the modal
+      // opens — a researcher might have saved a preset in
+      // a different workspace or browser tab and we want
+      // it to show up here.
+      setPresets(loadPresets());
     }
   }, [isOpen]);
 
@@ -283,6 +306,46 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
     clearPersistedFilters();
   };
 
+  // Apply a saved preset to the modal. The override query
+  // is intentionally NOT touched — the user can still
+  // override for this search.
+  const handleApplyPreset = (preset: SearchPreset) => {
+    // The suppress flag protects the preset's savedAt from
+    // being overwritten by the immediate save-on-change
+    // effect. We also save the filter bundle under the
+    // "last-used" key so the modal reopens with the
+    // preset's filters next time.
+    suppressPersistRef.current = true;
+    setDraftFilters(preset.filters);
+    savePersistedFilters(preset.filters);
+    setPresetName('');
+    toast.success(`Loaded preset "${preset.name}".`);
+  };
+
+  // Save the current draftFilters under a user-chosen
+  // name. Empty / whitespace-only names are rejected.
+  const handleSavePreset = () => {
+    const trimmed = presetName.trim();
+    if (!trimmed) {
+      toast.error('Give the preset a name first.');
+      return;
+    }
+    const updated = upsertPreset(presets, trimmed, draftFilters);
+    setPresets(updated);
+    savePresets(updated);
+    setPresetName('');
+    toast.success(`Saved preset "${trimmed}".`);
+  };
+
+  // Delete a preset by name. The list is refreshed and the
+  // localStorage blob updated.
+  const handleDeletePreset = (preset: SearchPreset) => {
+    const updated = removePreset(presets, preset.name);
+    setPresets(updated);
+    savePresets(updated);
+    toast.info(`Removed preset "${preset.name}".`);
+  };
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (submitting) return;
@@ -360,6 +423,79 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
             >
               <X size={20} />
             </button>
+          </div>
+
+          {/* Saved presets — named filter bundles the
+              researcher can recall with one click. The
+              list is persisted to localStorage and shared
+              across workspaces. */}
+          <div className="advanced-search-modal-section">
+            <span className="advanced-search-modal-label">
+              <Bookmark size={14} />
+              Saved presets
+            </span>
+            {presets.length === 0 ? (
+              <p className="advanced-search-modal-hint">
+                No saved presets yet. Tweak the filters
+                below, then save them under a name like
+                &quot;Last 5 years, reviews only, OpenAlex.&quot;
+              </p>
+            ) : (
+              <ul className="advanced-search-modal-presets">
+                {presets.map((preset) => (
+                  <li
+                    key={preset.name}
+                    className="advanced-search-modal-preset-row"
+                  >
+                    <button
+                      type="button"
+                      className="advanced-search-modal-preset-load"
+                      onClick={() => handleApplyPreset(preset)}
+                      aria-label={`Load preset ${preset.name}`}
+                      title={`Load preset "${preset.name}"`}
+                    >
+                      <Bookmark size={12} />
+                      <span className="advanced-search-modal-preset-name">
+                        {preset.name}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="advanced-search-modal-preset-delete"
+                      onClick={() => handleDeletePreset(preset)}
+                      aria-label={`Delete preset ${preset.name}`}
+                      title={`Delete preset "${preset.name}"`}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="advanced-search-modal-preset-save">
+              <input
+                type="text"
+                className="input advanced-search-modal-preset-input"
+                placeholder="Save current filters as…"
+                value={presetName}
+                onChange={(e) => setPresetName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleSavePreset();
+                  }
+                }}
+                aria-label="New preset name"
+              />
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleSavePreset}
+                disabled={!presetName.trim()}
+              >
+                Save preset
+              </button>
+            </div>
           </div>
 
           {/* Query override */}

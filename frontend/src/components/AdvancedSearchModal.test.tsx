@@ -248,6 +248,117 @@ describe('AdvancedSearchModal', () => {
       // The filter is restored, not reset to ''.
       expect(sinceSelectAfter).toHaveValue('2020');
     });
+
+    it('persists year/sort across workspaces but resets the query field', async () => {
+      // A researcher who fine-tuned their filters once
+      // should not have to re-pick them every time they
+      // switch workspaces. But the query field is a
+      // one-shot per-modal value that should always start
+      // empty (otherwise the modal would pre-fill with a
+      // query that no longer matches the new workspace's
+      // question).
+      const user = userEvent.setup();
+      // Step 1: open with workspace A, tweak filters.
+      const { rerender } = render(
+        <AdvancedSearchModal
+          workspaceId="ws-A"
+          workspaceQuestion="What is the amyloid cascade hypothesis?"
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+      const yearSelectA = screen.getAllByRole('combobox')[0];
+      await user.selectOptions(yearSelectA, '2020');
+      const queryInputA = screen.getByLabelText(/Search query/i);
+      await user.type(queryInputA, 'custom query for A');
+      // Close.
+      rerender(
+        <AdvancedSearchModal
+          workspaceId="ws-A"
+          workspaceQuestion="What is the amyloid cascade hypothesis?"
+          isOpen={false}
+          onClose={vi.fn()}
+        />,
+      );
+
+      // Step 2: re-open with workspace B (different
+      // question, different ID).
+      rerender(
+        <AdvancedSearchModal
+          workspaceId="ws-B"
+          workspaceQuestion="What is the difference between CRISPR and RNAi?"
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+
+      // The filter bundle persists across workspaces: the
+      // year is still '2020'.
+      const yearSelectB = screen.getAllByRole('combobox')[0];
+      expect(yearSelectB).toHaveValue('2020');
+
+      // The query field starts empty — it should not
+      // carry over "custom query for A" from workspace A.
+      const queryInputB = screen.getByLabelText(/Search query/i);
+      expect(queryInputB).toHaveValue('');
+      // And the placeholder shows workspace B's question,
+      // not workspace A's.
+      expect(queryInputB).toHaveAttribute(
+        'placeholder',
+        expect.stringMatching(/CRISPR|RNAi/i),
+      );
+      expect(queryInputB).not.toHaveAttribute(
+        'placeholder',
+        expect.stringMatching(/amyloid/i),
+      );
+    });
+
+    it('does not persist the query field even within the same workspace', async () => {
+      // Even within the same workspace, a typed query
+      // override should be reset on the next modal open.
+      // The persisted bundle is the filter structure only.
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      const { rerender } = render(
+        <AdvancedSearchModal
+          workspaceId="ws-1"
+          workspaceQuestion="What is GLP-1?"
+          isOpen={true}
+          onClose={onClose}
+        />,
+      );
+      const queryInput = screen.getByLabelText(/Search query/i);
+      await user.type(queryInput, 'partial');
+      // Close.
+      rerender(
+        <AdvancedSearchModal
+          workspaceId="ws-1"
+          workspaceQuestion="What is GLP-1?"
+          isOpen={false}
+          onClose={onClose}
+        />,
+      );
+      // Reopen.
+      rerender(
+        <AdvancedSearchModal
+          workspaceId="ws-1"
+          workspaceQuestion="What is GLP-1?"
+          isOpen={true}
+          onClose={onClose}
+        />,
+      );
+      const queryInputAfter = screen.getByLabelText(/Search query/i);
+      expect(queryInputAfter).toHaveValue('');
+      // The localStorage blob should NOT contain a
+      // ``query`` field under the persisted filter
+      // bundle's top-level keys.
+      const raw = window.localStorage.getItem(
+        'bioresearch-ai:advanced-search-filters:v1',
+      );
+      expect(raw).not.toBeNull();
+      const parsed = JSON.parse(raw!);
+      expect(parsed).not.toHaveProperty('query');
+    });
   });
 
   describe('source toggling', () => {
@@ -413,7 +524,7 @@ describe('AdvancedSearchModal', () => {
       await user.click(newestRadio);
       expect(newestRadio).toBeChecked();
       // Reset.
-      const resetBtn = screen.getByRole('button', { name: /Reset/i });
+      const resetBtn = screen.getByRole('button', { name: /^Reset$/ });
       await user.click(resetBtn);
       const relevanceRadio = screen.getByRole('radio', {
         name: /relevance/i,
@@ -446,13 +557,223 @@ describe('AdvancedSearchModal', () => {
       );
       // The persisted filters were loaded — verify by setting
       // a filter and clicking Reset.
-      const resetBtn = screen.getByRole('button', { name: /Reset/i });
+      const resetBtn = screen.getByRole('button', { name: /^Reset$/ });
       await user.click(resetBtn);
       // localStorage should now be cleared.
       const persisted = window.localStorage.getItem(
         'bioresearch-ai:advanced-search-filters:v1',
       );
       expect(persisted).toBeNull();
+    });
+  });
+
+  describe('presets', () => {
+    it('shows the empty-state hint when no presets exist', () => {
+      render(
+        <AdvancedSearchModal
+          workspaceId="ws-1"
+          workspaceQuestion="What is X?"
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByText(/No saved presets yet/i),
+      ).toBeInTheDocument();
+    });
+
+    it('saves a preset under the typed name', async () => {
+      const user = userEvent.setup();
+      render(
+        <AdvancedSearchModal
+          workspaceId="ws-1"
+          workspaceQuestion="What is X?"
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+      const nameInput = screen.getByLabelText(/New preset name/i);
+      await user.type(nameInput, 'My preset');
+      const saveBtn = screen.getByRole('button', {
+        name: 'Save preset',
+      });
+      await user.click(saveBtn);
+      // The preset is now in the list (state updates are
+      // async via setPresets / setPresetName). Use
+      // waitFor for both the new preset appearing and the
+      // input clearing.
+      await waitFor(() => {
+        expect(
+          screen.getByText('My preset'),
+        ).toBeInTheDocument();
+      });
+      // Re-query the input — React may have swapped the
+      // DOM node during the re-render.
+      await waitFor(() => {
+        expect(
+          screen.getByLabelText(/New preset name/i),
+        ).toHaveValue('');
+      });
+      // The localStorage blob is updated.
+      const raw = window.localStorage.getItem(
+        'bioresearch-ai:adv-search-presets:v1',
+      );
+      expect(raw).not.toBeNull();
+      const parsed = JSON.parse(raw!);
+      expect(parsed[0].name).toBe('My preset');
+    });
+
+    it('rejects an empty or whitespace-only name', async () => {
+      const user = userEvent.setup();
+      render(
+        <AdvancedSearchModal
+          workspaceId="ws-1"
+          workspaceQuestion="What is X?"
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+      const saveBtn = screen.getByRole('button', {
+        name: 'Save preset',
+      });
+      // Disabled by default (empty input).
+      expect(saveBtn).toBeDisabled();
+      // Whitespace-only name also keeps it disabled.
+      const nameInput = screen.getByLabelText(/New preset name/i);
+      await user.type(nameInput, '   ');
+      expect(saveBtn).toBeDisabled();
+    });
+
+    it('loads a preset back into the draftFilters', async () => {
+      const user = userEvent.setup();
+      // Pre-populate localStorage with a preset.
+      window.localStorage.setItem(
+        'bioresearch-ai:adv-search-presets:v1',
+        JSON.stringify([
+          {
+            name: 'Saved preset',
+            filters: {
+              since_year: 2018,
+              max_results: 50,
+              sort_by: 'newest_first',
+              sources: ['openalex'],
+            },
+            savedAt: 1700000000000,
+          },
+        ]),
+      );
+      render(
+        <AdvancedSearchModal
+          workspaceId="ws-1"
+          workspaceQuestion="What is X?"
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+      // The preset shows up in the list.
+      const loadBtn = screen.getByRole('button', {
+        name: /Load preset/i,
+      });
+      expect(loadBtn).toBeInTheDocument();
+      await user.click(loadBtn);
+      // The year dropdown now reflects the preset's filter.
+      const sinceSelect = screen.getAllByRole('combobox')[0];
+      expect(sinceSelect).toHaveValue('2018');
+      // The sort order is also picked up.
+      const newestRadio = screen.getByRole('radio', {
+        name: /newest first/i,
+      });
+      expect(newestRadio).toBeChecked();
+    });
+
+    it('deletes a preset when the trash icon is clicked', async () => {
+      const user = userEvent.setup();
+      window.localStorage.setItem(
+        'bioresearch-ai:adv-search-presets:v1',
+        JSON.stringify([
+          {
+            name: 'Throwaway',
+            filters: {
+              since_year: 2020,
+              max_results: 20,
+              sort_by: 'relevance',
+              sources: [],
+            },
+            savedAt: 1700000000000,
+          },
+        ]),
+      );
+      render(
+        <AdvancedSearchModal
+          workspaceId="ws-1"
+          workspaceQuestion="What is X?"
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+      const deleteBtn = screen.getByRole('button', {
+        name: /Delete preset Throwaway/i,
+      });
+      await user.click(deleteBtn);
+      await waitFor(() => {
+        expect(
+          screen.queryByText('Throwaway'),
+        ).not.toBeInTheDocument();
+      });
+      // The empty-state hint is back.
+      expect(
+        screen.getByText(/No saved presets yet/i),
+      ).toBeInTheDocument();
+      // The localStorage blob is now an empty list.
+      const raw = window.localStorage.getItem(
+        'bioresearch-ai:adv-search-presets:v1',
+      );
+      expect(JSON.parse(raw!)).toEqual([]);
+    });
+
+    it('refreshes the preset list when the modal reopens', async () => {
+      // Save a preset in modal 1.
+      const user = userEvent.setup();
+      const { rerender } = render(
+        <AdvancedSearchModal
+          workspaceId="ws-1"
+          workspaceQuestion="X"
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+      await user.type(
+        screen.getByLabelText(/New preset name/i),
+        'Session 1 preset',
+      );
+      await user.click(
+        screen.getByRole('button', { name: 'Save preset' }),
+      );
+      // Wait for the input to clear (state has updated).
+      await waitFor(() => {
+        expect(
+          screen.getByLabelText(/New preset name/i),
+        ).toHaveValue('');
+      });
+      // Close.
+      rerender(
+        <AdvancedSearchModal
+          workspaceId="ws-1"
+          workspaceQuestion="X"
+          isOpen={false}
+          onClose={vi.fn()}
+        />,
+      );
+      // Open again.
+      rerender(
+        <AdvancedSearchModal
+          workspaceId="ws-1"
+          workspaceQuestion="X"
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+      expect(screen.getByText('Session 1 preset')).toBeInTheDocument();
     });
   });
 
