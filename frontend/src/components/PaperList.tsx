@@ -32,6 +32,18 @@ interface PaperListProps {
   emptyMessage?: string;
   /** Optional remove handler. Passed through to ``PaperCard``. */
   onRemovePaper?: (paper: Paper) => void;
+  /**
+   * Per-paper source attribution map from
+   * ``WorkspaceResponse.paper_sources``. When provided,
+   * each ``PaperCard`` renders a small "via <source>"
+   * badge so researchers can see which literature
+   * source returned the paper.
+   *
+   * The map is keyed by paper identifier (PMID, DOI,
+   * or URL); ``paperSource(workspace, paper)`` (in
+   * ``models/workspace.ts``) does the resolution.
+   */
+  paperSources?: Record<string, string>;
 }
 
 /**
@@ -54,6 +66,7 @@ export const PaperList: React.FC<PaperListProps> = ({
   className = '',
   emptyMessage,
   onRemovePaper,
+  paperSources,
 }) => {
   if (papers.length === 0 && emptyMessage) {
     return (
@@ -68,14 +81,32 @@ export const PaperList: React.FC<PaperListProps> = ({
 
   return (
     <div className={`paper-list ${className}`}>
-      {papers.map((paper) => (
-        <PaperCard
-          key={paperKey(paper)}
-          paper={paper}
-          truncateAbstract={truncateAbstract}
-          onRemove={onRemovePaper}
-        />
-      ))}
+      {papers.map((paper) => {
+        // Resolve this paper's source via the PMID → DOI →
+        // URL priority order, mirroring the backend's
+        // ``_paper_keys``. The PaperCard only knows the
+        // resolved string; the lookup logic stays in this
+        // component so the card stays presentational.
+        let source: string | undefined;
+        if (paperSources) {
+          if (paper.pmid && paperSources[paper.pmid]) {
+            source = paperSources[paper.pmid];
+          } else if (paper.doi && paperSources[paper.doi]) {
+            source = paperSources[paper.doi];
+          } else if (paper.url && paperSources[paper.url]) {
+            source = paperSources[paper.url];
+          }
+        }
+        return (
+          <PaperCard
+            key={paperKey(paper)}
+            paper={paper}
+            truncateAbstract={truncateAbstract}
+            onRemove={onRemovePaper}
+            source={source}
+          />
+        );
+      })}
     </div>
   );
 };

@@ -454,6 +454,7 @@ export const Workspace: React.FC = () => {
             papers={currentWorkspace.papers}
             emptyMessage="No papers retrieved yet."
             onRemovePaper={handleRemovePaper}
+            paperSources={currentWorkspace.paper_sources}
           />
         </div>
       </div>

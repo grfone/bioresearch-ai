@@ -274,4 +274,67 @@ describe('PaperCard', () => {
       expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     });
   });
+
+
+  describe('source badge', () => {
+    it('does not render a badge when source is undefined', () => {
+      // Legacy PubMed-only workspaces — no badge.
+      const { container } = render(<PaperCard paper={FULL_PAPER} />);
+      expect(
+        container.querySelector('.paper-source-badge'),
+      ).toBeNull();
+    });
+
+    it('renders a "via openalex" badge when source is openalex', () => {
+      const { container } = render(
+        <PaperCard paper={FULL_PAPER} source="openalex" />,
+      );
+      const badge = container.querySelector('.paper-source-badge');
+      expect(badge).not.toBeNull();
+      expect(badge!.textContent).toMatch(/openalex/i);
+      expect(badge!.getAttribute('data-source')).toBe('openalex');
+    });
+
+    it('renders a "via europe_pmc" badge for europe_pmc', () => {
+      const { container } = render(
+        <PaperCard paper={FULL_PAPER} source="europe_pmc" />,
+      );
+      const badge = container.querySelector('.paper-source-badge');
+      expect(badge!.textContent).toMatch(/europe_pmc/i);
+    });
+
+    it('renders a "via biorxiv" badge for biorxiv', () => {
+      const { container } = render(
+        <PaperCard paper={FULL_PAPER} source="biorxiv" />,
+      );
+      const badge = container.querySelector('.paper-source-badge');
+      expect(badge!.textContent).toMatch(/biorxiv/i);
+    });
+
+    it('renders a "via pubmed" badge for legacy single-source', () => {
+      // The legacy single-source path also populates
+      // paper_sources (since search_with_filters replaces
+      // the legacy search in the modal), but the test
+      // confirms the badge text is consistent.
+      const { container } = render(
+        <PaperCard paper={FULL_PAPER} source="pubmed" />,
+      );
+      const badge = container.querySelector('.paper-source-badge');
+      expect(badge!.textContent).toMatch(/pubmed/i);
+    });
+
+    it('does not affect the partial-marker badge', () => {
+      // A thin paper with source="openalex" should still
+      // render the asterisk marker AND the source badge.
+      const { container } = render(
+        <PaperCard paper={THIN_PAPER} source="openalex" />,
+      );
+      expect(
+        container.querySelector('.paper-title-partial-marker'),
+      ).not.toBeNull();
+      expect(
+        container.querySelector('.paper-source-badge'),
+      ).not.toBeNull();
+    });
+  });
 });

@@ -88,6 +88,20 @@ export interface WorkspaceResponse {
   last_error: string | null;
   /** List of scientific papers loaded into the workspace */
   papers: Paper[];
+  /**
+   * Per-paper source attribution — maps a paper
+   * identifier (PMID, DOI, or URL) to the
+   * ``SearchSource`` enum value that returned it
+   * (``"pubmed"`` / ``"openalex"`` / ``"europe_pmc"`` /
+   * ``"biorxiv"``). Empty for legacy PubMed-only
+   * workspaces; populated by the multi-source
+   * Advanced Search path.
+   *
+   * The PaperCard UI consumes this map and renders a
+   * small "via OpenAlex" badge next to each paper so
+   * researchers can see which source returned it.
+   */
+  paper_sources: Record<string, string>;
   /** Total number of papers (redundant with papers.length, but provided by API) */
   total_papers: number;
   /** Evidence summary generated from the papers, if available */
@@ -153,4 +167,35 @@ export function hasEvidenceComparison(workspace: WorkspaceResponse): boolean {
  */
 export function hasReport(workspace: WorkspaceResponse): boolean {
   return workspace.report_available;
+}
+
+
+/**
+ * Resolve which ``SearchSource`` returned a paper, falling
+ * back through the paper's identifier priority order
+ * (PMID → DOI → URL).
+ *
+ * Returns ``null`` when:
+ * - The workspace has no ``paper_sources`` map (legacy
+ *   PubMed-only workspaces).
+ * - None of the paper's identifiers are in the map
+ *   (e.g. a paper added via the manual PDF fallback that
+ *   wasn't tagged with a source).
+ *
+ * The PaperCard UI calls this and renders a "via
+ * OpenAlex" badge when the result is non-null.
+ */
+export function paperSource(
+  workspace: WorkspaceResponse,
+  paper: Paper,
+): string | null {
+  const map = workspace.paper_sources;
+  if (!map) return null;
+  // Priority order: PMID first (canonical for biomedical),
+  // DOI next, URL last. The backend's _paper_keys uses the
+  // same priority so the keys match.
+  if (paper.pmid && map[paper.pmid]) return map[paper.pmid];
+  if (paper.doi && map[paper.doi]) return map[paper.doi];
+  if (paper.url && map[paper.url]) return map[paper.url];
+  return null;
 }

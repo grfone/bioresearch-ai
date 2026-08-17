@@ -42,6 +42,13 @@ interface PaperCardProps {
    *  can opt out when they're rendering papers that haven't
    *  gone through the resolver yet. */
   showPartialMarker?: boolean;
+  /** Which literature source returned this paper (one of
+   *  ``"pubmed"`` / ``"openalex"`` / ``"europe_pmc"`` /
+   *  ``"biorxiv"``). When set, a small badge appears
+   *  under the title so researchers can see the source.
+   *  Default: ``undefined`` (no badge — the typical case
+   *  for legacy PubMed-only workspaces). */
+  source?: string;
 }
 
 const ABSTRACT_TRUNCATE_LINES = 3;
@@ -65,6 +72,7 @@ export const PaperCard: React.FC<PaperCardProps> = ({
   className = '',
   onRemove,
   showPartialMarker = true,
+  source,
 }) => {
   const [expanded, setExpanded] = React.useState(false);
   const hasAbstract =
@@ -110,6 +118,16 @@ export const PaperCard: React.FC<PaperCardProps> = ({
                 aria-label="Partial metadata — no authors and no abstract were returned."
               >
                 {' *'}
+              </span>
+            )}
+            {source && (
+              <span
+                className="paper-source-badge"
+                data-source={source}
+                title={`Returned by ${source}`}
+                aria-label={`Source: ${source}`}
+              >
+                via {source}
               </span>
             )}
           </h3>
