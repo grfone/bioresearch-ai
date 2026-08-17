@@ -99,12 +99,26 @@ from app.infrastructure.pubmed.client import PubMedClient
 from app.infrastructure.pubmed.identifier_resolver import (
     IdentifierResolver,
 )
+from app.infrastructure.literature.biorxiv_client import (
+    BiorxivSearcher,
+)
+from app.infrastructure.literature.europe_pmc_client import (
+    EuropePMCSearcher,
+)
+from app.infrastructure.literature.multi_source import (
+    MultiSourceSearcher,
+)
+from app.infrastructure.literature.openalex_client import (
+    OpenAlexSearcher,
+)
 from app.infrastructure.pubmed.provider import PubMedProvider
 from app.infrastructure.storage.sqlite_workspace_repository import (
     SqliteWorkspaceRepository,
 )
 
 from app.config.settings import settings
+
+from app.core.enums.search_source import SearchSource, default_sources
 
 # Resolve the DATABASE_URL setting to a real on-disk path. The
 # settings object exposes the URL as ``sqlite:///relative/path`` or
@@ -133,6 +147,54 @@ def _sqlite_path_from_settings() -> str:
     if url.startswith("sqlite://"):
         return url[len("sqlite://"):]
     return url
+def _build_literature_searchers() -> dict[
+    SearchSource, "LiteratureSearcher"
+]:
+    """Construct the per-source ``LiteratureSearcher`` instances.
+
+    Sources are enabled/disabled via the
+    ``LiteratureSettings`` block — disabled sources are
+    simply omitted from the returned dict, so the
+    ``MultiSourceSearcher`` fan-out ignores them.
+
+    PubMed is always enabled (it's the canonical medical
+    source and the only one with the ``get_by_id``
+    contract for PMID/DOI). OpenAlex is on by default
+    (broadest coverage). Europe PMC is on by default.
+    bioRxiv is opt-in because it overlaps heavily with
+    PubMed and OpenAlex but adds no real keyword search
+    capability.
+    """
+    from app.domain.interfaces.literature_searcher import (
+        LiteratureSearcher,
+    )
+
+    timeout = float(settings.pubmed.timeout)
+    pubmed_client = PubMedClient(
+        email=settings.pubmed.email,
+        api_key=settings.pubmed.api_key,
+    )
+    searchers: dict[SearchSource, LiteratureSearcher] = {
+        SearchSource.PUBMED: PubMedProvider(client=pubmed_client),
+    }
+    if settings.literature.openalex_enabled:
+        searchers[SearchSource.OPENALEX] = OpenAlexSearcher(
+            mailto=settings.literature.openalex_mailto
+            or settings.pubmed.email,
+            timeout_seconds=timeout,
+        )
+    if settings.literature.europe_pmc_enabled:
+        searchers[SearchSource.EUROPE_PMC] = EuropePMCSearcher(
+            timeout_seconds=timeout,
+        )
+    if settings.literature.biorxiv_enabled:
+        searchers[SearchSource.BIORXIV] = BiorxivSearcher(
+            server=settings.literature.biorxiv_server,
+            timeout_seconds=timeout,
+        )
+    return searchers
+
+
 from app.core.enums.llm_provider import LLMProviderEnum
 
 
@@ -169,11 +231,13 @@ class Container:
     @classmethod
     def build_orchestrator(cls) -> WorkspaceOrchestrator:
         """Build the WorkspaceOrchestrator with full dependencies."""
-        pubmed_client = PubMedClient(
-            email=settings.pubmed.email,
-            api_key=settings.pubmed.api_key,
-        )
-        literature_searcher = PubMedProvider(client=pubmed_client)
+        # Multi-source fan-out: PubMed + OpenAlex + (optionally)
+        # Europe PMC / bioRxiv. The orchestrator exposes the
+        # full ``search_with_filters`` entry point on the
+        # ``MultiSourceSearcher``, so the Advanced Search
+        # modal in the UI can pick which sources to use.
+        searchers = _build_literature_searchers()
+        literature_searcher = MultiSourceSearcher(searchers)
 
         llm_provider = LLMFactory.create(
             LLMProviderEnum(settings.llm.provider)
@@ -215,11 +279,11 @@ class Container:
         ResearchAssistant
             Fully configured application facade.
         """
-        pubmed_client = PubMedClient(
-            email=settings.pubmed.email,
-            api_key=settings.pubmed.api_key,
-        )
-        literature_searcher = PubMedProvider(client=pubmed_client)
+        # Multi-source fan-out — same composition as the
+        # orchestrator. The ResearchAssistant exposes the
+        # same search entry point but at the use-case layer.
+        searchers = _build_literature_searchers()
+        literature_searcher = MultiSourceSearcher(searchers)
 
         llm_provider = LLMFactory.create(
             LLMProviderEnum(settings.llm.provider)

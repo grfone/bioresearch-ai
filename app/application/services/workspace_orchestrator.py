@@ -46,6 +46,7 @@ from app.application.use_cases.compare_evidence import CompareEvidenceUseCase
 from app.application.use_cases.generate_report import GenerateReportUseCase
 from app.application.use_cases.search_literature import SearchLiteratureUseCase
 from app.application.use_cases.summarize_papers import SummarizePapersUseCase
+from app.core.enums.search_source import SearchSource
 from app.core.enums.workspace_state import (
     WorkspaceAction,
     WorkspaceState,
@@ -63,6 +64,7 @@ from app.domain.interfaces.llm_provider import LLMProvider
 from app.domain.interfaces.literature_searcher import LiteratureSearcher
 from app.domain.interfaces.report_generator import ReportGenerator
 from app.domain.interfaces.workspace_repository import WorkspaceRepository
+from app.domain.value_objects.search_filters import SearchFilters
 
 
 logger = logging.getLogger(__name__)
@@ -206,6 +208,70 @@ class WorkspaceOrchestrator:
             self._fail(session, exc)
             raise
 
+        session.replace_papers(papers)
+        return self._repository.update(session)
+
+    def search_with_filters(
+        self,
+        workspace_id: UUID,
+        filters: SearchFilters,
+        sources: list[SearchSource] | None = None,
+    ) -> ResearchSession:
+        """Run the SEARCH action with the full filter bundle.
+
+        This is the entry point used by the Advanced Search
+        modal in the UI. It accepts the multi-source
+        ``SearchFilters`` and an optional restricted source set.
+
+        Behaviour:
+        - Workspace state advances SEARCHING → PAPERS_RETRIEVED on
+          success, or → ERROR on exception (the existing
+          ``_fail`` path).
+        - The workspace's existing question is replaced with
+          ``filters.query`` so the user sees the override reflected
+          in the workspace header.
+        - ``sources=None`` fans out to every registered source
+          (PubMed + OpenAlex + Europe PMC by default); an explicit
+          list restricts the fan-out via
+          ``MultiSourceSearcher.search_with_sources``.
+
+        Parameters
+        ----------
+        workspace_id : UUID
+            Workspace identifier.
+        filters : SearchFilters
+            Bundle of filters (query, since/until year, max
+            results, sort, open-access flag, document types).
+        sources : list[SearchSource] | None
+            Optional restricted source set. ``None`` means
+            "use every registered source."
+
+        Returns
+        -------
+        ResearchSession
+            The updated workspace.
+        """
+        session = self._repository.get(workspace_id)
+        self._enter_action(session, WorkspaceAction.SEARCH)
+
+        try:
+            results = self._search_use_case.execute_with_filters(
+                filters, sources=sources
+            )
+        except Exception as exc:
+            logger.exception(
+                "SEARCH (filters) failed for workspace %s",
+                workspace_id,
+            )
+            self._fail(session, exc)
+            raise
+
+        # Replace the workspace's papers with the new results.
+        # We strip the per-source ``SearchResult`` envelope to
+        # ``Paper`` for storage — the source attribution is
+        # preserved at the API layer (each paper carries a
+        # ``source`` field via the PaperCard UI).
+        papers = [r.paper for r in results]
         session.replace_papers(papers)
         return self._repository.update(session)
 

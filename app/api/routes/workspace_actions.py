@@ -177,7 +177,7 @@ def _run_action(
 @router.post(
     "/{workspace_id}/actions/search",
     response_model=WorkspaceResponse,
-    summary="Search PubMed and store the results in the workspace.",
+    summary="Search literature and store the results in the workspace.",
 )
 def search_action(
     workspace_id: UUID,
@@ -186,7 +186,90 @@ def search_action(
         get_workspace_orchestrator
     ),
 ) -> WorkspaceResponse:
-    """Run the SEARCH action."""
+    """Run the SEARCH action.
+
+    Two shapes are accepted:
+
+    1. **Legacy single-source search** — only ``query`` in
+       the body. Routes through
+       :meth:`WorkspaceOrchestrator.search` and uses the
+       default source set (PubMed + OpenAlex + Europe PMC
+       by default).
+
+    2. **Advanced search** — full ``filters`` block in the
+       body. Routes through
+       :meth:`WorkspaceOrchestrator.search_with_filters`
+       and respects the user's source selection, year
+       bounds, sort, open-access flag, and document-type
+       filter.
+    """
+    # Advanced search path — caller supplied the full filter
+    # bundle. We build a domain ``SearchFilters`` from the
+    # Pydantic shape, then dispatch through
+    # ``search_with_filters``. If the user also passed a
+    # top-level ``query``, that wins for the actual question
+    # text (the filters block's ``query`` is set to the
+    # workspace's existing question by the orchestrator).
+    if request.filters is not None:
+        from app.core.enums.search_source import SearchSource
+        from app.domain.value_objects.search_filters import (
+            SearchDocumentType,
+            SearchFilters,
+            SortBy,
+        )
+
+        # Resolve the actual query text. The legacy ``query``
+        # field is preferred; fall back to the workspace's
+        # existing question. If neither is set, return a 400
+        # so the user gets a clear error rather than a silent
+        # empty-search.
+        query_text = (request.query or "").strip()
+        if not query_text:
+            try:
+                workspace = orchestrator.get_workspace(workspace_id)
+                query_text = workspace.question.question
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Either ``query`` or a workspace with "
+                        "an existing question is required for "
+                        "advanced search."
+                    ),
+                ) from exc
+
+        filters_dict = request.filters.model_dump(exclude={"query"})
+        # Translate API strings to domain enums.
+        filters = SearchFilters(
+            query=query_text,
+            since_year=filters_dict.get("since_year"),
+            until_year=filters_dict.get("until_year"),
+            max_results=filters_dict.get("max_results", 20),
+            sort_by=SortBy(filters_dict.get("sort_by", "relevance")),
+            include_abstracts=filters_dict.get(
+                "include_abstracts", True
+            ),
+            open_access_only=filters_dict.get("open_access_only", False),
+            document_types=tuple(
+                SearchDocumentType(t)
+                for t in filters_dict.get("document_types", [])
+            ),
+        )
+        sources = (
+            [SearchSource(s) for s in request.filters.sources]
+            if request.filters.sources
+            else None
+        )
+        return _run_action(
+            orchestrator,
+            workspace_id,
+            WorkspaceAction.SEARCH.value,
+            lambda wid: orchestrator.search_with_filters(
+                wid, filters=filters, sources=sources
+            ),
+        )
+
+    # Legacy path — just ``query``.
     return _run_action(
         orchestrator,
         workspace_id,
@@ -728,20 +811,6 @@ async def add_paper_from_pdf(
             },
         ) from exc
 
-    if not extraction.identifiers:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "error": "no_identifiers_found",
-                "message": (
-                    "The PDF didn't contain a recognisable DOI or "
-                    "PMID on the first page. If the paper is a "
-                    "scanned PDF, try the PMID/DOI tab instead."
-                ),
-                "extracted_text_preview": extraction.pdf_text[:500],
-            },
-        )
-
     # Resolve the extracted identifiers through the same
     # pipeline that the bulk-paste flow uses.
     results = resolver.resolve_many(extraction.identifiers)
@@ -750,12 +819,13 @@ async def add_paper_from_pdf(
     ]
 
     if not resolved_papers:
-        # External lookup failed for every identifier. The user
-        # uploaded the PDF for a reason — they want the paper
-        # in the workspace. Fall back to structured extraction
-        # from the PDF text itself. The :class:`PaperCard`
-        # component renders a partial-metadata marker for thin
-        # papers so the user knows what they're getting.
+        # External lookup failed (or there were no
+        # identifiers to look up). The user uploaded the PDF
+        # for a reason — they want the paper in the workspace.
+        # Fall back to structured extraction from the PDF
+        # text itself. The :class:`PaperCard` component
+        # renders a partial-metadata marker for thin papers
+        # so the user knows what they're getting.
         structured = extract_structured_paper_from_pdf(
             io.BytesIO(raw),
             max_pages=1,

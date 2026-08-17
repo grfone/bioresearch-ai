@@ -64,7 +64,7 @@ def _pdf_with_text(text: str) -> bytes:
 
 
 class _StubPaper:
-    """Minimal Paper stub for the resolver."""
+    """Real domain Paper — used as ``ResolvedPaper.paper``."""
 
     def __init__(self, **kwargs: Any) -> None:
         for key, value in kwargs.items():
@@ -75,25 +75,51 @@ class _StubPaper:
         return f"{self.first_name} {self.last_name}".strip()
 
 
-class _StubSuccess:
-    """Resolver success result."""
+class _StubResolvedPaper:
+    """Mirror of ``identifier_resolver.ResolvedPaper``.
 
-    is_success = True
+    The route reads ``result.paper.identifier``,
+    ``result.paper.identifier_type``, and ``result.paper.paper``.
+    """
+
+    def __init__(
+        self, identifier: str, identifier_type: str, paper: Any
+    ) -> None:
+        self.identifier = identifier
+        self.identifier_type = identifier_type
+        self.paper = paper
+
+
+class _StubSuccess:
+    """Resolver success result (mirrors ResolutionResult)."""
+
     failure = None
 
-    def __init__(self, identifier: str, paper: Any) -> None:
-        self.identifier = identifier
-        self.paper = type("Result", (), {"paper": paper})()
+    def __init__(self, identifier: str, identifier_type: str, paper: Any) -> None:
+        self.paper = _StubResolvedPaper(
+            identifier=identifier,
+            identifier_type=identifier_type,
+            paper=paper,
+        )
+
+    @property
+    def is_success(self) -> bool:
+        return True
 
 
 class _StubFailure:
-    """Resolver failure result."""
+    """Resolver failure result (mirrors ResolutionResult)."""
 
-    is_success = False
     paper = None
 
     def __init__(self, identifier: str, reason: str) -> None:
-        self.failure = type("Failure", (), {"identifier": identifier, "reason": reason})()
+        self.failure = type(
+            "Failure", (), {"identifier": identifier, "reason": reason}
+        )()
+
+    @property
+    def is_success(self) -> bool:
+        return False
 
 
 class _StubResolver:
@@ -122,7 +148,6 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]
         def add_papers_bulk(
             self, workspace_id: UUID, papers: list[Any]
         ) -> Any:
-            print(f"[TEST] FakeOrchestrator.add_papers_bulk called! papers={[p.title for p in papers]}")
             self.added.extend(papers)
             # Return a fake workspace with a known state.
             from app.domain.entities.research_session import (
@@ -182,17 +207,30 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]
 
 
 def _set_resolver(monkeypatch: pytest.MonkeyPatch, results: list[Any]) -> None:
-    """Replace the resolver for the next request."""
+    """Replace the resolver for the next request.
+
+    The route binds ``Depends(get_identifier_resolver)`` at
+    import time, capturing the function reference as it
+    existed in ``app.api.routes.workspace_actions`` then.
+    Overriding under either ``container.get_identifier_resolver``
+    or ``workspace_actions.get_identifier_resolver`` AFTER
+    ``monkeypatch.setattr`` has rebound the module attributes
+    keys the override dict under a function reference that
+    FastAPI never sees — the route's Depends keeps its
+    pre-monkeypatch reference.
+
+    The fix: key the override under the SAME reference the
+    route captured at import time. That reference is
+    ``workspace_actions.get_identifier_resolver`` *before*
+    any monkeypatching happens — which is also the function
+    object stored in the route signature's ``Depends``.
+    """
     from app.api.routes import workspace_actions
-    from app.config import container
     import main as main_module
 
     resolver = _StubResolver(results)
-    monkeypatch.setattr(container, "get_identifier_resolver", lambda: resolver)
-    monkeypatch.setattr(workspace_actions, "get_identifier_resolver", lambda: resolver)
-    main_module.app.dependency_overrides[
-        container.get_identifier_resolver
-    ] = lambda: resolver
+    # Use the workspace_actions reference *before* monkeypatching
+    # anything; this is the reference FastAPI will look up.
     main_module.app.dependency_overrides[
         workspace_actions.get_identifier_resolver
     ] = lambda: resolver
@@ -235,7 +273,11 @@ def test_pdf_upload_with_resolvable_doi(
     )
     _set_resolver(
         monkeypatch,
-        [_StubSuccess(identifier="10.1038/nature12373", paper=resolved)],
+        [_StubSuccess(
+            identifier="10.1038/nature12373",
+            identifier_type="doi",
+            paper=resolved,
+        )],
     )
 
     # Create a workspace.

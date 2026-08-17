@@ -60,6 +60,7 @@ Guillermo Ramajo Fernández
 from __future__ import annotations
 
 from app.config.database import database_settings
+from app.config.literature import literature_settings
 from app.config.llm import llm_settings
 from app.config.logging import logging_settings
 from app.config.pubmed import pubmed_settings
@@ -101,6 +102,7 @@ class Settings:
         self.pubmed = pubmed_settings
         self.database = database_settings
         self.logging = logging_settings
+        self.literature = literature_settings
 
 
 # ---------------------------------------------------------------------
