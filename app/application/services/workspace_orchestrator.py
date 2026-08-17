@@ -70,6 +70,55 @@ from app.domain.value_objects.search_filters import SearchFilters
 logger = logging.getLogger(__name__)
 
 
+
+def _build_paper_source_map(
+    results: list[Any],
+) -> dict[str, str]:
+    """Build a paper-identifier → ``SearchSource`` map.
+
+    For each ``SearchResult`` we use the paper's canonical
+    identifier (PMID → DOI → URL) as the key. The
+    ``PaperCard`` UI in the frontend reads this map and
+    renders a small "via <source>" badge next to each paper
+    in the workspace.
+
+    Multiple keys map to the same paper (e.g. one paper from
+    OpenAlex and one from PubMed dedupe to the same DOI);
+    we keep the FIRST source attribution we see and ignore
+    later duplicates — the order in ``results`` is sorted by
+    ``confidence × recency_boost``, so the highest-confidence
+    source wins.
+    """
+    out: dict[str, str] = {}
+    for r in results:
+        paper = r.paper
+        source = (
+            r.source.value
+            if hasattr(r.source, "value")
+            else str(r.source)
+        )
+        for key in _paper_keys(paper):
+            if key and key not in out:
+                out[key] = source
+    return out
+
+
+def _paper_keys(paper: Any) -> list[str]:
+    """Return the canonical identifier keys for a Paper.
+
+    Tried in priority order: PMID, DOI, URL. Returns the
+    first non-empty value, falling back to the empty list
+    if the paper is identifier-less (e.g. a structured PDF
+    extraction result with no DOI).
+    """
+    keys = []
+    for attr in ("pmid", "doi", "url"):
+        value = getattr(paper, attr, None)
+        if isinstance(value, str) and value.strip():
+            keys.append(value.strip())
+    return keys
+
+
 class WorkspaceOrchestrator:
     """
     Drive a Research Workspace through its finite state machine.
@@ -268,11 +317,15 @@ class WorkspaceOrchestrator:
 
         # Replace the workspace's papers with the new results.
         # We strip the per-source ``SearchResult`` envelope to
-        # ``Paper`` for storage — the source attribution is
-        # preserved at the API layer (each paper carries a
-        # ``source`` field via the PaperCard UI).
+        # ``Paper`` for storage, but the source attribution
+        # (which source returned each paper) lives at the
+        # session level via ``session.paper_sources``. The
+        # orchestrator's job is to populate that map; the
+        # PaperCard UI reads it via the ``WorkspaceResponse``
+        # and renders a per-source badge.
         papers = [r.paper for r in results]
-        session.replace_papers(papers)
+        paper_sources = _build_paper_source_map(results)
+        session.replace_papers(papers, paper_sources=paper_sources)
         return self._repository.update(session)
 
     def add_paper(

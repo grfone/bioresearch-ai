@@ -164,6 +164,18 @@ class WorkspaceResponse(BaseModel):
         description="Total number of retrieved publications."
     )
 
+    paper_sources: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Per-paper source attribution — maps paper "
+            "identifier (PMID, DOI, or URL) to the "
+            "SearchSource enum value that returned it "
+            "(\"pubmed\" / \"openalex\" / \"europe_pmc\" / "
+            "\"biorxiv\"). Empty for legacy "
+            "PubMed-only workspaces."
+        ),
+    )
+
     summary: str | None = Field(
         default=None,
         description="Current evidence synthesis."
@@ -241,6 +253,7 @@ class WorkspaceResponse(BaseModel):
             status="Created",
             papers=[],
             total_papers=0,
+            paper_sources={},
         )
 
     @classmethod
@@ -296,6 +309,15 @@ class WorkspaceResponse(BaseModel):
         total_papers = len(papers)
         paper_responses = [PaperResponse.from_domain(p) for p in papers]
 
+        # Per-paper source attribution. Lives at the session
+        # level so dedupe across sources doesn't lose the
+        # original ``SearchResult.source``. Empty dict for
+        # workspaces that pre-date the multi-source flow or
+        # were created via legacy add_paper.
+        paper_sources = getattr(session, "paper_sources", None)
+        if not isinstance(paper_sources, dict):
+            paper_sources = {}
+
         # State: prefer the FSM state if present, otherwise fall back
         # to the legacy ``status`` attribute.
         state = getattr(session, "state", None)
@@ -349,6 +371,7 @@ class WorkspaceResponse(BaseModel):
             updated_at = datetime.now(UTC)
 
         return cls(
+            paper_sources=paper_sources,
             workspace_id=str(workspace_id),
             question=question_text,
             state=state_value,

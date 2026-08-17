@@ -187,6 +187,17 @@ class ResearchSession:
 
     papers: list[Paper] = field(default_factory=list)
 
+    # Per-paper source attribution (for the Advanced Search
+    # multi-source flow). Maps the canonical paper identifier
+    # (PMID, then DOI, then URL) to the ``SearchSource`` enum
+    # value that returned the paper. The dict is rebuilt
+    # every time ``replace_papers`` runs (Search action);
+    # the legacy ``add_paper`` path leaves it untouched. The
+    # map is exposed via the API as ``paper_sources`` on
+    # ``WorkspaceResponse`` so the PaperCard can render a
+    # "via OpenAlex" / "via PubMed" badge.
+    paper_sources: dict[str, str] = field(default_factory=dict)
+
     summary: Summary | None = None
 
     evidence_comparison: EvidenceComparison | None = None
@@ -487,14 +498,34 @@ class ResearchSession:
                 reason="Papers added",
             )
 
-    def replace_papers(self, papers: list[Paper]) -> None:
+    def replace_papers(
+        self,
+        papers: list[Paper],
+        paper_sources: dict[str, str] | None = None,
+    ) -> None:
         """
         Replace the session's paper collection (used by the
         orchestrator's SEARCH action). The state is forced to
         PAPERS_RETRIEVED if the new collection is non-empty; otherwise
         the state is forced back to CREATED.
+
+        Parameters
+        ----------
+        papers : list[Paper]
+            New paper collection.
+        paper_sources : dict[str, str] | None
+            Optional per-paper source attribution. Keys are
+            paper identifiers (PMID → DOI → URL), values
+            are ``SearchSource`` enum strings
+            (``"pubmed"`` / ``"openalex"`` / ``"europe_pmc"``
+            / ``"biorxiv"``). When supplied, replaces the
+            existing ``paper_sources`` map; when ``None``,
+            the map is cleared (the legacy single-source
+            PubMed path passes ``None`` so the session
+            reports no source attribution).
         """
         self.papers = list(papers)
+        self.paper_sources = dict(paper_sources or {})
         self.touch()
         if papers:
             self.force_state(
