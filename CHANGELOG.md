@@ -35,6 +35,47 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   is unit-tested. Callers can disable the marker via the
   ``showPartialMarker`` prop.
 
+* **Multi-source literature search (OpenAlex, Europe PMC,
+  bioRxiv).** The previous search was PubMed-only. Researchers
+  can now pick from four sources — PubMed (NCBI canon),
+  OpenAlex (200M+ works across all disciplines, free), Europe
+  PMC (PubMed + preprints + many publishers), and bioRxiv
+  (preprint server). The backend fans out via
+  ``MultiSourceSearcher``, dedupes on DOI/PMID/title, and
+  ranks by ``confidence × recency_boost``. The default source
+  set is PubMed + OpenAlex + Europe PMC; bioRxiv is opt-in
+  via ``BIORXIV_ENABLED=true`` and is gated in the UI to a
+  year window (it has no keyword search).
+
+* **Advanced Search modal (frontend).** The "Search PubMed"
+  button in the action bar now opens a modal that exposes
+  the full filter bundle: source checkboxes (PubMed /
+  OpenAlex / Europe PMC / bioRxiv), ``since_year`` /
+  ``until_year`` pickers, sort order (relevance / newest
+  first), ``max_results``, document-type chips (journal
+  article, review, preprint, dataset, conference paper,
+  book chapter, thesis), and toggles for ``open_access_only``
+  and ``include_abstracts``. The primary CTA posts the
+  filter bundle to the same backend endpoint; the route
+  detects the ``filters`` block and dispatches through
+  ``WorkspaceOrchestrator.search_with_filters`` instead of
+  the legacy ``search(query)``.
+
+* **``AdvancedSearchFilters`` API schema.** New
+  Pydantic-validated request shape on
+  ``WorkspaceActionRequest``. Mirrors the domain
+  ``SearchFilters`` dataclass with string literal types for
+  source / sort / document-type so the frontend builds
+  type-safe requests. All fields are optional with
+  sensible defaults.
+
+* **``SearchLiteratureUseCase.execute_with_filters`` and
+  ``WorkspaceOrchestrator.search_with_filters``.** New
+  use-case + orchestrator entry points that take the full
+  filter bundle and an optional restricted source set. The
+  legacy ``execute(question)`` / ``search(query)`` path is
+  preserved for the ``/api/search`` endpoint.
+
 ### Removed
 
 * **AddPapersPanel — "Manual" tab.** Replaced by the DOI +
