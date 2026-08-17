@@ -76,6 +76,37 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   legacy ``execute(question)`` / ``search(query)`` path is
   preserved for the ``/api/search`` endpoint.
 
+* **Per-paper source attribution on ``WorkspaceResponse``.**
+  Multi-source search always tracked which source returned
+  which paper, but the route was stripping that envelope
+  when storing papers. The new ``paper_sources`` field on
+  ``WorkspaceResponse`` exposes the attribution map to
+  the frontend. The frontend renders a small coloured
+  "via <source>" badge next to each paper so researchers
+  can see at a glance whether a paper came from PubMed,
+  OpenAlex, Europe PMC, or bioRxiv. Legacy single-source
+  workspaces don't get badges retroactively.
+
+* **Advanced Search modal filter persistence.** The
+  modal previously reset to defaults every time it opened.
+  Researchers tweaking their filters (e.g. "last 5 years,
+  reviews only, OpenAlex") would lose the configuration on
+  the next modal open. The filter bundle now persists in
+  localStorage (``bioresearch-ai:advanced-search-filters:v1``)
+  with safe fallbacks for missing storage, malformed JSON,
+  and thrown exceptions. The override query field is
+  intentionally not persisted — it's a one-shot per-modal
+  value that should align with the workspace's question.
+
+* **bioRxiv lock indicator now explains why it's gated.**
+  The lock chip on the bioRxiv source checkbox used to
+  say "date window required" — that told the user what
+  to do without explaining the reason. It now reads
+  "chronological dump — set date window" with a tooltip
+  carrying the longer source hint, so researchers
+  understand that bioRxiv has no keyword search and only
+  indexes chronological preprints.
+
 ### Removed
 
 * **AddPapersPanel — "Manual" tab.** Replaced by the DOI +
