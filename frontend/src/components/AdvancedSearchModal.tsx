@@ -35,7 +35,7 @@
 // ------
 // Guillermo Ramajo Fernández
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   X,
   Search as SearchIcon,
@@ -54,6 +54,11 @@ import {
 } from '../api/client';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { toast } from '../state/toastStore';
+import {
+  loadPersistedFilters,
+  savePersistedFilters,
+  clearPersistedFilters,
+} from '../state/searchFiltersStorage';
 
 interface AdvancedSearchModalProps {
   /** ID of the workspace the search runs against. */
@@ -133,14 +138,55 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
   const [overrideQuery, setOverrideQuery] = useState<string>('');
   const [submitting, setSubmitting] = useState<boolean>(false);
 
-  // Reset to defaults every time the modal opens, so a previous
-  // session's choices don't leak in.
+  // When the user clicks the Reset button we want to wipe
+  // localStorage cleanly. The persistence effect runs on
+  // every ``draftFilters`` change, which would re-save the
+  // just-cleared defaults one tick later. We use a ref
+  // flag to suppress one persistence cycle after Reset.
+  const suppressPersistRef = useRef<boolean>(false);
+
+  // Load the user's last-used filter bundle from localStorage
+  // every time the modal opens. A previous session's choices
+  // are restored so the researcher doesn't have to re-pick
+  // PubMed+OpenAlex+Europe PMC + "last 5 years" + "newest
+  // first" + "abstracts only" every time they open the modal.
+  //
+  // If localStorage is empty (first session ever), we fall
+  // back to ``DEFAULT_FILTERS`` so the modal always opens to
+  // a valid state.
+  //
+  // The ``overrideQuery`` is intentionally NOT persisted —
+  // it's a one-shot query override that lives in the modal
+  // for the current session. Persisting it would mean the
+  // modal pre-fills with a query that no longer matches the
+  // workspace's question.
   useEffect(() => {
     if (isOpen) {
-      setDraftFilters(DEFAULT_FILTERS);
+      const persisted = loadPersistedFilters();
+      setDraftFilters(persisted ?? DEFAULT_FILTERS);
       setOverrideQuery('');
     }
   }, [isOpen]);
+
+  // Persist the filter bundle every time the user changes
+  // a field. localStorage writes are fast enough that the
+  // cost is negligible, and it means the most-recent filter
+  // is always saved (no risk of "user closes the browser
+  // before the persistence effect fires").
+  //
+  // We skip one tick after Reset so the explicit
+  // ``clearPersistedFilters`` call in ``handleReset``
+  // actually sticks — otherwise this effect would re-save
+  // the just-cleared defaults the moment ``setDraftFilters``
+  // runs.
+  useEffect(() => {
+    if (!isOpen) return;
+    if (suppressPersistRef.current) {
+      suppressPersistRef.current = false;
+      return;
+    }
+    savePersistedFilters(draftFilters);
+  }, [draftFilters, isOpen]);
 
   // Close on Escape.
   useEffect(() => {
@@ -223,8 +269,18 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
   };
 
   const handleReset = () => {
+    // Suppress one cycle of the persistence effect so the
+    // explicit ``clearPersistedFilters`` below actually
+    // sticks. Without this, the effect runs on the next
+    // render with ``draftFilters === DEFAULT_FILTERS`` and
+    // re-saves them.
+    suppressPersistRef.current = true;
     setDraftFilters(DEFAULT_FILTERS);
     setOverrideQuery('');
+    // Wipe localStorage so a researcher who resets and
+    // closes the browser truly has no history. The next
+    // modal open starts from defaults.
+    clearPersistedFilters();
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -357,9 +413,12 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
                       {SOURCE_LABELS[source].label}
                     </span>
                     {isDisabled && (
-                      <span className="advanced-search-modal-source-locked">
+                      <span
+                        className="advanced-search-modal-source-locked"
+                        title={SOURCE_LABELS[source].hint}
+                      >
                         <Lock size={12} />
-                        date window required
+                        chronological dump — set date window
                       </span>
                     )}
                   </label>

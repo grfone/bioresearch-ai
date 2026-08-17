@@ -209,9 +209,11 @@ describe('AdvancedSearchModal', () => {
       expect(num).toHaveValue(20);
     });
 
-    it('clears draftFilters every time the modal opens', async () => {
+    it('restores draftFilters from localStorage on reopen', async () => {
       // Open, set a filter, close, reopen — the filter should
-      // be back to defaults.
+      // be restored (NOT reset to defaults). This is the
+      // persistence behaviour: the researcher's last-used
+      // filters survive modal opens.
       const user = userEvent.setup();
       const onClose = vi.fn();
       const { rerender } = render(
@@ -243,7 +245,8 @@ describe('AdvancedSearchModal', () => {
         />,
       );
       const sinceSelectAfter = screen.getAllByRole('combobox')[0];
-      expect(sinceSelectAfter).toHaveValue('');
+      // The filter is restored, not reset to ''.
+      expect(sinceSelectAfter).toHaveValue('2020');
     });
   });
 
@@ -297,7 +300,10 @@ describe('AdvancedSearchModal', () => {
       expect(biorxiv).not.toBeDisabled();
     });
 
-    it('shows the "date window required" lock indicator on bioRxiv', () => {
+    it('shows the "chronological dump — set date window" lock on bioRxiv', () => {
+      // The lock indicator explains WHY bioRxiv is gated
+      // (it's a chronological dump, not a keyword search),
+      // not just THAT it is.
       render(
         <AdvancedSearchModal
           workspaceId="ws-1"
@@ -306,13 +312,20 @@ describe('AdvancedSearchModal', () => {
           onClose={vi.fn()}
         />,
       );
-      // The lock chip should be visible next to bioRxiv when
-      // there's no date window.
       const biorxivLabel = screen
         .getByRole('checkbox', { name: /bioRxiv/i })
         .closest('label');
       expect(biorxivLabel).toBeTruthy();
+      expect(biorxivLabel!.textContent).toMatch(/chronological dump/i);
       expect(biorxivLabel!.textContent).toMatch(/date window/i);
+      // Tooltip on the lock chip carries the longer hint.
+      const lockChip = biorxivLabel!.querySelector(
+        '.advanced-search-modal-source-locked',
+      );
+      expect(lockChip).not.toBeNull();
+      expect(lockChip!.getAttribute('title')).toMatch(
+        /chronological/i,
+      );
     });
   });
 
@@ -406,6 +419,40 @@ describe('AdvancedSearchModal', () => {
         name: /relevance/i,
       });
       expect(relevanceRadio).toBeChecked();
+    });
+
+    it('clears the persisted filter bundle in localStorage', async () => {
+      // The Reset button should also clear localStorage so a
+      // researcher who resets and closes the browser truly
+      // has no history. The next modal open starts from
+      // defaults and localStorage is empty.
+      const user = userEvent.setup();
+      // Pre-populate localStorage with non-default filters.
+      window.localStorage.setItem(
+        'bioresearch-ai:advanced-search-filters:v1',
+        JSON.stringify({
+          since_year: 2020,
+          max_results: 50,
+          sort_by: 'newest_first',
+        }),
+      );
+      render(
+        <AdvancedSearchModal
+          workspaceId="ws-1"
+          workspaceQuestion="What is GLP-1?"
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+      // The persisted filters were loaded — verify by setting
+      // a filter and clicking Reset.
+      const resetBtn = screen.getByRole('button', { name: /Reset/i });
+      await user.click(resetBtn);
+      // localStorage should now be cleared.
+      const persisted = window.localStorage.getItem(
+        'bioresearch-ai:advanced-search-filters:v1',
+      );
+      expect(persisted).toBeNull();
     });
   });
 

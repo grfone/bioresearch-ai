@@ -12,8 +12,22 @@
 
 import '@testing-library/jest-dom/vitest';
 
-import { afterEach } from 'vitest';
+import { afterEach, beforeEach } from 'vitest';
 import { cleanup } from '@testing-library/react';
+
+beforeEach(() => {
+  // Clear localStorage before each test so persisted
+  // application state (searchFiltersStorage, toastStore,
+  // workspaceStore, etc.) doesn't leak between tests.
+  // jsdom's localStorage persists across tests in the
+  // same worker unless explicitly cleared.
+  if (
+    typeof window !== 'undefined' &&
+    window.localStorage
+  ) {
+    window.localStorage.clear();
+  }
+});
 
 afterEach(() => {
   cleanup();
