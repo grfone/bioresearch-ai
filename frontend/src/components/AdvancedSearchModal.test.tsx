@@ -32,7 +32,12 @@ vi.mock('../api/client', () => ({
 
 vi.mock('../state/workspaceStore', () => ({
   useWorkspaceStore: (selector: (state: any) => any) => {
-    const fakeState = { addPapersToCurrent: vi.fn() };
+    const fakeState = {
+      addPapersToCurrent: vi.fn(),
+      // Advanced Search submit calls setCurrentWorkspace so
+      // the action bar reflects the new FSM state.
+      setCurrentWorkspace: vi.fn(),
+    };
     return selector(fakeState);
   },
 }));

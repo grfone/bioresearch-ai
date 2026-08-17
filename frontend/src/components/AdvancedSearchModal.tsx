@@ -147,6 +147,16 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
   const [overrideQuery, setOverrideQuery] = useState<string>('');
   const [submitting, setSubmitting] = useState<boolean>(false);
 
+  // Sync the workspace store with the search response so
+  // the page's action bar reflects the new FSM state and
+  // allowed_actions. Without this, the response is
+  // discarded and the workspace stays in CREATED, leaving
+  // Summarize / Compare / Generate Report disabled even
+  // though 20 papers just landed in the workspace.
+  const setCurrentWorkspace = useWorkspaceStore(
+    (s) => s.setCurrentWorkspace,
+  );
+
   // Named presets. Loaded from localStorage on mount and
   // whenever the modal opens (so a researcher who saves a
   // preset in another workspace sees it here too).
@@ -366,7 +376,15 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
             ? draftFilters.sources
             : [],
       };
-      await api.runSearchAction(workspaceId, queryToUse, filters);
+      const response = await api.runSearchAction(
+        workspaceId,
+        queryToUse,
+        filters,
+      );
+      // Sync the workspace store with the backend's view so
+      // the action bar's allowed_actions reflect the new
+      // state (PAPERS_RETRIEVED -> summarize is allowed).
+      setCurrentWorkspace(response);
       toast.success(
         queryToUse
           ? `Advanced search ran for "${queryToUse}".`

@@ -306,12 +306,12 @@ export const Workspace: React.FC = () => {
             data-action="search"
             title={
               can('search')
-                ? 'Open the Advanced Search modal to pick sources, year range, and filters'
+                ? 'Open the Advanced Search modal to pick sources (PubMed, OpenAlex, Europe PMC, bioRxiv), year range, sort, and document type'
                 : 'Search is not allowed in the current state'
             }
           >
             <Play size={16} />
-            Search PubMed
+            Advanced Search…
           </button>
           <button
             type="button"
