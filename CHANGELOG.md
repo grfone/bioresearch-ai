@@ -98,6 +98,17 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   intentionally not persisted — it's a one-shot per-modal
   value that should align with the workspace's question.
 
+* **Named Advanced Search presets.** Researchers can now
+  save the current filter bundle under a name (e.g.
+  "Last 5 years, reviews only, OpenAlex") and recall it
+  with one click. Presets are persisted in localStorage
+  (``bioresearch-ai:adv-search-presets:v1``) and shared
+  across workspaces. The new "Saved presets" section in
+  the modal lists existing presets with per-row load and
+  delete buttons, plus a "Save preset" input. Empty /
+  whitespace-only names are rejected; same-name presets
+  overwrite (newest-first sort).
+
 * **bioRxiv lock indicator now explains why it's gated.**
   The lock chip on the bioRxiv source checkbox used to
   say "date window required" — that told the user what
