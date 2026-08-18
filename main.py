@@ -137,6 +137,13 @@ async def lifespan(
     None
     """
 
+    # Configure the application's logging subsystem so that
+    # the LOG_LEVEL env var is honoured (and DEBUG logs are
+    # emitted when researchers enable them for cache HIT /
+    # MISS visibility etc.).
+    from app.core.logger import configure_logging
+    configure_logging()
+
     print("BioResearch AI API starting...")
 
     yield
