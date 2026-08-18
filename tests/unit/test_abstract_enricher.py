@@ -457,3 +457,300 @@ class TestCleanAbstract:
             "in hepatocytes. The fold-change was 2.3+/-0.5."
         )
         assert _clean_abstract(text) == text
+
+
+# -----------------------------------------------------------------
+# Cache behaviour (LRU)
+# -----------------------------------------------------------------
+
+
+class TestCache:
+    """Verify the LRU cache in AbstractEnricher.
+
+    The cache is keyed by DOI and bounded by ``cache_size``.
+    Both string and ``None`` results are cached -- a DOI
+    that returned ``None`` (Datadome block) should not be
+    re-fetched in the same session.
+    """
+
+    def test_repeat_doi_does_not_hit_network(self):
+        """Second fetch with the same DOI must not make a
+        network request -- the cache returns the first
+        result.
+        """
+        from app.infrastructure.pubmed.abstract_enricher import (
+            AbstractEnricher,
+        )
+        import httpx
+
+        call_count = [0]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            call_count[0] += 1
+            return httpx.Response(200, text=NATURE_HTML)
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.Client(
+            transport=transport,
+            timeout=DEFAULT_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+        )
+        with AbstractEnricher(client=client, cache_size=10) as enricher:
+            first = enricher.fetch("10.1038/nature14539")
+            second = enricher.fetch("10.1038/nature14539")
+            third = enricher.fetch("10.1038/nature14539")
+
+        assert first is not None
+        assert second == first
+        assert third == first
+        # Only the FIRST fetch hit the network.
+        assert call_count[0] == 1
+
+    def test_cache_miss_then_hit_increments_stats(self):
+        """cache_stats reports hits and misses correctly."""
+        from app.infrastructure.pubmed.abstract_enricher import (
+            AbstractEnricher,
+        )
+        import httpx
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=NATURE_HTML)
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.Client(
+            transport=transport,
+            timeout=DEFAULT_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+        )
+        with AbstractEnricher(client=client, cache_size=10) as enricher:
+            assert enricher.cache_stats() == {
+                "hits": 0, "misses": 0, "size": 0, "capacity": 10,
+            }
+            enricher.fetch("10.1038/nature14539")
+            assert enricher.cache_stats() == {
+                "hits": 0, "misses": 1, "size": 1, "capacity": 10,
+            }
+            enricher.fetch("10.1038/nature14539")
+            assert enricher.cache_stats() == {
+                "hits": 1, "misses": 1, "size": 1, "capacity": 10,
+            }
+            enricher.fetch("10.1038/nature14539")
+            assert enricher.cache_stats() == {
+                "hits": 2, "misses": 1, "size": 1, "capacity": 10,
+            }
+
+    def test_cache_distinguishes_none_from_absent(self):
+        """A DOI that returned ``None`` (e.g. blocked by
+        anti-bot) is cached as ``None`` -- the second fetch
+        returns ``None`` without hitting the network.
+        """
+        from app.infrastructure.pubmed.abstract_enricher import (
+            AbstractEnricher,
+        )
+        import httpx
+
+        call_count = [0]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            call_count[0] += 1
+            # Datadome-style challenge page -- no abstract.
+            return httpx.Response(200, text=DATADOME_HTML)
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.Client(
+            transport=transport,
+            timeout=DEFAULT_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+        )
+        with AbstractEnricher(client=client, cache_size=10) as enricher:
+            first = enricher.fetch("10.1007/blocked-doi")
+            second = enricher.fetch("10.1007/blocked-doi")
+
+        assert first is None
+        assert second is None
+        # Only one network call -- the second was served
+        # from the cache.
+        assert call_count[0] == 1
+        assert enricher.cache_stats()["size"] == 1
+
+    def test_cache_evicts_least_recently_used(self):
+        """When the cache is full, the least-recently used
+        entry is evicted on the next miss.
+        """
+        from app.infrastructure.pubmed.abstract_enricher import (
+            AbstractEnricher,
+        )
+        import httpx
+
+        call_count = [0]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            call_count[0] += 1
+            return httpx.Response(200, text=NATURE_HTML)
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.Client(
+            transport=transport,
+            timeout=DEFAULT_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+        )
+        # Cache size 2 so we can test eviction easily.
+        with AbstractEnricher(client=client, cache_size=2) as enricher:
+            # Fill the cache.
+            enricher.fetch("10.1038/a")
+            enricher.fetch("10.1038/b")
+            assert enricher.cache_stats()["size"] == 2
+            assert call_count[0] == 2
+
+            # Access 'a' to make it most-recently-used.
+            enricher.fetch("10.1038/a")
+            assert call_count[0] == 2  # hit, no network
+
+            # Add 'c' -- this should evict 'b' (LRU).
+            enricher.fetch("10.1038/c")
+            assert call_count[0] == 3  # miss for c
+            assert enricher.cache_stats()["size"] == 2
+
+            # 'b' was evicted, so fetching it now misses.
+            # Re-adding 'b' evicts the current LRU ('a'),
+            # because 'a' has not been touched since step 3.
+            enricher.fetch("10.1038/b")
+            assert call_count[0] == 4  # miss for b (evicted)
+
+            # Touch 'a' again to confirm it's been evicted.
+            enricher.fetch("10.1038/a")
+            assert call_count[0] == 5  # miss for a (evicted)
+
+            # Now 'b' is MRU. Fetching 'c' should miss.
+            enricher.fetch("10.1038/c")
+            assert call_count[0] == 6  # miss for c (evicted)
+            assert enricher.cache_stats()["size"] == 2
+
+    def test_cache_size_zero_disables_caching(self):
+        """Passing ``cache_size=0`` disables caching -- every
+        fetch hits the network, even for repeat DOIs.
+        """
+        from app.infrastructure.pubmed.abstract_enricher import (
+            AbstractEnricher,
+        )
+        import httpx
+
+        call_count = [0]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            call_count[0] += 1
+            return httpx.Response(200, text=NATURE_HTML)
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.Client(
+            transport=transport,
+            timeout=DEFAULT_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+        )
+        with AbstractEnricher(client=client, cache_size=0) as enricher:
+            enricher.fetch("10.1038/nature14539")
+            enricher.fetch("10.1038/nature14539")
+            enricher.fetch("10.1038/nature14539")
+
+        assert call_count[0] == 3
+        assert enricher.cache_stats() == {
+            "hits": 0, "misses": 0, "size": 0, "capacity": 0,
+        }
+
+    def test_clear_cache_resets_state(self):
+        """``clear_cache()`` drops all entries and resets
+        the hit/miss counters."""
+        from app.infrastructure.pubmed.abstract_enricher import (
+            AbstractEnricher,
+        )
+        import httpx
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=NATURE_HTML)
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.Client(
+            transport=transport,
+            timeout=DEFAULT_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+        )
+        with AbstractEnricher(client=client, cache_size=10) as enricher:
+            enricher.fetch("10.1038/nature14539")
+            enricher.fetch("10.1038/nature14539")
+            assert enricher.cache_stats()["size"] == 1
+            assert enricher.cache_stats()["hits"] == 1
+
+            enricher.clear_cache()
+            assert enricher.cache_stats() == {
+                "hits": 0, "misses": 0, "size": 0, "capacity": 10,
+            }
+
+    def test_different_dois_get_separate_cache_entries(self):
+        """Two different DOIs occupy two cache slots."""
+        from app.infrastructure.pubmed.abstract_enricher import (
+            AbstractEnricher,
+        )
+        import httpx
+
+        call_count = [0]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            call_count[0] += 1
+            return httpx.Response(200, text=NATURE_HTML)
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.Client(
+            transport=transport,
+            timeout=DEFAULT_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+        )
+        with AbstractEnricher(client=client, cache_size=10) as enricher:
+            enricher.fetch("10.1038/a")
+            enricher.fetch("10.1038/b")
+            enricher.fetch("10.1038/a")  # hit
+            enricher.fetch("10.1038/b")  # hit
+            enricher.fetch("10.1038/a")  # hit
+
+        assert call_count[0] == 2
+        assert enricher.cache_stats()["hits"] == 3
+        assert enricher.cache_stats()["misses"] == 2
+
+    def test_doi_prefix_normalized_for_cache_key(self):
+        """Cache is keyed by DOI, not by URL -- different
+        forms of the same DOI hit the same cache slot.
+        ``https://doi.org/10.1038/x`` and ``10.1038/x``
+        share one entry.
+        """
+        from app.infrastructure.pubmed.abstract_enricher import (
+            AbstractEnricher,
+        )
+        import httpx
+
+        call_count = [0]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            call_count[0] += 1
+            return httpx.Response(200, text=NATURE_HTML)
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.Client(
+            transport=transport,
+            timeout=DEFAULT_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+        )
+        with AbstractEnricher(client=client, cache_size=10) as enricher:
+            enricher.fetch("https://doi.org/10.1038/nature14539")
+            enricher.fetch("doi.org/10.1038/nature14539")
+            enricher.fetch("10.1038/nature14539")
+
+        assert call_count[0] == 1
+        assert enricher.cache_stats()["hits"] == 2
+

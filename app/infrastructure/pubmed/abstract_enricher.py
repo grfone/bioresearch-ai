@@ -60,6 +60,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+from collections import OrderedDict
 
 import httpx
 
@@ -80,6 +81,12 @@ DEFAULT_USER_AGENT = (
 # renders; 8 seconds is a reasonable cap that we've seen
 # work for Nature, PLOS, and Frontiers.
 DEFAULT_TIMEOUT = 8.0
+
+# Default cache size. 256 entries is plenty for one
+# session -- each entry is the abstract string (typically
+# 100-3000 chars) keyed by DOI. Disable with
+# ``cache_size=0`` for tests or memory-constrained envs.
+DEFAULT_CACHE_SIZE = 256
 
 
 class AbstractEnricher:
@@ -103,6 +110,12 @@ class AbstractEnricher:
         or for letting researchers identify their instance.
     timeout : float | None
         Override the per-request timeout in seconds.
+    cache_size : int
+        Maximum number of DOI -> abstract entries to keep
+        in the in-memory LRU cache. Set to ``0`` to
+        disable caching entirely (useful for tests and
+        memory-constrained deployments). Default
+        ``DEFAULT_CACHE_SIZE`` (256).
     """
 
     def __init__(
@@ -111,6 +124,7 @@ class AbstractEnricher:
         *,
         user_agent: str | None = None,
         timeout: float | None = None,
+        cache_size: int = DEFAULT_CACHE_SIZE,
     ) -> None:
         self._owns_client = client is None
         self._client = client or httpx.Client(
@@ -125,6 +139,18 @@ class AbstractEnricher:
                 "Accept-Language": "en-US,en;q=0.5",
             },
         )
+        # LRU cache: most-recently-fetched DOI is at the
+        # back. When the cache is full, the least-recently
+        # used entry is evicted. ``OrderedDict.move_to_end``
+        # is the standard LRU pattern.
+        #
+        # Both string and ``None`` results are cached -- a
+        # DOI that returned ``None`` (Datadome block, etc.)
+        # should not be re-fetched within the same session.
+        self._cache: OrderedDict[str, str | None] = OrderedDict()
+        self._cache_size = max(0, int(cache_size))
+        self._cache_hits = 0
+        self._cache_misses = 0
 
     def __enter__(self) -> "AbstractEnricher":
         return self
@@ -142,12 +168,36 @@ class AbstractEnricher:
         us, the page has no abstract meta tag, or the
         network call fails.
 
+        Results are cached in a bounded LRU keyed by DOI
+        so repeat lookups in the same session skip the
+        network entirely. Both string and ``None`` results
+        are cached -- a DOI that returned ``None``
+        (Datadome block, network error) is not retried
+        for the same session.
+
         Parameters
         ----------
         doi : str
             The DOI to resolve. Leading ``https://doi.org/``
             and ``doi.org/`` prefixes are stripped.
         """
+        # Normalize the DOI for the cache key. Two forms
+        # of the same DOI (e.g. "10.1038/x" and
+        # "https://doi.org/10.1038/x") should share one
+        # cache slot, otherwise a researcher who pastes
+        # the DOI with a prefix and without would cause
+        # two network requests.
+        cache_key = self._normalize_doi(doi)
+        if self._cache_size > 0 and cache_key in self._cache:
+            # Cache hit. ``move_to_end`` marks this entry
+            # as most-recently-used so it doesn't get
+            # evicted on the next miss.
+            self._cache.move_to_end(cache_key)
+            self._cache_hits += 1
+            return self._cache[cache_key]
+        if self._cache_size > 0:
+            self._cache_misses += 1
+
         url = self._build_url(doi)
         try:
             response = self._client.get(url)
@@ -156,14 +206,57 @@ class AbstractEnricher:
                 "AbstractEnricher: HTTP error for %s: %s",
                 doi, exc,
             )
-            return None
-        if response.status_code != 200:
-            logger.info(
-                "AbstractEnricher: HTTP %d for %s",
-                response.status_code, doi,
-            )
-            return None
-        return self._extract_abstract(response.text)
+            result = None
+        else:
+            if response.status_code != 200:
+                logger.info(
+                    "AbstractEnricher: HTTP %d for %s",
+                    response.status_code, doi,
+                )
+                result = None
+            else:
+                result = self._extract_abstract(response.text)
+
+        # Store the result (even ``None``) so we don't
+        # re-fetch the same DOI in this session. Evict
+        # the oldest entry if the cache is full.
+        if self._cache_size > 0:
+            if cache_key in self._cache:
+                # Shouldn't happen (the cache check at the
+                # top would have returned), but defensively
+                # move it to the end if the value changed.
+                self._cache.move_to_end(cache_key)
+                self._cache[cache_key] = result
+            else:
+                self._cache[cache_key] = result
+                if len(self._cache) > self._cache_size:
+                    self._cache.popitem(last=False)
+        return result
+
+    def cache_stats(self) -> dict[str, int]:
+        """Return cache statistics for diagnostics.
+
+        Useful for the bootstrap diagnostics log and for
+        tests. Returns a dict with ``hits``, ``misses``,
+        ``size``, and ``capacity`` keys.
+        """
+        return {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "size": len(self._cache),
+            "capacity": self._cache_size,
+        }
+
+    def clear_cache(self) -> None:
+        """Drop all cached entries.
+
+        Useful when a researcher wants to force a refresh
+        (e.g. they fixed a typo in their DOI) or for
+        tests that need a clean slate between cases.
+        """
+        self._cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
 
     @staticmethod
     def _build_url(doi: str) -> str:
@@ -173,13 +266,24 @@ class AbstractEnricher:
         DOI resolver URL. The publisher's landing page is
         the redirect target.
         """
+        cleaned = AbstractEnricher._normalize_doi(doi)
+        return f"https://doi.org/{cleaned}"
+
+    @staticmethod
+    def _normalize_doi(doi: str) -> str:
+        """Return the canonical DOI form (no prefix, stripped).
+
+        Used for both cache keys and URL construction so
+        ``"10.1038/x"`` and ``"https://doi.org/10.1038/x"``
+        are treated as the same identifier.
+        """
         cleaned = doi.strip()
         lowered = cleaned.lower()
         for prefix in ("https://doi.org/", "http://doi.org/", "doi.org/"):
             if lowered.startswith(prefix):
                 cleaned = cleaned[len(prefix):]
                 break
-        return f"https://doi.org/{cleaned}"
+        return cleaned
 
     # Meta-tag patterns. We try a few formats because
     # publishers vary:
