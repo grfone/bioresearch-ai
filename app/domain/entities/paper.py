@@ -51,7 +51,21 @@ class Paper:
         Publication year.
 
     abstract : str
-        Paper abstract.
+        Paper abstract. May be empty if no abstract
+        could be retrieved from any source.
+
+    inferred_abstract : bool
+        ``True`` when the abstract was retrieved via
+        the LLM-based extraction fallback (verbatim
+        text pulled from the publisher's HTML page
+        by an LLM that was asked to extract -- not
+        generate -- the abstract). ``False`` when the
+        abstract came from a structured source
+        (CrossRef, OpenAlex, PubMed) or from the
+        deterministic HTML meta-tag regex. The flag
+        exists so the frontend can display a
+        provenance badge ("AI-extracted") for
+        transparency. Default ``False``.
 
     doi : str | None
         Digital Object Identifier.
@@ -75,6 +89,11 @@ class Paper:
     year: int | None = None
 
     abstract: str = ""
+
+    # Provenance flag for the abstract field. See the
+    # docstring above for the contract. Default False
+    # so legacy Paper(...) constructions keep working.
+    inferred_abstract: bool = False
 
     doi: str | None = None
 

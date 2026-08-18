@@ -144,6 +144,12 @@ class PaperResponse(BaseModel):
     abstract : str
         Publication abstract.
 
+    inferred_abstract : bool
+        ``True`` when the abstract came from the LLM-based
+        extraction fallback. Used by the frontend to show
+        an "AI-extracted" provenance badge so researchers
+        can see where the abstract came from.
+
     doi : str | None
         Digital Object Identifier.
 
@@ -168,6 +174,8 @@ class PaperResponse(BaseModel):
     year: int | None = None
 
     abstract: str = ""
+
+    inferred_abstract: bool = False
 
     doi: str | None = None
 
@@ -216,6 +224,7 @@ class PaperResponse(BaseModel):
             journal=journal,
             year=paper.year,
             abstract=paper.abstract,
+            inferred_abstract=paper.inferred_abstract,
             doi=paper.doi,
             pmid=paper.pmid,
             keywords=paper.keywords,
