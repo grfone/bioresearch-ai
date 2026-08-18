@@ -314,6 +314,20 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   operators can verify they're using the intended
   configuration.
 
+* **``/admin/enricher-stats`` endpoint for runtime cache
+  introspection.** Operators can now ``curl
+  /admin/enricher-stats`` at any time and see the
+  AbstractEnricher's actual hit/miss counters and
+  current cache size. Useful for confirming the
+  singleton pattern is holding across uvicorn
+  workers, debugging "why is the second DOI lookup
+  still slow?", and verifying the cache hit rate in
+  production. Returns ``{"hits", "misses", "size",
+  "capacity"}`` when the enricher is wired, or
+  ``{"status": "disabled"}`` (HTTP 200) when
+  ``ABSTRACT_ENRICHER_ENABLED=false``. Cheap, read-only,
+  and never raises.
+
 ### Removed
 
 * **AddPapersPanel — "Manual" tab.** Replaced by the DOI +
