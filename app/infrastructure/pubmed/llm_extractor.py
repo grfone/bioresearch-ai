@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 
 from app.core.exceptions import LLMProviderError
 from app.domain.interfaces.llm_provider import LLMProvider
@@ -115,6 +116,25 @@ MIN_ABSTRACT_CHARS = 40
 MAX_ABSTRACT_CHARS = 8000
 
 
+@dataclass(frozen=True, slots=True)
+class ExtractionResult:
+    """Carries the LLM-extracted abstract AND the
+    provenance flag.
+
+    ``abstract`` is the verbatim text the LLM pulled
+    from the page.
+
+    ``inferred`` is always ``True`` for results returned
+    by ``LLMExtractor`` -- that's the whole point of
+    this class. The field is exposed so the
+    AbstractEnricher can stamp ``inferred_abstract=True``
+    onto the resulting Paper without coupling the
+    enricher to the extractor's internal contract.
+    """
+    abstract: str
+    inferred: bool = True
+
+
 class LLMExtractor:
     """Extract the abstract from a publisher HTML page
     using an LLM as a flexible text parser.
@@ -154,16 +174,16 @@ class LLMExtractor:
         self._max_input_chars = max_input_chars
         self._timeout_seconds = timeout_seconds
 
-    def extract(self, html: str) -> str | None:
-        """Return the abstract extracted verbatim from the
-        HTML, or ``None`` if the page genuinely has no
-        abstract.
+    def extract(self, html: str) -> "ExtractionResult | None":
+        """Return an ExtractionResult (verbatim abstract
+        + inferred=True provenance flag), or ``None`` if
+        the page genuinely has no abstract.
 
         The contract is strict:
 
         - If the LLM returns a string that looks like an
-          abstract (>= 40 chars, <= 8000 chars), return
-          it as-is.
+          abstract (>= 40 chars, <= 8000 chars), wrap it
+          in an ``ExtractionResult`` and return it.
         - If the LLM returns ``NONE`` or anything
           matching the rejection pattern ("no abstract",
           "not available", etc.), return ``None``.
@@ -173,6 +193,12 @@ class LLMExtractor:
         Never invent content. Never paraphrase. The LLM
         is a flexible parser; if it can't find an
         abstract, the answer is ``None``.
+
+        The returned ``ExtractionResult`` always has
+        ``inferred=True`` -- that's the whole point of
+        this class. Callers (the AbstractEnricher)
+        stamp this flag onto the resulting Paper so the
+        frontend can render an "AI-extracted" badge.
         """
         page_text = _strip_html(html)
         if not page_text.strip():
@@ -214,9 +240,17 @@ class LLMExtractor:
             )
             return None
 
-        return _clean_extraction(response.content)
+        cleaned = _clean_extraction(response.content)
+        if cleaned is None:
+            return None
+        # The result came from the LLM -- always mark as
+        # inferred. The contract is verbatim extraction
+        # (never generation) so the flag is safe to set.
+        return ExtractionResult(abstract=cleaned, inferred=True)
 
-    def extract_from_doi(self, doi: str, html: str) -> str | None:
+    def extract_from_doi(
+        self, doi: str, html: str,
+    ) -> "ExtractionResult | None":
         """Convenience wrapper that includes the DOI in
         the prompt. Some pages show different content
         depending on the URL hash; including the DOI
@@ -363,4 +397,10 @@ def _clean_extraction(raw: str) -> str | None:
     return normalized
 
 
-__all__ = ["LLMExtractor", "SYSTEM_PROMPT", "MIN_ABSTRACT_CHARS", "MAX_ABSTRACT_CHARS"]
+__all__ = [
+    "LLMExtractor",
+    "ExtractionResult",
+    "SYSTEM_PROMPT",
+    "MIN_ABSTRACT_CHARS",
+    "MAX_ABSTRACT_CHARS",
+]

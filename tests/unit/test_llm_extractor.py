@@ -187,7 +187,10 @@ class TestExtractionSuccess:
         result = extractor.extract(BOOK_CHAPTER_HTML)
 
         assert result is not None
-        assert result == REAL_ABSTRACT
+        assert result.abstract == REAL_ABSTRACT
+        # The provenance flag must always be True -- that's
+        # the whole point of the ExtractionResult wrapper.
+        assert result.inferred is True
 
     def test_strips_script_content_before_sending(self):
         """The page text we send to the LLM should not include
@@ -561,7 +564,9 @@ class TestExtractFromDOI:
         result = extractor.extract_from_doi(
             "10.1234/test", BOOK_CHAPTER_HTML,
         )
-        assert result == REAL_ABSTRACT
+        assert result is not None
+        assert result.abstract == REAL_ABSTRACT
+        assert result.inferred is True
         assert len(fake.calls) == 1
 
 
@@ -582,5 +587,65 @@ class TestWhitespaceNormalization:
 
         assert result is not None
         # All internal whitespace should be single spaces.
-        assert "  " not in result
-        assert result == REAL_ABSTRACT
+        assert "  " not in result.abstract
+        assert result.abstract == REAL_ABSTRACT
+
+
+class TestExtractionResultContract:
+    """Pin the ExtractionResult wrapper contract.
+
+    These tests exist so a future refactor can't
+    accidentally:
+    - Drop the wrapper and return a bare string
+    - Set inferred=False on LLM-extracted results
+    - Return an ExtractionResult with an empty abstract
+      when the LLM said NONE
+    """
+
+    def test_extraction_result_is_always_marked_inferred(self):
+        """Every successful LLMExtractor result has
+        inferred=True. This is the contract -- the
+        whole point of the wrapper is to carry the
+        provenance flag.
+        """
+        from app.infrastructure.pubmed.llm_extractor import (
+            LLMExtractor,
+        )
+        from app.infrastructure.pubmed.llm_extractor import (
+            ExtractionResult,
+        )
+
+        fake = FakeLLMProvider([REAL_ABSTRACT, REAL_ABSTRACT])
+        extractor = LLMExtractor(llm_provider=fake)
+        r1 = extractor.extract(BOOK_CHAPTER_HTML)
+        r2 = extractor.extract(BOOK_CHAPTER_HTML)
+        assert isinstance(r1, ExtractionResult)
+        assert isinstance(r2, ExtractionResult)
+        assert r1.inferred is True
+        assert r2.inferred is True
+
+    def test_extraction_failure_returns_none_not_empty_result(self):
+        """When the LLM says NONE or the response is too
+        short or too long, the extractor returns None,
+        NOT an ExtractionResult with an empty abstract.
+        The ``None`` sentinel is the contract for "no
+        abstract available".
+        """
+        from app.infrastructure.pubmed.llm_extractor import (
+            LLMExtractor,
+        )
+
+        for variant in [
+            "NONE",
+            "No abstract.",
+            "",  # empty
+        ]:
+            fake = FakeLLMProvider([variant])
+            extractor = LLMExtractor(llm_provider=fake)
+            assert extractor.extract(NO_ABSTRACT_HTML) is None
+
+        # Too long -- still None, not an empty result.
+        fake = FakeLLMProvider(["x" * 8001])
+        extractor = LLMExtractor(llm_provider=fake)
+        assert extractor.extract(BOOK_CHAPTER_HTML) is None
+
