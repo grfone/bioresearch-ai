@@ -118,6 +118,75 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   understand that bioRxiv has no keyword search and only
   indexes chronological preprints.
 
+* **Bootstrap popup: alphabetical provider list with MiniMax
+  default.** The provider dropdown was previously grouped
+  by region (US / CN / EU) which made it hard to scan. The
+  list is now sorted alphabetically by ``display_name`` and
+  the region is preserved in the label (e.g. ``MiniMax
+  [CN]``). The default provider is now ``minimax`` (with
+  ``MiniMax-M3`` as the model), reflecting the user-facing
+  workflow on this host. The bootstrap CLI accepts provider
+  slugs (e.g. ``openai``) in addition to numeric indices, so
+  tests are no longer brittle to the list order. The
+  ``LOCAL_MODELS`` list is also alphabetical, and a new
+  ``sorted_by_display_name()`` helper on the LLM provider
+  catalog exposes the same ordering to any future caller.
+
+* **Bootstrap wizard skips when ``.env`` has valid creds.**
+  Previously the wizard popped up every time
+  ``python3 bootstrap.py`` was run, even when the existing
+  ``.env`` already had everything needed. The new
+  ``_env_has_valid_creds()`` helper checks the minimum
+  viable config (a valid ``DEFAULT_LLM_PROVIDER`` slug, the
+  provider's API key env var with a non-empty value for
+  non-local providers, and a non-empty ``PUBMED_EMAIL``)
+  and skips the wizard automatically. A new ``--wizard``
+  flag forces the wizard back for re-configuration.
+  Optional fields (``PUBMED_API_KEY``, ``OLLAMA_MODEL``,
+  custom ``BASE_URL``) don't disqualify the env.
+
+* **OpenAlex fallback for missing DOI abstracts.** When
+  CrossRef returns a paper with no abstract (common for
+  book chapters, conference proceedings, and theses),
+  the resolver now falls back to OpenAlex. OpenAlex is
+  also free, no API key required, and stores abstracts
+  as a positional-token inverted index. We reconstruct
+  the abstract by sorting tokens by their positions and
+  joining with spaces. The fallback only overrides the
+  abstract field — the rest of the record (title,
+  authors, year, DOI) stays from CrossRef. Network
+  errors, 404s, malformed responses, and missing
+  abstracts are all handled silently so the resolver
+  never crashes the bulk-add flow.
+
+* **Action bar auto-enables Summarize when papers exist.**
+  Two paths populate the workspace with papers (the
+  legacy ``LiteratureSearch`` and the new
+  ``AdvancedSearchModal``), but neither used to update
+  the FSM state the action bar reads. With 20 papers
+  in the workspace, ``Summarize`` stayed disabled because
+  the store's ``currentWorkspace`` was still in
+  ``CREATED``. The store now mirrors the backend FSM
+  transition (CREATED + ADD_PAPER → PAPERS_RETRIEVED) when
+  papers are added, and the modal's submit handler calls
+  ``setCurrentWorkspace(response)`` with the backend's full
+  view. The ``"Search PubMed"`` button is now labeled
+  ``"Advanced Search…"`` with a real ellipsis hint that it
+  opens the multi-source modal. The dedup-by-PMID logic
+  was also fixed — two papers with the same PMID in the
+  incoming batch now correctly dedupe (the previous
+  filter only checked the existing workspace).
+
+* **Favicon regenerated.** The committed ``favicon.ico``
+  was Targa-format garbage (32x29474 pixels) that
+  browsers couldn't decode, so the tab logo was
+  invisible even though ``index.html`` correctly
+  referenced it. The file is now a proper Windows icon
+  resource (16x16 + 32x32 + 48x48, 15 KB) regenerated
+  from the existing ``favicon.svg``. New regression
+  tests verify the index.html link, the SVG, and the
+  ICO header bytes.
+
 ### Removed
 
 * **AddPapersPanel — "Manual" tab.** Replaced by the DOI +
