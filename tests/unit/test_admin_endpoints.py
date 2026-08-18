@@ -159,3 +159,180 @@ class TestEnricherStatsEndpoint:
         # .env in unit tests), but never 404 -- the route
         # is registered.
         assert response.status_code != 404
+
+
+class TestOrchestratorStatsEndpoint:
+    """GET /admin/orchestrator-stats.
+
+    The endpoint delegates to WorkspaceOrchestrator.state_counts(),
+    which calls workspace_state_counts() on the repository.
+    We mock the orchestrator to return deterministic counts
+    so the test is hermetic.
+    """
+
+    def _fake_orchestrator_with_counts(self, counts: dict[str, int]):
+        """Build a fake orchestrator whose state_counts()
+        returns the given counts dict. Mirrors the public
+        method so the route can call it directly.
+        """
+        from app.config import container
+
+        class FakeOrchestrator:
+            def __init__(self, counts):
+                self._counts = counts
+
+            def state_counts(self) -> dict[str, int]:
+                return dict(self._counts)
+
+        fake = FakeOrchestrator(counts)
+        return fake
+
+    def test_returns_counts_for_each_state(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """When the orchestrator is wired, the endpoint
+        returns the per-state counts. Verifies the contract:
+        every WorkspaceState member is represented, plus
+        the convenience ``total`` field.
+        """
+        from app.config import container
+        import app.api.routes.admin as admin_mod
+        from app.core.enums.workspace_state import WorkspaceState
+
+        # Set up deterministic counts: 2 CREATED, 1
+        # PAPERS_RETRIEVED, 0 everywhere else.
+        counts = {state.value: 0 for state in WorkspaceState}
+        counts["CREATED"] = 2
+        counts["PAPERS_RETRIEVED"] = 1
+        fake = self._fake_orchestrator_with_counts(counts)
+
+        # The endpoint imports get_workspace_orchestrator
+        # inside the function (defensive import), so we
+        # only need to patch the container module's symbol.
+        monkeypatch.setattr(
+            container, "get_workspace_orchestrator",
+            lambda: fake,
+        )
+
+        response = client.get("/admin/orchestrator-stats")
+        assert response.status_code == 200
+        body = response.json()
+
+        # Every WorkspaceState member is present.
+        for state in WorkspaceState:
+            assert state.value in body, (
+                f"state {state.value} missing from response"
+            )
+
+        # Counts are passed through verbatim.
+        assert body["CREATED"] == 2
+        assert body["PAPERS_RETRIEVED"] == 1
+        # Total equals sum of state counts (3 here).
+        assert body["total"] == 3
+
+    def test_zero_fills_unused_states(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Even when the orchestrator returns a sparse dict
+        (some states missing), the endpoint zero-fills
+        every WorkspaceState. Operators get a complete FSM
+        picture, not a sparse dict that hides unused states.
+        """
+        from app.config import container
+        import app.api.routes.admin as admin_mod
+        from app.core.enums.workspace_state import WorkspaceState
+
+        # Sparse input: only REPORTED has a count.
+        fake = self._fake_orchestrator_with_counts(
+            {"REPORTED": 4}
+        )
+
+        monkeypatch.setattr(
+            container, "get_workspace_orchestrator",
+            lambda: fake,
+        )
+
+        response = client.get("/admin/orchestrator-stats")
+        body = response.json()
+
+        # Sparse input was 1 key; the endpoint should have
+        # zero-filled all the OTHER states to 0. REPORTED
+        # itself stays at 4.
+        assert body["REPORTED"] == 4
+        for state in WorkspaceState:
+            if state.value == "REPORTED":
+                continue
+            assert body[state.value] == 0, (
+                f"state {state.value} expected 0 (zero-filled), "
+                f"got {body[state.value]}"
+            )
+        assert body["total"] == 4
+
+    def test_endpoint_under_admin_prefix(
+        self, client: TestClient,
+    ):
+        """Catches accidental route-registration changes
+        that would break operator dashboards pointed at
+        the canonical URL.
+        """
+        response = client.get("/admin/orchestrator-stats")
+        assert response.status_code != 404
+
+
+class TestWorkspaceStateCountsRepository:
+    """Verify the repository's workspace_state_counts()
+    method directly (without going through the admin route).
+    """
+
+    def test_in_memory_zero_fills_every_state(self):
+        """The in-memory repo returns every WorkspaceState
+        member in the dict, even when no workspaces exist."""
+        from app.core.enums.workspace_state import WorkspaceState
+        from app.infrastructure.storage.in_memory_workspace_repository import (
+            InMemoryWorkspaceRepository,
+        )
+
+        repo = InMemoryWorkspaceRepository()
+        counts = repo.workspace_state_counts()
+        # Every WorkspaceState is represented.
+        for state in WorkspaceState:
+            assert state.value in counts
+            assert counts[state.value] == 0
+
+    def test_in_memory_counts_existing_sessions(self):
+        """Add a few sessions in different states and verify
+        the counts match.
+        """
+        from app.core.enums.workspace_state import WorkspaceState
+        from app.domain.entities.research_question import ResearchQuestion
+        from app.domain.entities.research_session import (
+            ResearchSession,
+        )
+        from app.infrastructure.storage.in_memory_workspace_repository import (
+            InMemoryWorkspaceRepository,
+        )
+
+        repo = InMemoryWorkspaceRepository()
+
+        # Create 3 CREATED workspaces
+        for _ in range(3):
+            session = ResearchSession(
+                question=ResearchQuestion(question="x"),
+                state=WorkspaceState.CREATED,
+            )
+            repo.create(session)
+
+        # Create 1 PAPERS_RETRIEVED workspace
+        session = ResearchSession(
+            question=ResearchQuestion(question="y"),
+            state=WorkspaceState.PAPERS_RETRIEVED,
+        )
+        repo.create(session)
+
+        counts = repo.workspace_state_counts()
+        assert counts["CREATED"] == 3
+        assert counts["PAPERS_RETRIEVED"] == 1
+        # All other states are zero.
+        for state in WorkspaceState:
+            if state.value not in ("CREATED", "PAPERS_RETRIEVED"):
+                assert counts[state.value] == 0

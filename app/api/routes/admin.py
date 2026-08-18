@@ -12,10 +12,16 @@ running:
   reused across requests (vs the docker-exec process-
   isolation pattern that confused the live verification
   in an earlier session).
+- ``GET /admin/orchestrator-stats`` -- count of workspaces
+  in each FSM state, including zero-filled entries for
+  unused states. Useful for spotting stuck transient
+  states, counting the work queue, and tracking
+  completion rate.
 
-The endpoints are deliberately cheap: no DB calls, no
-LLM calls, no network. They read in-memory counters and
-return them as JSON.
+The endpoints are deliberately cheap: no LLM calls, no
+network. The enricher endpoint is purely in-memory; the
+orchestrator endpoint is a single SQL ``GROUP BY`` query
+on the workspaces table.
 
 We don't expose:
 - The cache contents (privacy / size)
@@ -80,3 +86,63 @@ def enricher_stats() -> dict:
             ),
         }
     return enricher.cache_stats()
+
+
+@router.get(
+    "/orchestrator-stats",
+    summary="WorkspaceOrchestrator FSM state counts",
+)
+def orchestrator_stats() -> dict:
+    """Return the count of workspaces in each FSM state.
+
+    Useful for:
+    - Spotting stuck transient states (a workspace in
+      SEARCHING/SUMMARIZING/COMPARING/REPORTING for more
+      than a few seconds usually means a request crashed).
+    - Counting the work queue (how many workspaces are
+      waiting for the next FSM step).
+    - Tracking terminal completion rate (COMPLETED count
+      over time).
+
+    Returns
+    -------
+    dict
+        Map of state value (the enum string value) to the
+        count of workspaces in that state. Includes an
+        entry for every ``WorkspaceState`` member, even
+        when the count is zero -- operators get a complete
+        picture of the FSM rather than a sparse dict that
+        silently drops unused states.
+
+        ``{"total": N}`` is also included for convenience
+        (the sum of all state counts).
+
+    The endpoint delegates to ``WorkspaceOrchestrator
+    .state_counts()`` which is the public observability
+    entry point. The SQLite implementation runs as a
+    single ``GROUP BY`` query for efficiency. Cheap
+    enough to call from a monitoring dashboard on every
+    refresh.
+    """
+    from app.config.container import get_workspace_orchestrator
+
+    orchestrator = get_workspace_orchestrator()
+    counts = orchestrator.state_counts()
+
+    # Belt-and-braces: ensure every WorkspaceState is
+    # represented in the response, even with count 0.
+    # The repository already zero-fills, but the contract
+    # here is "if a state exists in the enum, the response
+    # has a key for it" -- guarding against any future repo
+    # implementation that forgets.
+    from app.core.enums.workspace_state import WorkspaceState
+    for state in WorkspaceState:
+        counts.setdefault(state.value, 0)
+
+    # Add the total for convenience. (We exclude any
+    # pre-existing "total" key from the underlying dict
+    # in case the repository decides to add one later.)
+    counts["total"] = sum(
+        v for k, v in counts.items() if k != "total"
+    )
+    return counts
