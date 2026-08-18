@@ -81,6 +81,14 @@ class InMemoryRepository(WorkspaceRepository):
     def list_workspaces(self) -> list[ResearchSession]:
         return list(self._store.values())
 
+    def workspace_state_counts(self) -> dict[str, int]:
+        """Test stub -- counts workspaces per state, zero-filling."""
+        from app.core.enums.workspace_state import WorkspaceState
+        counts = {state.value: 0 for state in WorkspaceState}
+        for session in self._store.values():
+            counts[session.state.value] += 1
+        return counts
+
 
 class StubPubMed(LiteratureSearcher):
     """Stub that returns a fixed paper list for any search."""

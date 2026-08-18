@@ -73,6 +73,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.enums.workspace_state import WorkspaceState
 from app.domain.entities.research_session import ResearchSession
 from app.domain.interfaces.workspace_repository import WorkspaceRepository
 
@@ -284,6 +285,18 @@ class InMemoryWorkspaceRepository(WorkspaceRepository):
         """
 
         return len(self._workspaces)
+
+    def workspace_state_counts(self) -> dict[str, int]:
+        """Count workspaces per FSM state, zero-filling every state.
+
+        In-memory implementation: one linear pass over
+        the dict of stored workspaces, incrementing the
+        counter for each session's state.
+        """
+        counts = {state.value: 0 for state in WorkspaceState}
+        for session in self._workspaces.values():
+            counts[session.state.value] += 1
+        return counts
 
     def clear(
         self,

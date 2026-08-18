@@ -200,3 +200,33 @@ class WorkspaceRepository(ABC):
         """
 
         raise NotImplementedError
+
+    @abstractmethod
+    def workspace_state_counts(
+        self,
+    ) -> dict[str, int]:
+        """
+        Count workspaces per FSM state.
+
+        Used by the /admin/orchestrator-stats endpoint so
+        operators can see at a glance how many workspaces
+        are in each state of the FSM (e.g. "10 CREATED,
+        3 PAPERS_RETRIEVED, 0 REPORTING, ...").
+
+        The returned dict MUST contain an entry for every
+        ``WorkspaceState`` value, even when the count is
+        zero -- otherwise the admin endpoint would silently
+        drop states that have no workspaces and operators
+        would lose visibility into transient states that
+        briefly show zero count.
+
+        Returns
+        -------
+        dict[str, int]
+            Map of state value (the enum string value, e.g.
+            ``"PAPERS_RETRIEVED"``) to the count of
+            workspaces in that state. Includes an entry
+            for every ``WorkspaceState`` member.
+        """
+
+        raise NotImplementedError

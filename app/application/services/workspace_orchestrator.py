@@ -211,6 +211,28 @@ class WorkspaceOrchestrator:
         """
         return self.get_workspace(workspace_id).allowed_actions()
 
+    def state_counts(self) -> dict[str, int]:
+        """
+        Count workspaces in each FSM state.
+
+        Public observability entry point used by the
+        ``/admin/orchestrator-stats`` endpoint. Delegates to
+        the underlying repository's
+        ``workspace_state_counts()`` -- which the SQLite
+        implementation runs as a single ``GROUP BY`` query
+        for efficiency.
+
+        Returns
+        -------
+        dict[str, int]
+            Map of state value (e.g. ``"PAPERS_RETRIEVED"``)
+            to the count of workspaces in that state.
+            Includes an entry for every ``WorkspaceState``
+            member (zero-filled) so the caller always sees
+            a complete picture of the FSM.
+        """
+        return self._repository.workspace_state_counts()
+
     # ------------------------------------------------------------------
     # Action handlers
     # ------------------------------------------------------------------

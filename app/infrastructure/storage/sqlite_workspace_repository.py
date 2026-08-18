@@ -226,6 +226,26 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             rows = cursor.fetchall()
             return [self._row_to_workspace(row) for row in rows]
 
+    def workspace_state_counts(self) -> dict[str, int]:
+        """Count workspaces per FSM state, zero-filling every state.
+
+        Uses SQL ``GROUP BY state`` for efficiency -- one
+        pass over the table instead of fetching every row.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT state, COUNT(*) FROM workspaces GROUP BY state"
+            )
+            rows = cursor.fetchall()
+        # Zero-fill every state so the caller can rely on
+        # every WorkspaceState value being present in the
+        # returned dict (even with count=0).
+        counts = {state.value: 0 for state in WorkspaceState}
+        for state_value, count in rows:
+            counts[state_value] = count
+        return counts
+
     # ------------------------------------------------------------------
     # Internal serialisation helpers
     # ------------------------------------------------------------------
