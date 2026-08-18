@@ -61,8 +61,14 @@ import html
 import logging
 import re
 from collections import OrderedDict
+from typing import TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from app.infrastructure.pubmed.llm_extractor import (
+        LLMExtractor,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +122,14 @@ class AbstractEnricher:
         disable caching entirely (useful for tests and
         memory-constrained deployments). Default
         ``DEFAULT_CACHE_SIZE`` (256).
+    llm_extractor : LLMExtractor | None
+        Optional LLM-based fallback for when the
+        deterministic regex extraction returns ``None``
+        or a very short string. The LLM extractor is
+        VERBATIM-only (extracts text from the page or
+        returns ``None`` -- never invents content).
+        Pass ``None`` (default) to disable the LLM
+        fallback entirely.
     """
 
     def __init__(
@@ -125,6 +139,7 @@ class AbstractEnricher:
         user_agent: str | None = None,
         timeout: float | None = None,
         cache_size: int = DEFAULT_CACHE_SIZE,
+        llm_extractor: "LLMExtractor | None" = None,
     ) -> None:
         self._owns_client = client is None
         self._client = client or httpx.Client(
@@ -151,6 +166,14 @@ class AbstractEnricher:
         self._cache_size = max(0, int(cache_size))
         self._cache_hits = 0
         self._cache_misses = 0
+        # Optional LLM-based fallback. ``None`` means the
+        # deterministic path is the only fallback. The
+        # LLM path only fires when the deterministic path
+        # returned ``None`` or a short string AND the
+        # HTML was reachable (HTTP 200) -- never when we
+        # got blocked by anti-bot, since the LLM has
+        # nothing to extract from in that case.
+        self._llm_extractor = llm_extractor
 
     def __enter__(self) -> "AbstractEnricher":
         return self
@@ -201,6 +224,13 @@ class AbstractEnricher:
             logger.debug("AbstractEnricher cache MISS for %s", doi)
 
         url = self._build_url(doi)
+        # ``raw_html`` is set ONLY when the HTTP response
+        # is 200 and the body is non-empty. We pass it to
+        # the LLM extractor when the deterministic regex
+        # path returned None or a short string -- the LLM
+        # has nothing to extract from if we never saw the
+        # page (e.g. Datadome block).
+        raw_html: str | None = None
         try:
             response = self._client.get(url)
         except httpx.HTTPError as exc:
@@ -217,7 +247,37 @@ class AbstractEnricher:
                 )
                 result = None
             else:
-                result = self._extract_abstract(response.text)
+                raw_html = response.text
+                result = self._extract_abstract(raw_html)
+
+        # Optional LLM fallback. The LLM only sees raw
+        # HTML that we already fetched successfully --
+        # we don't try to bypass anti-bot with the LLM,
+        # because the LLM has no web access of its own
+        # (it only sees what we put in the prompt). The
+        # LLM contract is verbatim extraction or NONE;
+        # see app.infrastructure.pubmed.llm_extractor.
+        if (
+            self._llm_extractor is not None
+            and (result is None or not result.strip())
+            and raw_html is not None
+        ):
+            logger.debug(
+                "AbstractEnricher: trying LLM fallback for %s", doi,
+            )
+            llm_result = self._llm_extractor.extract(raw_html)
+            if llm_result:
+                result = llm_result
+                logger.debug(
+                    "AbstractEnricher: LLM extraction succeeded for %s",
+                    doi,
+                )
+            else:
+                logger.debug(
+                    "AbstractEnricher: LLM extraction returned no "
+                    "abstract for %s",
+                    doi,
+                )
 
         # Store the result (even ``None``) so we don't
         # re-fetch the same DOI in this session. Evict

@@ -941,3 +941,326 @@ def test_abstract_enricher_is_optional(monkeypatch):
     assert result.paper.paper.abstract == ""
     # Internal state: enricher is None.
     assert resolver._abstract_enricher is None
+
+
+# ---------------------------------------------------------------------------
+# LLM extractor fallback integration
+# ---------------------------------------------------------------------------
+
+
+def test_llm_extractor_fires_only_when_deterministic_extraction_fails(
+    monkeypatch,
+):
+    """The LLM extractor is the third fallback in the chain:
+    CrossRef -> OpenAlex -> HTML meta-tag scrape -> LLM.
+    The LLM must only fire when the deterministic path
+    produced nothing usable (None or short).
+    """
+    from app.infrastructure.pubmed.identifier_resolver import (
+        IdentifierResolver,
+    )
+    from app.infrastructure.pubmed.llm_extractor import (
+        LLMExtractor,
+    )
+    from app.infrastructure.pubmed.provider import PubMedProvider
+    from app.infrastructure.pubmed.client import PubMedClient
+    from app.domain.interfaces.llm_provider import LLMProvider
+    from app.domain.models.llm_response import LLMResponse
+    from app.domain.models.prompt import Prompt
+    from unittest.mock import MagicMock
+
+    class TrackingLLMProvider(LLMProvider):
+        """Records whether the LLM was called."""
+
+        def __init__(self, content: str) -> None:
+            self._content = content
+            self.calls = 0
+
+        def generate(self, prompt: Prompt) -> LLMResponse:
+            self.calls += 1
+            return LLMResponse(
+                content=self._content,
+                model="fake",
+                prompt_tokens=100,
+                completion_tokens=len(self._content),
+                total_tokens=100 + len(self._content),
+                finish_reason="stop",
+            )
+
+    def fake_get(url, *args, **kwargs):
+        resp = MagicMock()
+        if "crossref" in url:
+            # CrossRef returns empty abstract.
+            resp.status_code = 200
+            resp.json.return_value = {
+                "message": {
+                    "title": ["Thin record."],
+                    "author": [],
+                    "abstract": "",
+                }
+            }
+        elif "openalex" in url:
+            # OpenAlex also empty.
+            resp.status_code = 200
+            resp.json.return_value = {"abstract_inverted_index": None}
+        elif "doi.org" in url:
+            # The HTML page is reachable but has NO abstract
+            # meta tag (the LLM will see the page text and
+            # return NONE).
+            resp.status_code = 200
+            resp.text = (
+                "<html><body>"
+                "<h1>Table of Contents</h1>"
+                "<ul><li>Chapter 1</li></ul>"
+                "</body></html>"
+            )
+        else:
+            resp.status_code = 404
+        return resp
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, *args, **kwargs):
+            return fake_get(url, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.infrastructure.pubmed.identifier_resolver.httpx.Client",
+        FakeClient,
+    )
+
+    llm = TrackingLLMProvider("NONE")  # LLM correctly says NONE
+    llm_extractor = LLMExtractor(llm_provider=llm)
+
+    # The LLMExtractor lives INSIDE the AbstractEnricher
+    # (the latter has the HTTP client + LRU cache; the
+    # former is the optional LLM fallback). The resolver
+    # only knows about the outer AbstractEnricher.
+    from app.infrastructure.pubmed.abstract_enricher import (
+        AbstractEnricher,
+    )
+    enricher = AbstractEnricher(
+        client=FakeClient(),  # type: ignore[abstract]
+        llm_extractor=llm_extractor,
+    )
+
+    provider = PubMedProvider(
+        client=PubMedClient(email="test@example.com", api_key="")
+    )
+    resolver = IdentifierResolver(
+        pubmed_provider=provider,
+        abstract_enricher=enricher,
+    )
+
+    result = resolver.resolve_one("10.1234/thin")
+    # The paper was resolved successfully but with no
+    # abstract -- the LLM correctly refused to invent one.
+    assert result.failure is None
+    assert result.paper is not None
+    assert result.paper.paper.abstract == ""
+    # The LLM was called because the deterministic path
+    # returned nothing.
+    assert llm.calls == 1
+
+
+def test_llm_extractor_NOT_called_when_deterministic_succeeds(monkeypatch):
+    """If the deterministic regex path already produced a
+    usable abstract, the LLM is NOT called -- we don't
+    want to waste tokens on cases the regex already
+    handled.
+    """
+    from app.infrastructure.pubmed.identifier_resolver import (
+        IdentifierResolver,
+    )
+    from app.infrastructure.pubmed.llm_extractor import (
+        LLMExtractor,
+    )
+    from app.infrastructure.pubmed.provider import PubMedProvider
+    from app.infrastructure.pubmed.client import PubMedClient
+    from app.domain.interfaces.llm_provider import LLMProvider
+    from app.domain.models.llm_response import LLMResponse
+    from app.domain.models.prompt import Prompt
+    from unittest.mock import MagicMock
+
+    class TrackingLLMProvider(LLMProvider):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(self, prompt: Prompt) -> LLMResponse:
+            self.calls += 1
+            return LLMResponse(
+                content="SHOULD NOT BE USED",
+                model="fake",
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+                finish_reason="stop",
+            )
+
+    def fake_get(url, *args, **kwargs):
+        resp = MagicMock()
+        if "crossref" in url:
+            # CrossRef HAS an abstract -- deterministic path
+            # will succeed; LLM should NOT be called.
+            resp.status_code = 200
+            resp.json.return_value = {
+                "message": {
+                    "title": ["Has abstract."],
+                    "author": [],
+                    "abstract": (
+                        "<jats:p>This is a real abstract from "
+                        "CrossRef, returned verbatim by the LLM "
+                        "if it were called.</jats:p>"
+                    ),
+                }
+            }
+        else:
+            resp.status_code = 404
+        return resp
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, *args, **kwargs):
+            return fake_get(url, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.infrastructure.pubmed.identifier_resolver.httpx.Client",
+        FakeClient,
+    )
+
+    llm = TrackingLLMProvider()
+    llm_extractor = LLMExtractor(llm_provider=llm)
+    from app.infrastructure.pubmed.abstract_enricher import (
+        AbstractEnricher,
+    )
+    enricher = AbstractEnricher(
+        client=FakeClient(),  # type: ignore[abstract]
+        llm_extractor=llm_extractor,
+    )
+
+    provider = PubMedProvider(
+        client=PubMedClient(email="test@example.com", api_key="")
+    )
+    resolver = IdentifierResolver(
+        pubmed_provider=provider,
+        abstract_enricher=enricher,
+    )
+
+    result = resolver.resolve_one("10.1234/has-abstract")
+    assert "real abstract from CrossRef" in result.paper.paper.abstract
+    # LLM was NEVER called because CrossRef already had it.
+    assert llm.calls == 0
+
+
+def test_llm_extractor_NOT_called_when_html_unreachable(monkeypatch):
+    """The LLM must not be called when we couldn't even
+    fetch the HTML page (e.g. anti-bot block). The LLM
+    has no web access of its own -- it only sees what
+    we put in the prompt -- so calling it with no
+    page text would be useless.
+    """
+    from app.infrastructure.pubmed.identifier_resolver import (
+        IdentifierResolver,
+    )
+    from app.infrastructure.pubmed.llm_extractor import (
+        LLMExtractor,
+    )
+    from app.infrastructure.pubmed.provider import PubMedProvider
+    from app.infrastructure.pubmed.client import PubMedClient
+    from app.domain.interfaces.llm_provider import LLMProvider
+    from app.domain.models.llm_response import LLMResponse
+    from app.domain.models.prompt import Prompt
+    from unittest.mock import MagicMock
+
+    class TrackingLLMProvider(LLMProvider):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(self, prompt: Prompt) -> LLMResponse:
+            self.calls += 1
+            return LLMResponse(
+                content="SHOULD NOT BE CALLED",
+                model="fake",
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+                finish_reason="stop",
+            )
+
+    def fake_get(url, *args, **kwargs):
+        resp = MagicMock()
+        if "crossref" in url:
+            resp.status_code = 200
+            resp.json.return_value = {
+                "message": {
+                    "title": ["Thin record."],
+                    "author": [],
+                    "abstract": "",
+                }
+            }
+        elif "doi.org" in url:
+            # 503 -- the page is unreachable.
+            resp.status_code = 503
+            resp.text = ""
+        else:
+            resp.status_code = 404
+        return resp
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, *args, **kwargs):
+            return fake_get(url, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.infrastructure.pubmed.identifier_resolver.httpx.Client",
+        FakeClient,
+    )
+
+    llm = TrackingLLMProvider()
+    llm_extractor = LLMExtractor(llm_provider=llm)
+    from app.infrastructure.pubmed.abstract_enricher import (
+        AbstractEnricher,
+    )
+    enricher = AbstractEnricher(
+        client=FakeClient(),  # type: ignore[abstract]
+        llm_extractor=llm_extractor,
+    )
+
+    provider = PubMedProvider(
+        client=PubMedClient(email="test@example.com", api_key="")
+    )
+    resolver = IdentifierResolver(
+        pubmed_provider=provider,
+        abstract_enricher=enricher,
+    )
+
+    result = resolver.resolve_one("10.1234/blocked")
+    assert result.failure is None
+    assert result.paper.paper.abstract == ""
+    # LLM was NOT called because we couldn't fetch the
+    # HTML page (503). No point calling the LLM with no
+    # content to extract from.
+    assert llm.calls == 0
