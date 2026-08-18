@@ -70,6 +70,17 @@ if TYPE_CHECKING:
         LLMExtractor,
     )
 
+# ExtractionResult is a tiny value type -- just an abstract
+# string + an inferred boolean. We import it at runtime
+# (not under TYPE_CHECKING) because we instantiate it in
+# fetch(). The LLM path passes through the LLM's result;
+# the deterministic path wraps its string as
+# inferred=False. There's no import cycle here -- the LLM
+# extractor doesn't import from this module.
+from app.infrastructure.pubmed.llm_extractor import (
+    ExtractionResult,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -159,10 +170,12 @@ class AbstractEnricher:
         # used entry is evicted. ``OrderedDict.move_to_end``
         # is the standard LRU pattern.
         #
-        # Both string and ``None`` results are cached -- a
-        # DOI that returned ``None`` (Datadome block, etc.)
-        # should not be re-fetched within the same session.
-        self._cache: OrderedDict[str, str | None] = OrderedDict()
+        # The cache stores ``ExtractionResult | None`` so
+        # both the abstract text AND the provenance flag
+        # (``inferred``) survive the cache. ``None`` means
+        # "this DOI genuinely has no abstract" -- we don't
+        # re-fetch the same DOI in this session.
+        self._cache: OrderedDict[str, ExtractionResult | None] = OrderedDict()
         self._cache_size = max(0, int(cache_size))
         self._cache_hits = 0
         self._cache_misses = 0
@@ -182,21 +195,29 @@ class AbstractEnricher:
         if self._owns_client:
             self._client.close()
 
-    def fetch(self, doi: str) -> str | None:
+    def fetch(self, doi: str) -> "ExtractionResult | None":
         """Try to fetch the abstract from the publisher's
         HTML landing page.
 
-        Returns the abstract string (typically 100-3000
-        characters) or ``None`` if the publisher blocks
-        us, the page has no abstract meta tag, or the
+        Returns an ``ExtractionResult`` (abstract text +
+        provenance flag) or ``None`` if the publisher
+        blocks us, the page has no abstract, or the
         network call fails.
+
+        The provenance flag (``inferred``) tells the
+        caller whether the abstract came from the LLM
+        fallback (``inferred=True``) or from the
+        deterministic regex (``inferred=False``). The
+        resolver uses this to stamp
+        ``paper.inferred_abstract`` so the frontend can
+        show an "AI-extracted" badge.
 
         Results are cached in a bounded LRU keyed by DOI
         so repeat lookups in the same session skip the
-        network entirely. Both string and ``None`` results
-        are cached -- a DOI that returned ``None``
-        (Datadome block, network error) is not retried
-        for the same session.
+        network entirely. Both ``ExtractionResult`` and
+        ``None`` results are cached -- a DOI that
+        returned ``None`` (Datadome block, network error)
+        is not retried for the same session.
 
         Parameters
         ----------
@@ -218,7 +239,8 @@ class AbstractEnricher:
             self._cache.move_to_end(cache_key)
             self._cache_hits += 1
             logger.debug("AbstractEnricher cache HIT for %s", doi)
-            return self._cache[cache_key]
+            cached = self._cache[cache_key]
+            return cached  # ExtractionResult | None
         if self._cache_size > 0:
             self._cache_misses += 1
             logger.debug("AbstractEnricher cache MISS for %s", doi)
@@ -248,7 +270,12 @@ class AbstractEnricher:
                 result = None
             else:
                 raw_html = response.text
-                result = self._extract_abstract(raw_html)
+                raw = self._extract_abstract(raw_html)
+                # Deterministic path: not inferred.
+                result = (
+                    ExtractionResult(abstract=raw, inferred=False)
+                    if raw else None
+                )
 
         # Optional LLM fallback. The LLM only sees raw
         # HTML that we already fetched successfully --
@@ -259,17 +286,24 @@ class AbstractEnricher:
         # see app.infrastructure.pubmed.llm_extractor.
         if (
             self._llm_extractor is not None
-            and (result is None or not result.strip())
+            and (
+                result is None
+                or not result.abstract.strip()
+            )
             and raw_html is not None
         ):
             logger.debug(
                 "AbstractEnricher: trying LLM fallback for %s", doi,
             )
             llm_result = self._llm_extractor.extract(raw_html)
-            if llm_result:
+            if llm_result is not None:
+                # The LLM extractor returns an
+                # ExtractionResult with inferred=True.
+                # We trust its verbatim contract.
                 result = llm_result
                 logger.debug(
-                    "AbstractEnricher: LLM extraction succeeded for %s",
+                    "AbstractEnricher: LLM extraction succeeded for %s "
+                    "(inferred=True)",
                     doi,
                 )
             else:

@@ -201,8 +201,8 @@ class TestMetaTagExtraction:
         )
         result = enricher.fetch("10.1371/journal.pone.0000001")
         assert result is not None
-        assert result.startswith("Systemic inflammation is a leading cause")
-        assert "warmth-seeking behavior" in result
+        assert result.abstract.startswith("Systemic inflammation is a leading cause")
+        assert "warmth-seeking behavior" in result.abstract
 
     def test_extracts_description_when_no_citation_abstract(self):
         """Nature-style: <meta name="description" content="...">"""
@@ -211,8 +211,8 @@ class TestMetaTagExtraction:
         )
         result = enricher.fetch("10.1038/nature14539")
         assert result is not None
-        assert result.startswith("Deep learning allows computational models")
-        assert "drug discovery and genomics" in result
+        assert result.abstract.startswith("Deep learning allows computational models")
+        assert "drug discovery and genomics" in result.abstract
 
     def test_extracts_og_description_when_no_others(self):
         """Frontiers-style: <meta property="og:description" content="...">"""
@@ -227,7 +227,7 @@ class TestMetaTagExtraction:
         )
         result = enricher.fetch("10.3389/fnmol.2019.00177")
         assert result is not None
-        assert result.startswith("Schwann cells are exquisitely sensitive")
+        assert result.abstract.startswith("Schwann cells are exquisitely sensitive")
 
     def test_handles_reversed_attribute_order(self):
         """Older WordPress pages: content before name."""
@@ -236,7 +236,7 @@ class TestMetaTagExtraction:
         )
         result = enricher.fetch("10.1234/reversed")
         assert result is not None
-        assert "Glucose and insulin regulate" in result
+        assert "Glucose and insulin regulate" in result.abstract
 
     def test_handles_html_entities(self):
         """Decodes &amp; &micro; &gt; etc. so the abstract is clean."""
@@ -256,9 +256,9 @@ class TestMetaTagExtraction:
         )
         result = enricher.fetch("10.1234/entities")
         assert result is not None
-        assert "&amp;" not in result, "amp entities should be decoded"
-        assert "µ" in result, "micro entities should be decoded"
-        assert "> 2" in result, "gt entities should be decoded"
+        assert "&amp;" not in result.abstract, "amp entities should be decoded"
+        assert "µ" in result.abstract, "micro entities should be decoded"
+        assert "> 2" in result.abstract, "gt entities should be decoded"
 
     def test_prefers_citation_abstract_over_description(self):
         """When both tags are present, citation_abstract wins."""
@@ -272,7 +272,7 @@ class TestMetaTagExtraction:
         # Both contain the same text, so the assertion is
         # just that it returned successfully.
         assert result is not None
-        assert "Systemic inflammation" in result
+        assert "Systemic inflammation" in result.abstract
 
     def test_returns_none_when_no_abstract_meta_tag(self):
         """Pages with no abstract meta tag (e.g. Datadome

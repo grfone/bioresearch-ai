@@ -345,8 +345,19 @@ class IdentifierResolver:
         if not paper.abstract or not paper.abstract.strip():
             if self._abstract_enricher is not None:
                 html_abstract = self._abstract_enricher.fetch(doi)
-                if html_abstract:
-                    paper = replace(paper, abstract=html_abstract)
+                if html_abstract is not None:
+                    # ``html_abstract`` is an ExtractionResult
+                    # carrying the abstract text AND the
+                    # provenance flag (inferred=True if the
+                    # LLM produced it). We stamp BOTH onto
+                    # the Paper so the frontend can render
+                    # an "AI-extracted" badge for
+                    # transparency.
+                    paper = replace(
+                        paper,
+                        abstract=html_abstract.abstract,
+                        inferred_abstract=html_abstract.inferred,
+                    )
 
         return ResolutionResult(
             paper=ResolvedPaper(

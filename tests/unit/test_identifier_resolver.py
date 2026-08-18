@@ -708,16 +708,24 @@ def test_abstract_enricher_fills_abstract_when_crossref_and_openalex_are_empty(
     )
 
     # The HTML enricher itself is mocked to return an
-    # abstract. We don't actually run the HTML scraping
-    # here -- that's covered by the AbstractEnricher unit
-    # tests. This test only verifies the resolver's
-    # plumbing of the enricher.
+    # ExtractionResult (the new return type -- abstract +
+    # provenance flag). We don't actually run the HTML
+    # scraping here -- that's covered by the
+    # AbstractEnricher unit tests. This test only verifies
+    # the resolver's plumbing of the enricher.
+    from app.infrastructure.pubmed.llm_extractor import (
+        ExtractionResult,
+    )
+
     class FakeEnricher:
-        def __init__(self, abstract):
+        def __init__(self, abstract, inferred=False):
             self._abstract = abstract
+            self._inferred = inferred
 
         def fetch(self, doi):
-            return self._abstract
+            return ExtractionResult(
+                abstract=self._abstract, inferred=self._inferred,
+            )
 
     provider = PubMedProvider(
         client=PubMedClient(email="test@example.com", api_key="")
@@ -737,6 +745,8 @@ def test_abstract_enricher_fills_abstract_when_crossref_and_openalex_are_empty(
         "This abstract was scraped"
         in result.paper.paper.abstract
     )
+    # Deterministic path -- inferred_abstract stays False.
+    assert result.paper.paper.inferred_abstract is False
 
 
 def test_abstract_enricher_skipped_when_crossref_has_abstract(
