@@ -79,6 +79,17 @@ class LiteratureSettings(BaseSettings):
         default=False,
         alias="ABSTRACT_ENRICHER_ENABLED",
     )
+    # LLM-based extraction fallback for the AbstractEnricher.
+    # When the deterministic regex path returns None or a
+    # short string AND the HTML page was reachable (HTTP
+    # 200), the resolver falls back to the LLM. The LLM
+    # contract is verbatim extraction or NONE -- never
+    # invented content. Opt-in because every miss costs
+    # 1-3k tokens.
+    llm_abstract_extraction_enabled: bool = Field(
+        default=False,
+        alias="LLM_ABSTRACT_EXTRACTION_ENABLED",
+    )
 
 
 literature_settings = LiteratureSettings()

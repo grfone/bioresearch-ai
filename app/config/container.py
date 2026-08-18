@@ -99,6 +99,9 @@ from app.infrastructure.pubmed.client import PubMedClient
 from app.infrastructure.pubmed.abstract_enricher import (
     AbstractEnricher,
 )
+from app.infrastructure.pubmed.llm_extractor import (
+    LLMExtractor,
+)
 from app.infrastructure.pubmed.identifier_resolver import (
     IdentifierResolver,
 )
@@ -382,7 +385,17 @@ def get_identifier_resolver() -> IdentifierResolver:
         # set ABSTRACT_ENRICHER_ENABLED=true in .env.
         enricher = None
         if settings.literature.abstract_enricher_enabled:
-            enricher = AbstractEnricher()
+            # Optionally wire the LLM extractor as a
+            # fallback. The LLM is opt-in because every
+            # call costs tokens; the deterministic regex
+            # path is free.
+            llm_extractor = None
+            if settings.literature.llm_abstract_extraction_enabled:
+                llm_provider = LLMFactory.create(
+                    LLMProviderEnum(settings.llm.provider)
+                )
+                llm_extractor = LLMExtractor(llm_provider=llm_provider)
+            enricher = AbstractEnricher(llm_extractor=llm_extractor)
         _identifier_resolver = IdentifierResolver(
             pubmed_provider=provider,
             abstract_enricher=enricher,
