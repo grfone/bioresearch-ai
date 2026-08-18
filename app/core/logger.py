@@ -75,18 +75,18 @@ def configure_logging() -> None:
         return
 
     formatter = logging.Formatter(
-        settings.logging.log_format
+        settings.logging.format
     )
 
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
-    root_logger.setLevel(settings.logging.log_level)
+    root_logger.setLevel(settings.logging.level)
     root_logger.addHandler(console_handler)
 
-    if settings.logging.log_to_file:
+    if settings.logging.to_file:
 
-        log_path = Path(settings.logging.log_file)
+        log_path = Path(settings.logging.file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
         file_handler = RotatingFileHandler(

@@ -194,9 +194,11 @@ class AbstractEnricher:
             # evicted on the next miss.
             self._cache.move_to_end(cache_key)
             self._cache_hits += 1
+            logger.debug("AbstractEnricher cache HIT for %s", doi)
             return self._cache[cache_key]
         if self._cache_size > 0:
             self._cache_misses += 1
+            logger.debug("AbstractEnricher cache MISS for %s", doi)
 
         url = self._build_url(doi)
         try:
