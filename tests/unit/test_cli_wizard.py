@@ -142,7 +142,7 @@ def test_cli_wizard_returns_openai_config_for_default_choice(monkeypatch: pytest
     from io import StringIO
     import sys
     canned = StringIO(
-        "2\n"
+        "openai\n"  # provider by slug
         "sk-test-fake-key\n"
         "\n"  # base_url: blank -> default
         "gpt-4o-mini\n"  # model
@@ -170,11 +170,10 @@ def test_cli_wizard_prompts_for_local_model_when_provider_is_local(monkeypatch: 
     from io import StringIO
     import sys
     canned = StringIO(
-        "1\n"  # provider=1 (Local)
-        "\n"  # api_key (skipped because local)
+        "local\n"  # provider by slug
         "\n"  # base_url (blank -> default; Ollama's http://localhost:11434/v1)
         "\n"  # model (default)
-        "deepseek-r1-distill-llama-8b-q4_k_m\n"  # local model
+        "deepseek-r1-distill-llama-8b-q4_k_m\n"  # local model (explicitly typed)
         "test@example.com\n"  # pubmed_email
         "\n"  # pubmed_api_key
     )
@@ -237,7 +236,7 @@ def test_cli_wizard_falls_back_to_env_var_for_required_api_key(monkeypatch: pyte
     from io import StringIO
     import sys
     canned = StringIO(
-        "2\n"  # OpenAI
+        "openai\n"  # provider by slug
         "\n"  # API key: blank, then env var fallback
         "\n"  # base_url
         "gpt-4.1-mini\n"
