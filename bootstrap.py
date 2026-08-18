@@ -72,10 +72,12 @@ try:
         CATALOG as LLM_PROVIDER_CATALOG,
         ProviderMeta as LLMCatalogEntry,
         grouped_by_region as llm_grouped_by_region,
+        sorted_by_display_name as llm_sorted_by_name,
     )
 except Exception:  # pragma: no cover — fallback when running outside the project
     LLM_PROVIDER_CATALOG = ()
     llm_grouped_by_region = lambda: {}  # type: ignore
+    llm_sorted_by_name = lambda: ()  # type: ignore
     LLMCatalogEntry = None  # type: ignore
 
 
@@ -776,12 +778,12 @@ class LocalModel:
 
 LOCAL_MODELS: list[LocalModel] = [
     LocalModel(
-        name="deepseek-r1-distill-llama-8b-q4_k_m",
-        size_gb=4.6,
-        min_ram_gb=12,
-        min_vram_gb=8,
-        description="DeepSeek-R1 distilled into Llama-8B, Q4_K_M quantization. "
-        "Best quality/speed tradeoff for a GPU with ≥ 8 GB VRAM.",
+        name="deepseek-coder-v2-lite-instruct-q3_k_m",
+        size_gb=3.3,
+        min_ram_gb=8,
+        min_vram_gb=None,
+        description="Q3_K_M variant of the coder model. Smaller, "
+        "runnable on CPU with 8 GB RAM.",
     ),
     LocalModel(
         name="deepseek-coder-v2-lite-instruct-q4_k_m",
@@ -792,12 +794,12 @@ LOCAL_MODELS: list[LocalModel] = [
         "good for instruction following and biomedical text.",
     ),
     LocalModel(
-        name="deepseek-coder-v2-lite-instruct-q3_k_m",
-        size_gb=3.3,
-        min_ram_gb=8,
-        min_vram_gb=None,
-        description="Q3_K_M variant of the coder model. Smaller, "
-        "runnable on CPU with 8 GB RAM.",
+        name="deepseek-r1-distill-llama-8b-q4_k_m",
+        size_gb=4.6,
+        min_ram_gb=12,
+        min_vram_gb=8,
+        description="DeepSeek-R1 distilled into Llama-8B, Q4_K_M quantization. "
+        "Best quality/speed tradeoff for a GPU with ≥ 8 GB VRAM.",
     ),
 ]
 
@@ -1026,18 +1028,24 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
     # Build the dropdown options. Format: "<region> — <display_name>"
     # so the user can pick visually while the value stored is the
     # enum slug.
-    region_groups = llm_grouped_by_region()
+    # Flat, alphabetically-sorted list of all providers.
+    # The previous version grouped by region (US, CN,
+    # etc.) which made the dropdown hard to scan -- the
+    # user explicitly asked for alphabetical rather than
+    # by country. The region is still preserved in the
+    # label so researchers can see where a provider hosts.
     provider_options: list[str] = []
     provider_lookup: dict[str, LLMCatalogEntry] = {}
-    for region_name, entries in region_groups.items():
-        for entry in entries:
-            label = f"{entry.display_name}  [{region_name}]"
-            provider_options.append(label)
-            provider_lookup[label] = entry
+    for entry in llm_sorted_by_name():
+        label = f"{entry.display_name}  [{entry.region}]"
+        provider_options.append(label)
+        provider_lookup[label] = entry
 
-    # Default to OpenAI for convenience.
+    # Default to MiniMax. The user explicitly asked for
+    # this. Fall back to the first entry alphabetically if
+    # MiniMax is missing from the catalog.
     default_label = next(
-        (lbl for lbl in provider_options if "OpenAI" in lbl and "Azure" not in lbl),
+        (lbl for lbl in provider_options if "MiniMax" in lbl),
         provider_options[0] if provider_options else "OpenAI  [US]",
     )
 
@@ -1083,7 +1091,13 @@ def _gui_collect_config(hw: HardwareInfo) -> GuiConfig:
     # Model
     row += 1
     ttk.Label(root, text="Model").grid(row=row, column=0, sticky="w", **pad)
-    model_var = tk.StringVar(value="gpt-4.1-mini")
+    model_var = tk.StringVar(
+        value=next(
+            (e.default_model for e in llm_sorted_by_name()
+             if "Minimax" in e.display_name),
+            "gpt-4.1-mini",
+        )
+    )
     model_entry = ttk.Entry(root, textvariable=model_var)
     model_entry.grid(row=row, column=1, sticky="ew", **pad)
     model_hint_var = tk.StringVar(value="")
@@ -1449,16 +1463,16 @@ def _cli_collect_config(hw: HardwareInfo) -> GuiConfig:
     recommended_model = detected.name if detected else ""
 
     # Build the catalog of providers with indices so the user can
-    # type ``3`` instead of the full provider name.
-    region_groups = llm_grouped_by_region()
+    # type ``3`` instead of the full provider name. Alphabetical
+    # by display_name -- the user explicitly asked for this
+    # rather than grouping by country of origin.
     flat_providers: list[tuple[str, LLMCatalogEntry]] = []
-    for region_name, entries in region_groups.items():
-        for entry in entries:
-            flat_providers.append((region_name, entry))
-    # Find a default to highlight.
+    for entry in llm_sorted_by_name():
+        flat_providers.append((entry.region, entry))
+    # Default to MiniMax.
     default_idx = 0
     for i, (_, entry) in enumerate(flat_providers):
-        if entry.slug.value == "openai":
+        if entry.slug.value == "minimax":
             default_idx = i
             break
 
@@ -1570,7 +1584,7 @@ def _cli_collect_config(hw: HardwareInfo) -> GuiConfig:
     base_url = raw or default_base_url
 
     # Model.
-    default_model = entry.default_model or "gpt-4.1-mini"
+    default_model = entry.default_model or "MiniMax-M3"
     print(f"\nModel [{default_model}]")
     try:
         raw = _prompt("Model: ").strip()
