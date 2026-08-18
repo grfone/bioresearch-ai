@@ -328,6 +328,25 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   ``ABSTRACT_ENRICHER_ENABLED=false``. Cheap, read-only,
   and never raises.
 
+* **Quiet noisy third-party loggers when
+  ``LOG_LEVEL=DEBUG``.** Pinning ``httpx``,
+  ``httpcore``, ``httpcore.http11``,
+  ``httpcore.connection``, ``urllib3``, and
+  ``asyncio`` to ``WARNING`` in ``configure_logging()``
+  means their per-connection / per-packet DEBUG
+  chatter no longer drowns the app's own DEBUG logs
+  (cache HIT/MISS, startup diagnostics). With DEBUG
+  enabled, the boot log now shows clean
+  ``AbstractEnricher | html_enricher=enabled ...``
+  and ``cache HIT for ...`` lines instead of being
+  buried under hundreds of ``httpcore.http11`` trace
+  lines. ``INFO`` / ``ERROR`` / ``CRITICAL`` from the
+  pinned loggers still propagate via the root handler,
+  so genuine connection failures still surface. With
+  the default ``LOG_LEVEL=INFO`` nothing changes --
+  the pin only affects behavior when an operator
+  explicitly enables DEBUG.
+
 ### Removed
 
 * **AddPapersPanel — "Manual" tab.** Replaced by the DOI +
