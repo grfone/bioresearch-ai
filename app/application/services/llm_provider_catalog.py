@@ -445,3 +445,18 @@ def grouped_by_region() -> dict[str, list[ProviderMeta]]:
 def all_slugs() -> list[LLMProviderEnum]:
     """Return the catalog slugs in declared order."""
     return [entry.slug for entry in CATALOG]
+
+
+def sorted_by_display_name() -> list[ProviderMeta]:
+    """Return the full catalog sorted alphabetically by
+    display_name.
+
+    The bootstrap GUI uses this to render the provider
+    dropdown as a flat, alphabetical list rather than
+    grouping by region. Researchers do not think in
+    terms of which country hosts this provider -- they
+    think in terms of which provider do I want. Regional
+    grouping was making the dropdown hard to scan when
+    the catalog grew past a handful of providers.
+    """
+    return sorted(CATALOG, key=lambda e: e.display_name.lower())
