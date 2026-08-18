@@ -211,6 +211,36 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   chars) -- the third is anti-bot-gated but lets
   polite clients through sometimes.
 
+* **LRU cache for the HTML abstract enricher.** Repeat DOI
+  lookups in the same session used to hit the network
+  every time -- the Advanced Search modal can call
+  ``/papers/fetch`` on every search, and a researcher
+  who adds the same DOI twice (e.g. via PDF upload then
+  DOI tab) used to pay the 1-2s HTML-fetch cost twice.
+  The new ``AbstractEnricher`` cache is bounded
+  (default ``DEFAULT_CACHE_SIZE = 256``), keyed by
+  normalized DOI (``https://doi.org/10.x/y`` and
+  ``10.x/y`` share one slot), and caches both string
+  AND ``None`` results so blocked DOIs aren't
+  re-fetched. New methods: ``cache_stats()`` (returns
+  hits, misses, size, capacity) and ``clear_cache()``
+  for a forced refresh.
+
+* **Scholar escape-hatch link on PaperCard.** When the
+  resolver, the OpenAlex fallback, and the HTML
+  meta-tag fallback all fail to return an abstract --
+  typical for Springer book chapters and other gated
+  content -- the paper card used to be a dead end. A
+  new "Search on Google Scholar" link now appears on
+  the card ONLY when the abstract is missing AND we
+  have at least one identifier to search by. The link
+  opens Scholar with the most-specific identifier
+  pre-filled: DOI (``scholar?q=<doi>``), then PMID
+  (``scholar?q=PMID:<pmid>``), then quoted title.
+  Amber-tinted badge to signal "secondary action".
+  The link does NOT include any user-specific data; it
+  is purely a public Scholar search URL.
+
 ### Removed
 
 * **AddPapersPanel — "Manual" tab.** Replaced by the DOI +
