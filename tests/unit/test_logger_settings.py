@@ -109,3 +109,174 @@ def test_log_level_alias_works():
         # so other tests aren't contaminated.
         import app.config.logging as logging_mod
         logging_mod.logging_settings = LoggingSettings()
+
+
+class TestNoisyThirdPartyLoggers:
+    """Regression tests for the noisy-logger pin.
+
+    When LOG_LEVEL=DEBUG, the root logger emits
+    everything below. httpx and httpcore in particular
+    emit one log line per HTTP packet -- this drowns our
+    own application logs (cache HIT/MISS, the startup
+    AbstractEnricher line, etc).
+
+    configure_logging() pins these noisy loggers to
+    WARNING so their DEBUG spam is suppressed while
+    their INFO/ERROR/CRITICAL still propagate (via the
+    root logger handler).
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_logging_state(self):
+        """Reset the root logger + noisy loggers to a
+        clean state around each test in this class.
+
+        configure_logging() is idempotent: it returns
+        early if the root logger already has handlers.
+        We can't rely on that for tests because pytest
+        may have already configured logging in a prior
+        test (with a different LOG_LEVEL). We clear the
+        handlers on BOTH setup and teardown so each test
+        exercises the full configure_logging() path.
+        """
+        root = logging.getLogger()
+
+        # SETUP: clear any handlers / level left by
+        # previous tests so configure_logging() doesn't
+        # short-circuit due to idempotency.
+        original_handlers = list(root.handlers)
+        original_level = root.level
+        root.handlers = []
+        root.setLevel(logging.WARNING)  # default
+
+        yield
+
+        # TEARDOWN: restore whatever was there before.
+        # We saved it before clearing, so this is a clean
+        # restore.
+        root.handlers = original_handlers
+        root.setLevel(original_level)
+
+    def test_configure_logging_pins_noisy_loggers_to_warning(self):
+        """After configure_logging() runs, the noisy
+        third-party loggers are set to WARNING or higher.
+
+        We assert each one explicitly to prevent a
+        future refactor from accidentally dropping a
+        pin (e.g. if the loop in configure_logging is
+        refactored).
+        """
+        from app.core.logger import configure_logging
+
+        configure_logging()
+
+        # These are the libraries that emit per-connection
+        # or per-packet DEBUG spam. After configure_logging
+        # they must be at WARNING or higher so the user's
+        # own DEBUG logs aren't drowned.
+        for noisy_name in (
+            "httpx",
+            "httpcore",
+            "httpcore.http11",
+            "httpcore.connection",
+            "urllib3",
+            "asyncio",
+        ):
+            logger = logging.getLogger(noisy_name)
+            assert logger.level >= logging.WARNING, (
+                f"{noisy_name} is at level {logger.level} "
+                f"(name={logger.level}). Expected >= WARNING "
+                f"({logging.WARNING}) so its DEBUG spam is "
+                f"suppressed when LOG_LEVEL=DEBUG is set."
+            )
+
+    def test_app_loggers_emit_debug_when_log_level_debug(
+        self, caplog: pytest.LogCaptureFixture,
+    ):
+        """The pin only affects third-party loggers. Our
+        own app loggers (under ``app.*``) should still
+        emit DEBUG messages when LOG_LEVEL=DEBUG so the
+        AbstractEnricher's cache HIT/MISS logs etc. work.
+
+        Instead of poking at logger effective-level
+        attributes (which pytest's own logging fixtures
+        can disrupt), we verify the actual behavior: when
+        LOG_LEVEL=DEBUG is set and configure_logging() has
+        run, a DEBUG message from an ``app.*`` logger is
+        captured by the root handler.
+
+        The ``caplog`` fixture hooks into Python's
+        logging machinery at the root level, so any log
+        record that propagates up to the root will be
+        captured. If our app.* logger is pinned (it
+        shouldn't be), the DEBUG message wouldn't reach
+        the root and caplog wouldn't see it.
+        """
+        import importlib
+        import os
+
+        # Force LOG_LEVEL=DEBUG for this test.
+        old_env = os.environ.get("LOG_LEVEL")
+        os.environ["LOG_LEVEL"] = "DEBUG"
+        try:
+            # Reload settings so the singleton picks up
+            # DEBUG (pydantic-settings reads the env at
+            # instantiation time).
+            import app.config.logging as logging_mod
+            importlib.reload(logging_mod)
+            assert logging_mod.logging_settings.level == "DEBUG"
+
+            # Set caplog to DEBUG so it captures our DEBUG
+            # messages (it defaults to WARNING).
+            caplog.set_level(logging.DEBUG)
+
+            # Apply the new root level.
+            from app.core.logger import configure_logging
+            configure_logging()
+
+            # Emit a DEBUG message from an app.* logger
+            # and verify caplog captured it -- that proves
+            # the root handler is at DEBUG and our app
+            # logger propagated up.
+            app_logger = logging.getLogger("app.test_pin_check")
+            app_logger.debug("app-debug-marker-1")
+
+            captured = [
+                r for r in caplog.records
+                if r.name == "app.test_pin_check"
+                and r.levelno == logging.DEBUG
+            ]
+            assert len(captured) >= 1, (
+                f"Expected app.test_pin_check DEBUG to propagate "
+                f"to root, but caplog saw: "
+                f"{[(r.name, r.levelno) for r in caplog.records]}"
+            )
+        finally:
+            if old_env is None:
+                os.environ.pop("LOG_LEVEL", None)
+            else:
+                os.environ["LOG_LEVEL"] = old_env
+            importlib.reload(logging_mod)
+
+
+def test_configure_logging_is_idempotent():
+    """Calling configure_logging() twice does not add
+    duplicate handlers. This is what lets the test
+    suite call it from multiple places without
+    doubling up on log output.
+    """
+    from app.core.logger import configure_logging
+
+    root = logging.getLogger()
+    original_handlers = list(root.handlers)
+    try:
+        configure_logging()
+        after_first = list(root.handlers)
+        configure_logging()
+        after_second = list(root.handlers)
+        assert len(after_first) == len(after_second), (
+            "configure_logging() should be idempotent but "
+            "the second call changed the handler count."
+        )
+    finally:
+        root.handlers = original_handlers

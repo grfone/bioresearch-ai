@@ -84,6 +84,27 @@ def configure_logging() -> None:
     root_logger.setLevel(settings.logging.level)
     root_logger.addHandler(console_handler)
 
+    # Quiet noisy third-party loggers. When LOG_LEVEL=DEBUG,
+    # the root logger emits everything; these libraries emit
+    # per-connection / per-packet DEBUG lines that drown
+    # our own application logs. Pinning them to WARNING
+    # means their ERROR/CRITICAL still propagate (via the
+    # root handler), but their DEBUG/INFO chatter stops.
+    #
+    # This is a curated list, not a blanket suppression --
+    # we pin only the libraries whose DEBUG output is known
+    # to be high-volume and low-value during boot.
+    for noisy in (
+        "httpx",      # HTTP client
+        "httpcore",   # lower-level transport -- the worst
+                      # offender; emits one log per packet
+        "httpcore.http11",
+        "httpcore.connection",
+        "urllib3",    # requests dependency (if used)
+        "asyncio",    # Python stdlib async runtime
+    ):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     if settings.logging.to_file:
 
         log_path = Path(settings.logging.file)
