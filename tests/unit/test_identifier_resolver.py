@@ -646,3 +646,298 @@ def test_openalex_fallback_reconstructs_inverted_index():
     # occurrence), position 6 is "OpenAlex" (its second),
     # position 7 is "world" (its second).
     assert result == "Hello world from OpenAlex Hello OpenAlex world"
+
+
+# ---------------------------------------------------------------------------
+# AbstractEnricher fallback (HTML meta-tag scraping)
+# ---------------------------------------------------------------------------
+
+
+def test_abstract_enricher_fills_abstract_when_crossref_and_openalex_are_empty(
+    monkeypatch,
+):
+    """When both CrossRef and OpenAlex return no abstract,
+    the resolver falls back to the HTML enricher. The
+    enricher is injected via the constructor.
+    """
+    from app.infrastructure.pubmed.identifier_resolver import (
+        IdentifierResolver,
+    )
+    from app.infrastructure.pubmed.abstract_enricher import (
+        AbstractEnricher,
+    )
+    from app.infrastructure.pubmed.provider import PubMedProvider
+    from app.infrastructure.pubmed.client import PubMedClient
+    from unittest.mock import MagicMock
+
+    def fake_get(url, *args, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "crossref" in url:
+            # CrossRef returns a paper with no abstract.
+            resp.json.return_value = {
+                "message": {
+                    "title": ["Thin record."],
+                    "author": [],
+                    "abstract": "",
+                }
+            }
+        elif "openalex" in url:
+            # OpenAlex also has no abstract.
+            resp.json.return_value = {"abstract_inverted_index": None}
+        else:
+            resp.json.return_value = None
+        return resp
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, *args, **kwargs):
+            return fake_get(url, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.infrastructure.pubmed.identifier_resolver.httpx.Client",
+        FakeClient,
+    )
+
+    # The HTML enricher itself is mocked to return an
+    # abstract. We don't actually run the HTML scraping
+    # here -- that's covered by the AbstractEnricher unit
+    # tests. This test only verifies the resolver's
+    # plumbing of the enricher.
+    class FakeEnricher:
+        def __init__(self, abstract):
+            self._abstract = abstract
+
+        def fetch(self, doi):
+            return self._abstract
+
+    provider = PubMedProvider(
+        client=PubMedClient(email="test@example.com", api_key="")
+    )
+    enricher = FakeEnricher(
+        "This abstract was scraped from the publisher's HTML page."
+    )
+    resolver = IdentifierResolver(
+        pubmed_provider=provider,
+        abstract_enricher=enricher,
+    )
+
+    result = resolver.resolve_one("10.1234/html-fallback")
+    assert result.failure is None
+    assert result.paper is not None
+    assert (
+        "This abstract was scraped"
+        in result.paper.paper.abstract
+    )
+
+
+def test_abstract_enricher_skipped_when_crossref_has_abstract(
+    monkeypatch,
+):
+    """If CrossRef already has an abstract, the enricher is
+    NOT called -- the fallback chain stops at the first
+    source that has data.
+    """
+    from app.infrastructure.pubmed.identifier_resolver import (
+        IdentifierResolver,
+    )
+    from app.infrastructure.pubmed.provider import PubMedProvider
+    from app.infrastructure.pubmed.client import PubMedClient
+    from unittest.mock import MagicMock
+
+    enricher_calls = []
+
+    class TrackingEnricher:
+        def fetch(self, doi):
+            enricher_calls.append(doi)
+            return "SHOULD NOT BE USED"
+
+    def fake_get(url, *args, **kwargs):
+        resp = MagicMock()
+        if "crossref" in url:
+            resp.status_code = 200
+            resp.json.return_value = {
+                "message": {
+                    "title": ["Has abstract."],
+                    "author": [],
+                    "abstract": "<jats:p>Real abstract from CrossRef.</jats:p>",
+                }
+            }
+        elif "openalex" in url:
+            resp.status_code = 200
+            resp.json.return_value = {"abstract_inverted_index": None}
+        else:
+            resp.status_code = 404
+        return resp
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, *args, **kwargs):
+            return fake_get(url, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.infrastructure.pubmed.identifier_resolver.httpx.Client",
+        FakeClient,
+    )
+
+    provider = PubMedProvider(
+        client=PubMedClient(email="test@example.com", api_key="")
+    )
+    resolver = IdentifierResolver(
+        pubmed_provider=provider,
+        abstract_enricher=TrackingEnricher(),
+    )
+
+    result = resolver.resolve_one("10.1038/has-abstract")
+    assert result.failure is None
+    assert "Real abstract from CrossRef" in result.paper.paper.abstract
+    # Enricher was never called because CrossRef already
+    # had the abstract.
+    assert enricher_calls == []
+
+
+def test_abstract_enricher_returns_none_when_html_has_no_abstract(
+    monkeypatch,
+):
+    """The enricher returning None (e.g. Datadome block, no
+    meta tag found) is handled silently -- the paper just
+    has no abstract."""
+    from app.infrastructure.pubmed.identifier_resolver import (
+        IdentifierResolver,
+    )
+    from app.infrastructure.pubmed.provider import PubMedProvider
+    from app.infrastructure.pubmed.client import PubMedClient
+    from unittest.mock import MagicMock
+
+    def fake_get(url, *args, **kwargs):
+        resp = MagicMock()
+        if "crossref" in url:
+            resp.status_code = 200
+            resp.json.return_value = {
+                "message": {
+                    "title": ["Thin record."],
+                    "author": [],
+                    "abstract": "",
+                }
+            }
+        elif "openalex" in url:
+            resp.status_code = 200
+            resp.json.return_value = {"abstract_inverted_index": None}
+        else:
+            resp.status_code = 404
+        return resp
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, *args, **kwargs):
+            return fake_get(url, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.infrastructure.pubmed.identifier_resolver.httpx.Client",
+        FakeClient,
+    )
+
+    class ReturningNoneEnricher:
+        def fetch(self, doi):
+            return None
+
+    provider = PubMedProvider(
+        client=PubMedClient(email="test@example.com", api_key="")
+    )
+    resolver = IdentifierResolver(
+        pubmed_provider=provider,
+        abstract_enricher=ReturningNoneEnricher(),
+    )
+
+    result = resolver.resolve_one("10.1007/978-3-031-64636-2_17")
+    assert result.failure is None
+    assert result.paper is not None
+    # Abstract stays empty when enricher returns None.
+    assert result.paper.paper.abstract == ""
+
+
+def test_abstract_enricher_is_optional(monkeypatch):
+    """The resolver works fine without an enricher -- it's
+    backward-compatible. Pre-existing callers that don't
+    pass an enricher still get the CrossRef + OpenAlex
+    fallback chain."""
+    from app.infrastructure.pubmed.identifier_resolver import (
+        IdentifierResolver,
+    )
+    from app.infrastructure.pubmed.provider import PubMedProvider
+    from app.infrastructure.pubmed.client import PubMedClient
+    from unittest.mock import MagicMock
+
+    def fake_get(url, *args, **kwargs):
+        resp = MagicMock()
+        if "crossref" in url:
+            resp.status_code = 200
+            resp.json.return_value = {
+                "message": {
+                    "title": ["Thin record."],
+                    "author": [],
+                    "abstract": "",
+                }
+            }
+        elif "openalex" in url:
+            resp.status_code = 200
+            resp.json.return_value = {"abstract_inverted_index": None}
+        else:
+            resp.status_code = 404
+        return resp
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, *args, **kwargs):
+            return fake_get(url, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.infrastructure.pubmed.identifier_resolver.httpx.Client",
+        FakeClient,
+    )
+
+    provider = PubMedProvider(
+        client=PubMedClient(email="test@example.com", api_key="")
+    )
+    # No enricher passed.
+    resolver = IdentifierResolver(pubmed_provider=provider)
+
+    result = resolver.resolve_one("10.1234/no-enricher")
+    assert result.failure is None
+    assert result.paper is not None
+    # The resolver still works; the abstract is just empty.
+    assert result.paper.paper.abstract == ""
+    # Internal state: enricher is None.
+    assert resolver._abstract_enricher is None

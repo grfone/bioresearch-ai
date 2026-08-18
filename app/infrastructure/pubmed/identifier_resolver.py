@@ -33,6 +33,9 @@ from typing import Any
 import httpx
 
 from app.domain.entities.paper import Paper
+from app.infrastructure.pubmed.abstract_enricher import (
+    AbstractEnricher,
+)
 from app.infrastructure.pubmed.mapper import PubMedMapper
 from app.infrastructure.pubmed.provider import PubMedProvider
 
@@ -166,8 +169,19 @@ class IdentifierResolver:
     CROSSREF_API = "https://api.crossref.org/works/{doi}"
     CROSSREF_TIMEOUT = 15.0
 
-    def __init__(self, pubmed_provider: PubMedProvider) -> None:
+    def __init__(
+        self,
+        pubmed_provider: PubMedProvider,
+        *,
+        abstract_enricher: AbstractEnricher | None = None,
+    ) -> None:
         self._pubmed_provider = pubmed_provider
+        # AbstractEnricher is optional. When provided, the
+        # resolver falls back to HTML meta-tag scraping
+        # after the OpenAlex fallback. When None, the
+        # resolver stops at OpenAlex (the pre-existing
+        # behaviour).
+        self._abstract_enricher = abstract_enricher
 
     def resolve_many(
         self,
@@ -320,6 +334,19 @@ class IdentifierResolver:
                 # ``dataclasses.replace`` to build a new
                 # instance with the OpenAlex abstract.
                 paper = replace(paper, abstract=openalex_abstract)
+
+        # Third fallback: HTML meta-tag scraping. Open
+        # publishers (Nature, PLOS, Frontiers, etc.) ship
+        # the abstract in <meta name="description"> or
+        # <meta name="citation_abstract">. Gated publishers
+        # (Springer, Elsevier) deploy anti-bot that blocks
+        # polite clients, so this only catches some of the
+        # cases that OpenAlex misses.
+        if not paper.abstract or not paper.abstract.strip():
+            if self._abstract_enricher is not None:
+                html_abstract = self._abstract_enricher.fetch(doi)
+                if html_abstract:
+                    paper = replace(paper, abstract=html_abstract)
 
         return ResolutionResult(
             paper=ResolvedPaper(
