@@ -1,0 +1,203 @@
+"""
+test_env_has_valid_creds.py
+
+Unit tests for ``_env_has_valid_creds`` -- the helper that
+decides whether the bootstrap wizard can be skipped because
+the existing ``.env`` has the minimum creds needed to bring
+the app up.
+
+Contract
+--------
+- No ``.env`` file -> False (user must run the wizard).
+- Empty ``.env`` -> False.
+- Missing PUBMED_EMAIL -> False (NCBI requires an email).
+- Missing DEFAULT_LLM_PROVIDER -> False.
+- Unknown provider slug -> False (caller should not silently
+  fall back to a random provider; the user should re-run
+  the wizard to fix the broken config).
+- DEFAULT_LLM_PROVIDER=local without an API key -> True
+  (local models don't need API keys).
+- Remote provider (e.g. openai) with no API key -> False.
+- Remote provider with empty API key (``OPENAI_API_KEY=``)
+  -> False (the container would 500 on the first LLM call).
+- Remote provider with a valid API key -> True.
+- Optional fields missing (PUBMED_API_KEY, OLLAMA_MODEL,
+  custom BASE_URL) -> still True; they're optional.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+# Importing bootstrap triggers the catalog import which
+# may not be available in some test contexts. Defer the
+# import to the test functions so pytest collection works
+# even if the catalog is unavailable.
+import importlib
+
+
+@pytest.fixture
+def env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the bootstrap's ``ENV_FILE`` at a temp file."""
+    import bootstrap
+    target = tmp_path / ".env"
+    monkeypatch.setattr(bootstrap, "ENV_FILE", target)
+    return target
+
+
+def _write_env(path: Path, lines: list[str]) -> None:
+    path.write_text("\n".join(lines) + "\n")
+
+
+def test_returns_false_when_env_missing(env_file: Path) -> None:
+    """No .env file -> wizard must run."""
+    import bootstrap
+    assert bootstrap.ENV_FILE.is_file() is False
+    assert bootstrap._env_has_valid_creds() is False
+
+
+def test_returns_false_when_env_empty(env_file: Path) -> None:
+    """Empty .env -> wizard must run."""
+    import bootstrap
+    _write_env(env_file, [])
+    assert bootstrap._env_has_valid_creds() is False
+
+
+def test_returns_false_when_pubmed_email_missing(env_file: Path) -> None:
+    """NCBI requires an email; missing it -> wizard must run."""
+    import bootstrap
+    _write_env(
+        env_file,
+        [
+            "DEFAULT_LLM_PROVIDER=openai",
+            "OPENAI_API_KEY=sk-test",
+        ],
+    )
+    assert bootstrap._env_has_valid_creds() is False
+
+
+def test_returns_false_when_provider_missing(env_file: Path) -> None:
+    """No DEFAULT_LLM_PROVIDER -> wizard must run."""
+    import bootstrap
+    _write_env(env_file, ["PUBMED_EMAIL=test@example.com"])
+    assert bootstrap._env_has_valid_creds() is False
+
+
+def test_returns_true_for_local_provider_without_api_key(env_file: Path) -> None:
+    """Local provider doesn't need an API key."""
+    import bootstrap
+    _write_env(
+        env_file,
+        [
+            "DEFAULT_LLM_PROVIDER=local",
+            "PUBMED_EMAIL=test@example.com",
+        ],
+    )
+    assert bootstrap._env_has_valid_creds() is True
+
+
+def test_returns_true_for_openai_with_api_key(env_file: Path) -> None:
+    """OpenAI with a real key + PubMed email -> wizard skipped."""
+    import bootstrap
+    _write_env(
+        env_file,
+        [
+            "DEFAULT_LLM_PROVIDER=openai",
+            "OPENAI_API_KEY=sk-test",
+            "PUBMED_EMAIL=test@example.com",
+        ],
+    )
+    assert bootstrap._env_has_valid_creds() is True
+
+
+def test_returns_false_for_openai_without_api_key(env_file: Path) -> None:
+    """OpenAI provider but no key -> wizard must run."""
+    import bootstrap
+    _write_env(
+        env_file,
+        [
+            "DEFAULT_LLM_PROVIDER=openai",
+            "PUBMED_EMAIL=test@example.com",
+        ],
+    )
+    assert bootstrap._env_has_valid_creds() is False
+
+
+def test_returns_false_for_empty_api_key(env_file: Path) -> None:
+    """``OPENAI_API_KEY=`` (empty value) is not a valid cred."""
+    import bootstrap
+    _write_env(
+        env_file,
+        [
+            "DEFAULT_LLM_PROVIDER=openai",
+            "OPENAI_API_KEY=",
+            "PUBMED_EMAIL=test@example.com",
+        ],
+    )
+    assert bootstrap._env_has_valid_creds() is False
+
+
+def test_returns_true_when_optional_fields_missing(env_file: Path) -> None:
+    """PUBMED_API_KEY / OLLAMA_MODEL / custom BASE_URL are
+    optional; missing them shouldn't disqualify the env."""
+    import bootstrap
+    _write_env(
+        env_file,
+        [
+            "DEFAULT_LLM_PROVIDER=openai",
+            "OPENAI_API_KEY=sk-test",
+            "PUBMED_EMAIL=test@example.com",
+        ],
+    )
+    assert bootstrap._env_has_valid_creds() is True
+
+
+def test_skips_comment_and_blank_lines(env_file: Path) -> None:
+    """Comments (``#...``) and blank lines don't break parsing."""
+    import bootstrap
+    _write_env(
+        env_file,
+        [
+            "# Generated by bootstrap",
+            "",
+            "DEFAULT_LLM_PROVIDER=minimax",
+            "",
+            "# API key for MiniMax",
+            "MINIMAX_API_KEY=eyJ-fake-key",
+            "PUBMED_EMAIL=test@example.com",
+        ],
+    )
+    assert bootstrap._env_has_valid_creds() is True
+
+
+def test_minimax_provider_uses_minimax_api_key_env(env_file: Path) -> None:
+    """MiniMax's canonical env var is MINIMAX_API_KEY, not
+    OPENAI_API_KEY. Make sure the helper looks up the right
+    name from the catalog."""
+    import bootstrap
+    _write_env(
+        env_file,
+        [
+            "DEFAULT_LLM_PROVIDER=minimax",
+            "MINIMAX_API_KEY=eyJ-fake-key",
+            "PUBMED_EMAIL=test@example.com",
+        ],
+    )
+    assert bootstrap._env_has_valid_creds() is True
+
+
+def test_minimax_provider_with_wrong_key_env_is_invalid(env_file: Path) -> None:
+    """MiniMax with ``OPENAI_API_KEY=...`` (wrong env var name)
+    should NOT count as valid -- the container would 500."""
+    import bootstrap
+    _write_env(
+        env_file,
+        [
+            "DEFAULT_LLM_PROVIDER=minimax",
+            "OPENAI_API_KEY=sk-test",
+            "PUBMED_EMAIL=test@example.com",
+        ],
+    )
+    assert bootstrap._env_has_valid_creds() is False

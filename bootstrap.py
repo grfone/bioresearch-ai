@@ -1818,6 +1818,82 @@ def open_browser() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _env_has_valid_creds() -> bool:
+    """True when the existing ``.env`` file has the minimum
+    creds needed to bring the app up.
+
+    "Valid" here means:
+    - DEFAULT_LLM_PROVIDER is set and matches a known
+      provider slug (or a fallback provider).
+    - If the provider is not ``local``, the provider's
+      ``api_key_env`` is present and non-empty in the
+      env file.
+    - PUBMED_EMAIL is present and non-empty (NCBI
+      requires an email on every E-utility call).
+
+    The check is deliberately permissive: missing optional
+    fields (e.g. PUBMED_API_KEY, custom BASE_URL,
+    OLLAMA_MODEL) don't disqualify the env, they're just
+    defaulted at runtime. The check is also conservative
+    about the API key -- an empty value (e.g. the user
+    pasted ``OPENAI_API_KEY=``) does NOT count as a valid
+    cred, since the resulting container would 500 on the
+    first LLM call.
+
+    This function is used by ``main`` to decide whether
+    the bootstrap wizard can be skipped -- if the user
+    has already entered valid creds in a previous run,
+    we don't want to interrupt them with the GUI popup
+    every time. The user can still force the wizard
+    with the ``--wizard`` flag (or by deleting the
+    relevant keys from ``.env``).
+    """
+    if not ENV_FILE.is_file():
+        return False
+    env_values: dict[str, str] = {}
+    for raw in ENV_FILE.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        env_values[k.strip()] = v.strip()
+
+    # PubMed email is required by NCBI; no email = no
+    # legitimate PubMed queries.
+    if not env_values.get("PUBMED_EMAIL"):
+        return False
+
+    # Provider slug must be present and valid.
+    slug = env_values.get("DEFAULT_LLM_PROVIDER", "")
+    if not slug:
+        return False
+
+    # Local provider doesn't need an API key.
+    if slug == "local":
+        return True
+
+    # For remote providers, the provider's API key env
+    # var must be present and non-empty. Look up the
+    # canonical env var name from the catalog so we
+    # don't hardcode the mapping here.
+    try:
+        from app.core.enums.llm_provider import LLMProviderEnum
+        from app.application.services.llm_provider_catalog import (
+            get_provider_meta,
+        )
+        meta = get_provider_meta(LLMProviderEnum(slug))
+        key_env = meta.api_key_env
+    except Exception:
+        # Unknown provider -- fall through to the legacy
+        # ``API_KEY`` env var. Some users still use the
+        # generic name.
+        key_env = "API_KEY"
+    if not env_values.get(key_env):
+        return False
+
+    return True
+
+
 def load_config_from_env(conda_channel: str | None = None) -> GuiConfig:
     """Build a ``GuiConfig`` from an existing ``.env`` file.
 
@@ -1891,6 +1967,16 @@ def main() -> int:
         "--skip-gui",
         action="store_true",
         help="Use the existing .env file without prompting.",
+    )
+    parser.add_argument(
+        "--wizard",
+        action="store_true",
+        help=(
+            "Force the first-run configuration wizard even "
+            "when the existing .env has valid creds. Use "
+            "this to change provider, model, or PubMed "
+            "settings without manually editing the env file."
+        ),
     )
     parser.add_argument(
         "--no-browser",
@@ -1984,11 +2070,30 @@ def main() -> int:
     )
     print()
 
-    # 4. First-run GUI (unless --skip-gui)
+    # 4. First-run GUI. We skip the wizard when the user has
+    # either explicitly asked (``--skip-gui``) or has a
+    # complete ``.env`` with valid creds. The user can
+    # force the wizard back with ``--wizard``.
     have_env = ENV_FILE.is_file()
-    if args.skip_gui and have_env:
+    env_complete = have_env and _env_has_valid_creds()
+    if args.wizard:
+        # Force the wizard. The user wants to re-configure.
+        config = _gui_collect_config(hw)
+    elif args.skip_gui and have_env:
         config = load_config_from_env(conda_channel)
+        log_info("Skipped wizard (--skip-gui with existing .env).")
+    elif env_complete:
+        config = load_config_from_env(conda_channel)
+        log_info(
+            "Skipped wizard -- existing .env has valid creds. "
+            "Use ``--wizard`` to re-configure."
+        )
     else:
+        if have_env:
+            log_info(
+                "Existing .env is incomplete; opening the "
+                "wizard to gather the missing fields."
+            )
         config = _gui_collect_config(hw)
         # When the user picks Local, the GUI sets
         # config.llm_provider == "local" and we want the heavy
