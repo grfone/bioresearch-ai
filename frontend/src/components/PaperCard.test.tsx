@@ -335,6 +335,77 @@ describe('PaperCard', () => {
       expect(
         container.querySelector('.paper-source-badge'),
       ).not.toBeNull();
+  describe('Scholar escape-hatch link', () => {
+    it('does NOT render the Scholar link when the abstract is present', () => {
+      // When the paper has a full abstract, the user doesn't
+      // need a Scholar escape hatch -- the abstract is right
+      // there on the card.
+      const { container } = render(<PaperCard paper={FULL_PAPER} />);
+      expect(
+        container.querySelector('.paper-identifier--scholar'),
+      ).toBeNull();
+    });
+
+    it('renders the Scholar link when abstract is missing but DOI is present', () => {
+      // NO_ABSTRACT_PAPER has doi set and abstract empty.
+      // The link should be there as the escape hatch.
+      const { container } = render(<PaperCard paper={NO_ABSTRACT_PAPER} />);
+      const link = container.querySelector('.paper-identifier--scholar');
+      expect(link).not.toBeNull();
+      // Should be an <a> tag with the Scholar URL containing the DOI.
+      expect(link!.tagName).toBe('A');
+      expect(link!.getAttribute('href')).toMatch(
+        /^https:\/\/scholar\.google\.com\/scholar\?q=10\.1126/,
+      );
+      expect(link!.getAttribute('target')).toBe('_blank');
+      expect(link!.getAttribute('rel')).toMatch(/noopener/);
+    });
+
+    it('renders the Scholar link when abstract is missing AND DOI is missing', () => {
+      // Title-only fallback path. THIN_PAPER has a doi though,
+      // so we need a custom fixture.
+      const noDoiPaper: Paper = {
+        ...NO_ABSTRACT_PAPER,
+        doi: null,
+        pmid: null,
+      };
+      const { container } = render(<PaperCard paper={noDoiPaper} />);
+      const link = container.querySelector('.paper-identifier--scholar');
+      expect(link).not.toBeNull();
+      // URL should contain the quoted title.
+      expect(link!.getAttribute('href')).toMatch(
+        /q=%22The\+amyloid\+cascade\+hypothesis\+revisited\.%22/,
+      );
+    });
+
+    it('does NOT render the Scholar link when abstract is missing AND title is empty', () => {
+      // No DOI, no PMID, no title -- nothing to search by.
+      // The link should not render (and we don't crash).
+      const emptyPaper: Paper = {
+        ...NO_ABSTRACT_PAPER,
+        doi: null,
+        pmid: null,
+        title: '',
+      };
+      const { container } = render(<PaperCard paper={emptyPaper} />);
+      expect(
+        container.querySelector('.paper-identifier--scholar'),
+      ).toBeNull();
+    });
+
+    it('uses PMID for the Scholar query when DOI is missing but PMID is present', () => {
+      const noDoiPaper: Paper = {
+        ...NO_ABSTRACT_PAPER,
+        doi: null,
+        // PMID inherited from NO_ABSTRACT_PAPER (which is FULL_PAPER.copy)
+      };
+      const { container } = render(<PaperCard paper={noDoiPaper} />);
+      const link = container.querySelector('.paper-identifier--scholar');
+      expect(link).not.toBeNull();
+      expect(link!.getAttribute('href')).toMatch(/q=PMID/);
+    });
+  });
+
     });
   });
 });

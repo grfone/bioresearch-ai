@@ -25,7 +25,11 @@
 
 import React from 'react';
 import type { Paper } from '../models/paper';
-import { formatPaperCitation, hasDoi } from '../models/paper';
+import {
+  formatPaperCitation,
+  googleScholarUrl,
+  hasDoi,
+} from '../models/paper';
 import { ExternalLink, X, AlertTriangle } from 'lucide-react';
 
 interface PaperCardProps {
@@ -79,6 +83,13 @@ export const PaperCard: React.FC<PaperCardProps> = ({
     paper.abstract && paper.abstract.trim().length > 0;
   const showTruncation = truncateAbstract && hasAbstract && !expanded;
   const thin = isThinPaper(paper);
+  // Scholar link is the escape hatch when the abstract is
+  // missing entirely -- the resolver, OpenAlex, and the
+  // HTML meta-tag fallback all failed. Pre-compute the URL
+  // here so the JSX below can decide whether to render the
+  // link in one place.
+  const scholarUrl =
+    !hasAbstract ? googleScholarUrl(paper) : null;
 
   // Construct a short author list — comma-separated, "et al."
   // once we exceed the visible limit.
@@ -206,6 +217,17 @@ export const PaperCard: React.FC<PaperCardProps> = ({
             title={paper.pmid}
           >
             PMID: {paper.pmid}
+          </a>
+        )}
+        {scholarUrl && (
+          <a
+            className="paper-identifier paper-identifier--scholar"
+            href={scholarUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Search on Google Scholar to find the abstract"
+          >
+            Scholar
           </a>
         )}
       </div>

@@ -2367,6 +2367,16 @@ application.
     color: #6ee7b7;
     border: 1px solid rgba(16, 185, 129, 0.3);
 }
+/* Scholar escape-hatch link. Renders only when the
+   paper's abstract is missing entirely -- the resolver,
+   OpenAlex, and HTML meta-tag fallbacks all failed.
+   Amber-tinted to signal "secondary action, not the
+   primary way to view this paper". */
+.paper-identifier--scholar {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fcd34d;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
 
 /* Partial-metadata marker — asterisk next to the title and a
    warning banner under the metadata. The marker appears when the

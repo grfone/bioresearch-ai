@@ -107,6 +107,47 @@ export function formatPaperCitation(paper: Paper, maxAuthors = 3): string {
   return `${authorPart}${yearPart}. ${paper.title}`;
 }
 
+/**
+ * Build a Google Scholar search URL for a paper.
+ *
+ * Used by the PaperCard to give researchers an escape hatch
+ * when the resolver, the OpenAlex fallback, and the HTML
+ * meta-tag fallback all fail to return an abstract. The link
+ * appears only when the abstract is empty; clicking it opens
+ * Scholar with the most-specific identifier we have:
+ *
+ * 1. DOI  ->  ``scholar?q=<doi>``
+ * 2. PMID ->  ``scholar?q=PMID:<pmid>``
+ * 3. Title -> ``scholar?q="<title>"``  (quoted so the
+ *   exact phrase is preserved)
+ *
+ * The Scholar URL never includes any user-specific data; it
+ * is purely a public search URL.
+ *
+ * @param paper - The paper to build the URL for.
+ * @returns A Scholar search URL, or ``null`` if we have
+ *   nothing to search by (no DOI, no PMID, and empty title).
+ */
+export function googleScholarUrl(paper: Paper): string | null {
+  const base = 'https://scholar.google.com/scholar';
+  if (paper.doi && paper.doi.trim().length > 0) {
+    // DOI is the most specific identifier -- search by it.
+    const params = new URLSearchParams({ q: paper.doi.trim() });
+    return `${base}?${params.toString()}`;
+  }
+  if (paper.pmid && paper.pmid.trim().length > 0) {
+    const params = new URLSearchParams({ q: `PMID:${paper.pmid.trim()}` });
+    return `${base}?${params.toString()}`;
+  }
+  if (paper.title && paper.title.trim().length > 0) {
+    // Quoted exact-phrase search so common words like
+    // "deep learning" don't get split.
+    const params = new URLSearchParams({ q: `"${paper.title.trim()}"` });
+    return `${base}?${params.toString()}`;
+  }
+  return null;
+}
+
 // =====================================================================
 // Manual upload types — used by the "Upload paper" form to add a paper
 // to a workspace without going through PubMed. These mirror the
