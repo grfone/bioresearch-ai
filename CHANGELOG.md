@@ -187,6 +187,30 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   tests verify the index.html link, the SVG, and the
   ICO header bytes.
 
+* **HTML meta-tag fallback for missing abstracts.** When
+  CrossRef and OpenAlex both return no abstract (common
+  for book chapters, conference proceedings, and
+  preprints), the resolver now falls back to fetching
+  the publisher's HTML landing page via
+  ``https://doi.org/<doi>`` and extracting the abstract
+  from ``<meta>`` tags. The new ``AbstractEnricher``
+  service handles three patterns: ``citation_abstract``
+  (PLOS, Oxford Academic, HighWire), ``description``
+  (Nature, PNAS, Royal Society), and ``og:description``
+  (Frontiers). Attribute-order variation and HTML
+  entity decoding (``&micro;`` -> ``µ``, ``&amp;`` ->
+  ``&``, ``&gt;`` -> ``>``) are handled. Meta
+  descriptions shorter than 40 chars are rejected
+  (filters out "Read the paper" and similar stubs).
+  Network errors, 4xx/5xx, and bot-challenge pages
+  (Datadome, reCAPTCHA) are swallowed silently. The
+  fallback is opt-in via ``ABSTRACT_ENRICHER_ENABLED=true``
+  in ``.env`` (default false) because it adds ~1-2s
+  latency per DOI lookup. Live verified on Nature
+  (807 chars), PLOS (1813 chars), and Springer (267
+  chars) -- the third is anti-bot-gated but lets
+  polite clients through sometimes.
+
 ### Removed
 
 * **AddPapersPanel — "Manual" tab.** Replaced by the DOI +
