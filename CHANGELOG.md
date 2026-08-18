@@ -241,6 +241,40 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   The link does NOT include any user-specific data; it
   is purely a public Scholar search URL.
 
+* **LLM-based verbatim abstract extraction.** When
+  the deterministic regex path returns ``None`` or a
+  short string AND the publisher HTML was reachable
+  (HTTP 200), the resolver now hands the page text to
+  an LLM as a flexible text extractor. **This is NOT
+  a generation path** -- the LLM contract is verbatim
+  extraction or ``NONE``: return the abstract text as
+  it appears on the page, word-for-word; if the page
+  has no abstract, return the literal string ``NONE``.
+  The LLM never invents, summarizes, paraphrases, or
+  fills in missing information. The new
+  ``LLMExtractor`` class enforces this contract via
+  belt-and-braces defenses: 7 explicit rejection
+  patterns (literal ``NONE``, "There is no abstract on
+  this page.", etc.); length floor (40 chars) and
+  ceiling (8000 chars) -- anything outside that range
+  is rejected as suspicious; ``temperature=0.0`` for
+  determinism; ``LLMProviderError`` caught and treated
+  as ``None``. The LLM is opt-in via
+  ``LLM_ABSTRACT_EXTRACTION_ENABLED=true`` in ``.env``
+  (default false) because every miss costs 1-3k
+  tokens. When disabled, the behaviour is identical to
+  the previous HTML-enricher-only path. Live verified
+  end-to-end on a fresh Docker build: Nature DOI still
+  extracts 807 chars via the deterministic path (LLM
+  correctly bypassed); when the flag is false,
+  ``enricher._llm_extractor`` is ``None`` and the
+  system works as before. 22 unit tests pin the
+  verbatim / ``NONE`` contract so a future refactor
+  can't accidentally drop the rules; 3 integration
+  tests verify the resolver only invokes the LLM when
+  the deterministic path failed AND the HTML was
+  reachable (never when we got blocked by anti-bot).
+
 ### Removed
 
 * **AddPapersPanel — "Manual" tab.** Replaced by the DOI +
