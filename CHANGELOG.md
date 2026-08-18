@@ -275,6 +275,45 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   the deterministic path failed AND the HTML was
   reachable (never when we got blocked by anti-bot).
 
+* **"AI-extracted" provenance flag on Paper.** New
+  ``Paper.inferred_abstract: bool = False`` field, set
+  to ``True`` ONLY when the abstract came from the LLM
+  extraction fallback. CrossRef / OpenAlex / the
+  deterministic HTML regex path all leave the flag
+  ``False``. The new ``ExtractionResult`` dataclass
+  in ``app.infrastructure.pubmed.llm_extractor``
+  carries the flag through the
+  ``AbstractEnricher.fetch()`` pipeline and the
+  ``IdentifierResolver`` stamps it onto the resulting
+  ``Paper``. The flag flows out via
+  ``PaperResponse`` (API schema) to the frontend.
+
+* **"AI-extracted" badge on PaperCard.** When the
+  paper's ``inferred_abstract`` is ``True``, the card
+  now renders a small violet pill labeled "AI-extracted"
+  next to the source badge. Distinct color from the
+  source badge so researchers can tell at a glance
+  which abstracts came from where: blue/green badge =
+  "this paper came from CrossRef / OpenAlex / etc.",
+  violet badge = "this abstract was extracted by an LLM
+  (verbatim, not generated)". The badge has a tooltip
+  spelling out the contract: "Abstract pulled from the
+  publisher's page by an LLM (the LLM was asked to
+  extract, not generate; this is verbatim text from the
+  page)". Hidden by default when ``inferred_abstract``
+  is ``False`` or unset (legacy papers).
+
+* **Startup log line for the abstract enricher.** At
+  application boot, ``main.py`` now logs a single
+  ``AbstractEnricher | html_enricher=... llm_extractor=...
+  cache_size=...`` line so operators can see at a glance
+  which fallbacks are wired. When the LLM path is
+  disabled, the line reads ``llm_extractor=disabled
+  (LLM_ABSTRACT_EXTRACTION_ENABLED is false)``. When
+  enabled, it includes the LLM provider and model so
+  operators can verify they're using the intended
+  configuration.
+
 ### Removed
 
 * **AddPapersPanel — "Manual" tab.** Replaced by the DOI +

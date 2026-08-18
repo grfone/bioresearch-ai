@@ -64,6 +64,21 @@ export interface Paper {
   year: number | null;
   /** Publication abstract (may be truncated) */
   abstract: string;
+  /**
+   * True when the abstract was retrieved via the LLM-based
+   * extraction fallback (verbatim text pulled from the
+   * publisher's HTML page by an LLM). False when the
+   * abstract came from a structured source (CrossRef,
+   * OpenAlex, PubMed) or the deterministic HTML regex.
+   *
+   * The frontend uses this to render an "AI-extracted"
+   * provenance badge so researchers can see at a glance
+   * which abstracts were extracted by an LLM. The LLM
+   * contract is verbatim extraction -- never generation
+   * -- so the abstract text is the publisher's own, just
+   * pulled from a non-standard location on the page.
+   */
+  inferred_abstract?: boolean;
   /** Digital Object Identifier (DOI) */
   doi: string | null;
   /** PubMed ID (PMID) */

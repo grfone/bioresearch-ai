@@ -141,6 +141,15 @@ export const PaperCard: React.FC<PaperCardProps> = ({
                 via {source}
               </span>
             )}
+            {paper.inferred_abstract && (
+              <span
+                className="paper-inferred-badge"
+                title="Abstract pulled from the publisher's page by an LLM (the LLM was asked to extract, not generate; this is verbatim text from the page)."
+                aria-label="AI-extracted abstract"
+              >
+                AI-extracted
+              </span>
+            )}
           </h3>
           {authorLine && (
             <p className="paper-authors">{authorLine}</p>

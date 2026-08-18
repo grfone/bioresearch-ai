@@ -80,6 +80,7 @@ Guillermo Ramajo Fernández
 from __future__ import annotations
 
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -143,6 +144,53 @@ async def lifespan(
     # MISS visibility etc.).
     from app.core.logger import configure_logging
     configure_logging()
+
+    logger = logging.getLogger(__name__)
+
+    # Log the abstract-enricher pipeline configuration so
+    # operators can see at boot time which fallbacks are
+    # wired. This is the operator's only window into the
+    # wiring -- once the app is running, the only way to
+    # inspect this is via /admin/cache-stats (TODO).
+    #
+    # The line is structured as a single space-separated
+    # record so log scrapers can grep for ``enricher=``
+    # and ``llm_extractor=`` substrings.
+    try:
+        from app.config.container import get_identifier_resolver
+        from app.config.settings import settings as _settings
+        resolver = get_identifier_resolver()
+        enricher = resolver._abstract_enricher
+        if enricher is None:
+            logger.info(
+                "AbstractEnricher | "
+                "html_enricher=disabled llm_extractor=disabled "
+                "(ABSTRACT_ENRICHER_ENABLED is false)"
+            )
+        else:
+            llm_extractor = (
+                enricher._llm_extractor
+            )
+            llm_state = (
+                f"enabled provider={_settings.llm.provider} "
+                f"model={_settings.llm.model}"
+                if llm_extractor is not None
+                else "disabled "
+                "(LLM_ABSTRACT_EXTRACTION_ENABLED is false)"
+            )
+            logger.info(
+                "AbstractEnricher | "
+                "html_enricher=enabled "
+                f"cache_size={enricher._cache_size} "
+                f"llm_extractor={llm_state}"
+            )
+    except Exception as exc:  # noqa: BLE001
+        # Never let a startup-time diagnostic crash the
+        # app -- the enricher config is informational.
+        logger.info(
+            "AbstractEnricher | config diagnostic failed: %s",
+            exc,
+        )
 
     print("BioResearch AI API starting...")
 

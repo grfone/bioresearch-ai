@@ -2389,6 +2389,35 @@ application.
     margin-left: 0.25rem;
 }
 
+/* Provenance badge -- shown when the abstract was extracted
+   by the LLM-based fallback (verbatim text pulled from the
+   publisher's HTML page by an LLM that was asked to extract
+   -- not generate -- the abstract). Violet color so it
+   doesn't get confused with paper-source-badge (which is
+   blue/green and tells you where the PAPER came from).
+   The tooltip spells out the verbatim-extraction contract
+   so researchers know the text is the publisher's own. */
+.paper-inferred-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-left: 0.5rem;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: rgba(167, 139, 250, 0.10);
+    border: 1px solid rgba(167, 139, 250, 0.40);
+    color: #c4b5fd;
+    font-size: 0.7rem;
+    font-weight: var(--font-weight-medium, 500);
+    text-transform: lowercase;
+    letter-spacing: 0.01em;
+    vertical-align: middle;
+    opacity: 0.9;
+    /* Cursor default (not a button); the title attribute
+       carries the explanation. */
+    cursor: help;
+}
+
 .paper-source-badge {
     display: inline-flex;
     align-items: center;

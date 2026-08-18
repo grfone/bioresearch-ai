@@ -335,6 +335,9 @@ describe('PaperCard', () => {
       expect(
         container.querySelector('.paper-source-badge'),
       ).not.toBeNull();
+    });
+  });
+
   describe('Scholar escape-hatch link', () => {
     it('does NOT render the Scholar link when the abstract is present', () => {
       // When the paper has a full abstract, the user doesn't
@@ -406,6 +409,62 @@ describe('PaperCard', () => {
     });
   });
 
+  describe('AI-extracted (LLM-inferred) badge', () => {
+    it('renders the badge when inferred_abstract=true', () => {
+      const inferredPaper: Paper = {
+        ...FULL_PAPER,
+        inferred_abstract: true,
+      };
+      const { container } = render(<PaperCard paper={inferredPaper} />);
+      const badge = container.querySelector('.paper-inferred-badge');
+      expect(badge).not.toBeNull();
+      expect(badge!.textContent).toMatch(/ai-extracted/i);
+    });
+
+    it('does NOT render the badge when inferred_abstract is undefined', () => {
+      // Default -- legacy papers that don't have the field.
+      const { container } = render(<PaperCard paper={FULL_PAPER} />);
+      expect(
+        container.querySelector('.paper-inferred-badge'),
+      ).toBeNull();
+    });
+
+    it('does NOT render the badge when inferred_abstract=false', () => {
+      // Explicitly false -- structured source (CrossRef / OpenAlex).
+      const structuredPaper: Paper = {
+        ...FULL_PAPER,
+        inferred_abstract: false,
+      };
+      const { container } = render(<PaperCard paper={structuredPaper} />);
+      expect(
+        container.querySelector('.paper-inferred-badge'),
+      ).toBeNull();
+    });
+
+    it('badge has a tooltip explaining the verbatim-extraction contract', () => {
+      const inferredPaper: Paper = {
+        ...FULL_PAPER,
+        inferred_abstract: true,
+      };
+      const { container } = render(<PaperCard paper={inferredPaper} />);
+      const badge = container.querySelector('.paper-inferred-badge');
+      expect(badge).not.toBeNull();
+      const title = badge!.getAttribute('title') || '';
+      // The tooltip must mention the verbatim-extraction contract so
+      // researchers know the text is the publisher's own, not invented.
+      expect(title.toLowerCase()).toContain('verbatim');
+      // And it should make clear this is NOT a generation path.
+      expect(title.toLowerCase()).toMatch(/extract/);
+    });
+
+    it('badge has aria-label for screen readers', () => {
+      const inferredPaper: Paper = {
+        ...FULL_PAPER,
+        inferred_abstract: true,
+      };
+      const { container } = render(<PaperCard paper={inferredPaper} />);
+      const badge = container.querySelector('.paper-inferred-badge');
+      expect(badge!.getAttribute('aria-label')).toBe('AI-extracted abstract');
     });
   });
 });
