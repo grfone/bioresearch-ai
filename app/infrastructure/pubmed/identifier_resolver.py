@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -253,6 +254,9 @@ class IdentifierResolver:
             )
         )
 
+    OPENALEX_DOI_API = "https://api.openalex.org/works/doi:{doi}"
+    OPENALEX_TIMEOUT = 15.0
+
     def _resolve_doi(self, doi: str) -> ResolutionResult:
         url = self.CROSSREF_API.format(doi=doi)
         try:
@@ -302,6 +306,21 @@ class IdentifierResolver:
                 )
             )
 
+        # Fallback: if CrossRef returned a paper with no
+        # abstract, try OpenAlex. Book chapters and
+        # conference proceedings often have a richer
+        # abstract there. We only override the abstract
+        # -- the rest of the record (title, authors, year)
+        # stays from CrossRef since OpenAlex occasionally
+        # has less precise metadata for non-journal types.
+        if not paper.abstract or not paper.abstract.strip():
+            openalex_abstract = self._fetch_openalex_abstract(doi)
+            if openalex_abstract:
+                # Paper is a frozen dataclass; we use
+                # ``dataclasses.replace`` to build a new
+                # instance with the OpenAlex abstract.
+                paper = replace(paper, abstract=openalex_abstract)
+
         return ResolutionResult(
             paper=ResolvedPaper(
                 identifier=doi,
@@ -309,6 +328,68 @@ class IdentifierResolver:
                 paper=paper,
             )
         )
+
+
+    # ---------------------------------------------------------------------------
+    # OpenAlex fallback (DOI only)
+    # ---------------------------------------------------------------------------
+
+    def _fetch_openalex_abstract(self, doi: str) -> str | None:
+        """Return OpenAlex's abstract for the given DOI, or
+        ``None`` if OpenAlex has no record or no abstract.
+
+        OpenAlex stores abstracts as a positional-token
+        inverted index (so they can be searched without
+        re-inflating the full text on every query). We
+        reconstruct the abstract by sorting tokens by
+        their positions. The result is a clean string
+        suitable for display in the PaperCard.
+
+        Network errors, malformed responses, and missing
+        abstracts are all handled gracefully: this method
+        returns ``None`` rather than raising so the
+        caller can fall back to "no abstract" without
+        breaking the resolution flow.
+        """
+        url = self.OPENALEX_DOI_API.format(doi=doi)
+        try:
+            with httpx.Client(timeout=self.OPENALEX_TIMEOUT) as client:
+                response = client.get(
+                    url,
+                    params={"select": "abstract_inverted_index"},
+                    headers={
+                        "User-Agent": "BioResearchAI/1.0 (mailto:hello@example.org)",
+                    },
+                )
+        except httpx.HTTPError as exc:
+            logger.info(
+                "OpenAlex fallback failed for DOI %s: %s",
+                doi, exc,
+            )
+            return None
+        if response.status_code != 200:
+            return None
+        try:
+            data = response.json()
+        except Exception:  # noqa: BLE001
+            return None
+        inverted = data.get("abstract_inverted_index")
+        if not inverted:
+            return None
+        # Reconstruct: collect (position, word) pairs, sort by
+        # position, join. OpenAlex positions are 1-indexed.
+        try:
+            positions: dict[int, str] = {}
+            for word, indices in inverted.items():
+                for idx in indices:
+                    positions[idx] = word
+            if not positions:
+                return None
+            return " ".join(
+                positions[i] for i in range(1, max(positions) + 1)
+            )
+        except Exception:  # noqa: BLE001
+            return None
 
 
 # ---------------------------------------------------------------------------

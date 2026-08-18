@@ -163,7 +163,11 @@ def test_resolve_many_mixed_pmid_and_doi() -> None:
         def __exit__(self, *args):
             return None
 
-        def get(self, url, headers=None):
+        def get(self, url, *args, **kwargs):
+            # Accept any combination of kwargs (``headers=``,
+            # ``params=``, ``timeout=``, ...) so the same
+            # fake works for both the CrossRef call and the
+            # new OpenAlex fallback.
             return FakeResponse()
 
     # Swap httpx.Client with our fake so resolve_doi doesn't hit
@@ -297,3 +301,348 @@ def test_crossref_payload_year_from_multiple_date_fields() -> None:
         },
     )
     assert paper.year == 2024
+
+
+# ---------------------------------------------------------------------------
+# OpenAlex fallback tests
+# ---------------------------------------------------------------------------
+
+
+def test_openalex_fallback_fills_abstract_when_crossref_is_empty(monkeypatch):
+    """When CrossRef returns a paper with no abstract, the
+    resolver falls back to OpenAlex. The book-chapter case
+    the user reported (10.1007/978-3-031-64636-2_17) is
+    exactly this pattern -- CrossRef has thin metadata for
+    non-journal types.
+    """
+    from app.infrastructure.pubmed.identifier_resolver import (
+        IdentifierResolver,
+    )
+    from app.infrastructure.pubmed.provider import PubMedProvider
+    from app.infrastructure.pubmed.client import PubMedClient
+    from unittest.mock import MagicMock
+
+    provider = PubMedProvider(
+        client=PubMedClient(email="test@example.com", api_key="")
+    )
+    resolver = IdentifierResolver(pubmed_provider=provider)
+
+    # CrossRef returns a paper with no abstract.
+    crossref_payload = {
+        "message": {
+            "title": ["Training Deep Learning Neural Networks"],
+            "author": [{"given": "Anna", "family": "Jensen"}],
+            "published-print": {"date-parts": [[2024]]},
+            "abstract": "",
+        }
+    }
+    # OpenAlex returns an inverted-index abstract.
+    openalex_payload = {
+        "abstract_inverted_index": {
+            "We": [1, 9],
+            "describe": [2],
+            "deep": [3],
+            "learning": [4],
+            "models": [5],
+            "for": [6],
+            "predicting": [7],
+            "CCS": [8],
+        }
+    }
+
+    def fake_get(url, *args, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "crossref" in url:
+            resp.json.return_value = crossref_payload
+        elif "openalex" in url:
+            resp.json.return_value = openalex_payload
+        else:
+            resp.status_code = 404
+        return resp
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, *args, **kwargs):
+            return fake_get(url, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.infrastructure.pubmed.identifier_resolver.httpx.Client",
+        FakeClient,
+    )
+
+    result = resolver.resolve_one("10.1007/978-3-031-64636-2_17")
+
+    assert result.failure is None
+    assert result.paper is not None
+    # The title came from CrossRef.
+    assert result.paper.paper.title == "Training Deep Learning Neural Networks"
+    # The abstract came from OpenAlex (reconstructed).
+    assert "deep" in result.paper.paper.abstract
+    assert "learning" in result.paper.paper.abstract
+
+
+def test_openalex_fallback_skipped_when_crossref_has_abstract(monkeypatch):
+    """If CrossRef already has an abstract, the resolver
+    does NOT call OpenAlex. The fallback is a no-op when
+    the primary source is good.
+    """
+    from app.infrastructure.pubmed.identifier_resolver import (
+        IdentifierResolver,
+    )
+    from app.infrastructure.pubmed.provider import PubMedProvider
+    from app.infrastructure.pubmed.client import PubMedClient
+    from unittest.mock import MagicMock
+
+    provider = PubMedProvider(
+        client=PubMedClient(email="test@example.com", api_key="")
+    )
+    resolver = IdentifierResolver(pubmed_provider=provider)
+
+    crossref_payload = {
+        "message": {
+            "title": ["A well-abstracted paper."],
+            "author": [],
+            "published-print": {"date-parts": [[2024]]},
+            "abstract": "<jats:p>This is a real abstract.</jats:p>",
+        }
+    }
+
+    crossref_calls = [0]
+    openalex_calls = [0]
+
+    def fake_get(url, *args, **kwargs):
+        resp = MagicMock()
+        if "crossref" in url:
+            crossref_calls[0] += 1
+            resp.status_code = 200
+            resp.json.return_value = crossref_payload
+        elif "openalex" in url:
+            openalex_calls[0] += 1
+            resp.status_code = 200
+            resp.json.return_value = {"abstract_inverted_index": {}}
+        else:
+            resp.status_code = 404
+        return resp
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, *args, **kwargs):
+            return fake_get(url, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.infrastructure.pubmed.identifier_resolver.httpx.Client",
+        FakeClient,
+    )
+
+    result = resolver.resolve_one("10.1234/with-abstract")
+    assert result.paper is not None
+    assert "real abstract" in result.paper.paper.abstract
+    assert crossref_calls[0] == 1
+    assert openalex_calls[0] == 0
+
+
+def test_openalex_fallback_returns_none_on_network_error(monkeypatch):
+    """If OpenAlex fails (network error, 404, malformed JSON),
+    the fallback returns None and the resolver keeps the
+    CrossRef paper (with empty abstract).
+    """
+    from app.infrastructure.pubmed.identifier_resolver import (
+        IdentifierResolver,
+    )
+    from app.infrastructure.pubmed.provider import PubMedProvider
+    from app.infrastructure.pubmed.client import PubMedClient
+    from unittest.mock import MagicMock
+
+    provider = PubMedProvider(
+        client=PubMedClient(email="test@example.com", api_key="")
+    )
+    resolver = IdentifierResolver(pubmed_provider=provider)
+
+    crossref_payload = {
+        "message": {
+            "title": ["Thin record."],
+            "author": [],
+            "abstract": "",
+        }
+    }
+
+    def fake_get(url, *args, **kwargs):
+        resp = MagicMock()
+        if "crossref" in url:
+            resp.status_code = 200
+            resp.json.return_value = crossref_payload
+        elif "openalex" in url:
+            # 503 -- OpenAlex is unreachable. The fallback
+            # swallows this; the CrossRef paper (with empty
+            # abstract) is returned.
+            resp.status_code = 503
+        else:
+            resp.status_code = 404
+        return resp
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, *args, **kwargs):
+            return fake_get(url, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.infrastructure.pubmed.identifier_resolver.httpx.Client",
+        FakeClient,
+    )
+
+    result = resolver.resolve_one("10.1234/thin")
+    assert result.failure is None
+    assert result.paper is not None
+    # Abstract stays empty -- OpenAlex fallback failed silently.
+    assert result.paper.paper.abstract == ""
+
+
+def test_openalex_fallback_handles_empty_inverted_index(monkeypatch):
+    """OpenAlex returns the record but with no abstract. The
+    resolver keeps the CrossRef paper as-is (no error).
+    """
+    from app.infrastructure.pubmed.identifier_resolver import (
+        IdentifierResolver,
+    )
+    from app.infrastructure.pubmed.provider import PubMedProvider
+    from app.infrastructure.pubmed.client import PubMedClient
+    from unittest.mock import MagicMock
+
+    provider = PubMedProvider(
+        client=PubMedClient(email="test@example.com", api_key="")
+    )
+    resolver = IdentifierResolver(pubmed_provider=provider)
+
+    crossref_payload = {
+        "message": {
+            "title": ["Thin record."],
+            "author": [],
+            "abstract": "",
+        }
+    }
+    openalex_payload = {
+        # No abstract_inverted_index at all.
+        "id": "https://openalex.org/W123",
+    }
+
+    def fake_get(url, *args, **kwargs):
+        resp = MagicMock()
+        if "crossref" in url:
+            resp.status_code = 200
+            resp.json.return_value = crossref_payload
+        elif "openalex" in url:
+            resp.status_code = 200
+            resp.json.return_value = openalex_payload
+        else:
+            resp.status_code = 404
+        return resp
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, *args, **kwargs):
+            return fake_get(url, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.infrastructure.pubmed.identifier_resolver.httpx.Client",
+        FakeClient,
+    )
+
+    result = resolver.resolve_one("10.1234/no-abstract")
+    assert result.failure is None
+    assert result.paper is not None
+    assert result.paper.paper.abstract == ""
+
+
+def test_openalex_fallback_reconstructs_inverted_index():
+    """The inverted-index reconstruction joins tokens in
+    their original order. Tested with a tiny example to
+    make the math explicit.
+    """
+    from app.infrastructure.pubmed.identifier_resolver import (
+        IdentifierResolver,
+    )
+    from app.infrastructure.pubmed.provider import PubMedProvider
+    from app.infrastructure.pubmed.client import PubMedClient
+
+    provider = PubMedProvider(
+        client=PubMedClient(email="test@example.com", api_key="")
+    )
+    resolver = IdentifierResolver(pubmed_provider=provider)
+    abstract = resolver._fetch_openalex_abstract.__wrapped__ if hasattr(
+        resolver._fetch_openalex_abstract, "__wrapped__"
+    ) else resolver._fetch_openalex_abstract
+
+    # Inject a fake response by calling the method directly
+    # with a payload via monkeypatched httpx.
+    from unittest.mock import MagicMock, patch
+
+    fake_data = {
+        "abstract_inverted_index": {
+            "Hello": [1, 5],
+            "world": [2, 7],
+            "from": [3],
+            "OpenAlex": [4, 6],
+        }
+    }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, *args, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = fake_data
+            return resp
+
+    with patch(
+        "app.infrastructure.pubmed.identifier_resolver.httpx.Client",
+        FakeClient,
+    ):
+        result = resolver._fetch_openalex_abstract("10.1234/x")
+
+    # Reconstructed: each position 1-7 is filled with the
+    # word at that position in the inverted index. Position
+    # 4 is "OpenAlex", position 5 is "Hello" (Hello's second
+    # occurrence), position 6 is "OpenAlex" (its second),
+    # position 7 is "world" (its second).
+    assert result == "Hello world from OpenAlex Hello OpenAlex world"
