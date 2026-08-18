@@ -96,6 +96,9 @@ from app.infrastructure.llm.report_mapper import (
     ReportMapper,
 )
 from app.infrastructure.pubmed.client import PubMedClient
+from app.infrastructure.pubmed.abstract_enricher import (
+    AbstractEnricher,
+)
 from app.infrastructure.pubmed.identifier_resolver import (
     IdentifierResolver,
 )
@@ -373,8 +376,16 @@ def get_identifier_resolver() -> IdentifierResolver:
             api_key=settings.pubmed.api_key,
         )
         provider = PubMedProvider(client=pubmed_client)
+        # The HTML-fallback enricher is opt-in because it
+        # adds ~1-2s latency per DOI lookup. Researchers
+        # who care about maximal abstract coverage can
+        # set ABSTRACT_ENRICHER_ENABLED=true in .env.
+        enricher = None
+        if settings.literature.abstract_enricher_enabled:
+            enricher = AbstractEnricher()
         _identifier_resolver = IdentifierResolver(
             pubmed_provider=provider,
+            abstract_enricher=enricher,
         )
     assert _identifier_resolver is not None
     return _identifier_resolver

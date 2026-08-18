@@ -68,5 +68,17 @@ class LiteratureSettings(BaseSettings):
         alias="BIORXIV_SERVER",
     )
 
+    # HTML meta-tag fallback for missing abstracts. When
+    # enabled, the IdentifierResolver attempts to recover
+    # abstracts from the publisher's landing page (Nature,
+    # PLOS, Frontiers, etc.) after CrossRef and OpenAlex
+    # both fail. Adds ~1-2s latency per DOI lookup so it's
+    # off by default; researchers who care about maximal
+    # abstract coverage can enable it.
+    abstract_enricher_enabled: bool = Field(
+        default=False,
+        alias="ABSTRACT_ENRICHER_ENABLED",
+    )
+
 
 literature_settings = LiteratureSettings()
