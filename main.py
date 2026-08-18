@@ -89,6 +89,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 
+from app.api.routes import admin
 from app.api.routes import papers
 from app.api.routes import report
 from app.api.routes import search
@@ -298,6 +299,10 @@ def create_application() -> FastAPI:
 
     application.include_router(
         workspace_actions.router,
+    )
+
+    application.include_router(
+        admin.router,
     )
 
     # --------------------------------------------------------------
