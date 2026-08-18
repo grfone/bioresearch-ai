@@ -347,6 +347,23 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   the pin only affects behavior when an operator
   explicitly enables DEBUG.
 
+* **``/admin/orchestrator-stats`` endpoint for FSM
+  state counts.** Mirrors ``/admin/enricher-stats``.
+  Returns ``{state: count, ..., total: N}`` so operators
+  can see at a glance how many workspaces are in each
+  FSM state. Useful for spotting stuck transient
+  states (SEARCHING/SUMMARIZING/COMPARING/REPORTING),
+  counting the work queue, and tracking completion
+  rate. Delegates to a new
+  ``WorkspaceOrchestrator.state_counts()`` method
+  (public observability entry point) which calls
+  ``workspace_state_counts()`` on the repository -- a
+  single ``GROUP BY`` query in SQLite. Every
+  WorkspaceState is represented (zero-filled) so
+  operators always see a complete FSM picture, not a
+  sparse dict that hides unused states. 5 new tests
+  pin the contract.
+
 ### Removed
 
 * **AddPapersPanel — "Manual" tab.** Replaced by the DOI +
