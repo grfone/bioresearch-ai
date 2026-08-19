@@ -146,3 +146,137 @@ def orchestrator_stats() -> dict:
         v for k, v in counts.items() if k != "total"
     )
     return counts
+
+
+from urllib.parse import unquote
+
+
+@router.post(
+    "/papers/refresh/{doi:path}",
+    summary="Invalidate a single cache entry and re-fetch the abstract",
+    responses={
+        200: {"description": "Cache entry was found and refreshed."},
+        404: {"description": "No cache entry existed for this DOI."},
+    },
+)
+def force_refresh_paper(doi: str) -> dict:
+    """
+    Invalidate the LRU cache entry for a DOI and re-fetch
+    its abstract from the publisher.
+
+    Useful when:
+    - The publisher updated the abstract (e.g. they fixed
+      a typo or added version 2 of the abstract).
+    - The cached value is suspicious and an operator
+      wants to verify the live fetch works.
+    - A researcher manually fixed a typo in their DOI
+      and wants to retry the lookup (cached ``None``
+      entries would otherwise block re-lookup).
+
+    Returns
+    -------
+    dict
+        ``{"doi": str, "invalidate_returned": bool,
+           "abstract_length": int | None,
+           "abstract_preview": str | None}``
+
+        ``invalidate_returned`` is True if a cache entry
+        was actually removed (the endpoint also re-fetches
+        either way). If the re-fetch succeeds, the new
+        value's length and preview are returned. If the
+        re-fetch fails (publisher unreachable, DOI
+        invalid), ``abstract_length`` and
+        ``abstract_preview`` are null.
+
+    The DOI in the URL may be percent-encoded; we unquote
+    it before passing to the cache. The path uses
+    ``{doi:path}`` so DOIs with slashes (the standard
+    ``10.PREFIX/SUFFIX`` form) are accepted without
+    percent-encoding. URL form:
+    ``/admin/papers/refresh/<doi>``.
+    """
+    doi = unquote(doi)
+
+    from app.config.container import get_identifier_resolver
+
+    resolver = get_identifier_resolver()
+    enricher = resolver._abstract_enricher
+    if enricher is None:
+        return {
+            "status": "disabled",
+            "message": (
+                "AbstractEnricher is not wired. "
+                "Set ABSTRACT_ENRICHER_ENABLED=true in .env "
+                "to enable the abstract enricher."
+            ),
+        }
+
+    was_cached = enricher.invalidate(doi)
+    # Re-fetch from scratch. fetch() puts the result back
+    # in the cache (including the None sentinel for
+    # "this DOI doesn't have an abstract").
+    result = enricher.fetch(doi)
+    if result is None:
+        return {
+            "doi": doi,
+            "invalidate_returned": was_cached,
+            "abstract_length": None,
+            "abstract_preview": None,
+        }
+    abstract_text = result.abstract
+    return {
+        "doi": doi,
+        "invalidate_returned": was_cached,
+        "abstract_length": len(abstract_text),
+        "abstract_preview": abstract_text[:120],
+    }
+
+
+@router.delete(
+    "/enricher-cache",
+    summary="Drop the entire AbstractEnricher LRU cache",
+)
+def clear_enricher_cache() -> dict:
+    """
+    Drop every cached abstract-enrichment entry.
+
+    Useful when:
+    - An operator wants to fully reset cache state
+      (e.g. after a policy change). Equivalent to
+      flushall in a cache like Redis.
+    - Cache hit rate is suspiciously low; clearing and
+      letting it refill is faster than waiting for the
+      LRU to expire.
+
+    Returns
+    -------
+    dict
+        ``{"cleared": bool, "stats_after": dict}``.
+        ``cleared`` is True if the enricher was wired
+        and the cache was cleared. ``stats_after`` is
+        the result of ``cache_stats()`` after clearing
+        -- should show ``hits=0, misses=0, size=0,
+        capacity=<unchanged>``.
+
+    If the enricher is not wired (e.g.
+    ``ABSTRACT_ENRICHER_ENABLED=false``), returns 200
+    with ``{"status": "disabled", ...}``.
+    """
+    from app.config.container import get_identifier_resolver
+
+    resolver = get_identifier_resolver()
+    enricher = resolver._abstract_enricher
+    if enricher is None:
+        return {
+            "status": "disabled",
+            "message": (
+                "AbstractEnricher is not wired. "
+                "Set ABSTRACT_ENRICHER_ENABLED=true in .env "
+                "to enable the abstract enricher."
+            ),
+        }
+    enricher.clear_cache()
+    return {
+        "cleared": True,
+        "stats_after": enricher.cache_stats(),
+    }
