@@ -22,6 +22,7 @@ An AI-powered research assistant for biomedical literature discovery, evidence s
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
 ![Architecture](https://img.shields.io/badge/Clean%20Architecture-DDD-orange)
 ![License](https://img.shields.io/badge/License-MIT-success)
+[![CI](https://github.com/grfone/bioresearch-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/grfone/bioresearch-ai/actions/workflows/ci.yml)
 
 </p>
 

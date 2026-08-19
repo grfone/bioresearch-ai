@@ -12,6 +12,23 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ### Added
 
+* **Shared abstract-enricher cache for multi-worker deployments.**
+  Introduces a small `CacheProtocol` with two implementations:
+  `InMemoryLRUCache` (the historical default, one cache per
+  worker) and `RedisCache` (shared across workers via Redis).
+  Set `CACHE_BACKEND=redis` + `REDIS_URL` to enable. Fixes the
+  per-worker cache fragmentation documented in
+  `docs/multi-worker-cache-investigation.md`: in `--workers 4`
+  mode, the same DOI fetched 7 times used to make 3 separate
+  MiniMax/LLM API calls (one per worker that hadn't cached
+  it); with `CACHE_BACKEND=redis`, the same scenario makes
+  exactly 1 API call. The `/admin/enricher-stats` and admin
+  `/papers/refresh` and `/enricher-cache` endpoints also
+  become system-wide with the Redis backend. Tests: 37 new
+  tests via a parametrized `TestCacheProtocolContract` class
+  that runs the same battery against both impls (using
+  `fakeredis` for the Redis variant).
+
 * **Two-tab paper entry surface.** The ``AddPapersPanel`` now
   exposes only DOI bulk-paste and PDF drag-and-drop. The
   previous "Manual" tab was removed — researchers don't
