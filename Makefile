@@ -1,4 +1,4 @@
-.PHONY: install backend frontend run test test-frontend test-frontend-unit test-frontend-build build-frontend
+.PHONY: install backend frontend run test test-frontend test-frontend-unit test-frontend-build build-frontend verify verify-no-color
 
 install:
 	pip install -r requirements.txt
@@ -50,3 +50,28 @@ test-frontend-build:
 # Build the production frontend bundle into `frontend/dist/`.
 build-frontend:
 	cd frontend && npm run build
+
+
+# End-to-end smoke test -- builds the Docker image, boots
+# the container, exercises every /admin/* endpoint plus a
+# functional workspace + DOI fetch, then tears down.
+#
+# This is the "test the whole bootstrap and make sure it
+# runs from the beginning to the end without hiccups"
+# target -- the scriptable equivalent of the manual
+# live-verify pattern I've been running session by session.
+#
+# Requires: bash, curl, jq, docker, python3 -- all checked
+# at script start with helpful install instructions if
+# anything is missing.
+#
+# Set NO_COLOR=1 to disable ANSI color output (useful for
+# CI logs that don't interpret escape codes).
+verify:
+	./scripts/verify.sh
+
+
+# Same as ``verify`` but suppresses the ANSI color output
+# for clean log capture in CI or shell recording.
+verify-no-color:
+	NO_COLOR=1 ./scripts/verify.sh
