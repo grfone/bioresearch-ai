@@ -364,6 +364,39 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
   sparse dict that hides unused states. 5 new tests
   pin the contract.
 
+* **``/admin/papers/refresh/{doi:path}`` endpoint for
+  force-refreshing a single DOI's abstract.** Invalidates
+  the LRU cache entry for the DOI and re-fetches from
+  the publisher. Useful when the publisher updated the
+  abstract, a cached value is suspicious, or a
+  researcher fixed a typo in their DOI. Returns
+  ``{"doi", "invalidate_returned", "abstract_length",
+  "abstract_preview"}``. The route uses ``{doi:path}``
+  so canonical DOIs like ``10.1038/nature14539`` (which
+  contain a slash) are accepted without percent-encoding.
+  Percent-encoded DOIs are also accepted (``10.1038%2Fnature14539``).
+  Backed by a new
+  ``AbstractEnricher.invalidate(doi) -> bool`` method
+  that drops a single entry without resetting hit/miss
+  counters or touching the rest of the cache.
+
+* **``DELETE /admin/enricher-cache`` endpoint for full
+  cache purge.** Drops every cached abstract-enrichment
+  entry. Returns ``{"cleared": True, "stats_after": ...}``
+  so operators can verify the purge took effect. Useful
+  when an operator wants to reset cache state after a
+  policy change; equivalent to flushall in a cache like
+  Redis. Capacity is NOT reset -- the LRU still has the
+  same maxSize.
+
+Both new endpoints return a graceful disabled payload
+(``{"status": "disabled", "message": "..."}``) when
+``ABSTRACT_ENRICHER_ENABLED=false``, so monitoring
+dashboards don't break when the enricher is off.
+
+6 new tests (4 force-refresh + 2 clear-cache) pin
+the contract. 389/389 backend tests pass.
+
 ### Removed
 
 * **AddPapersPanel — "Manual" tab.** Replaced by the DOI +
