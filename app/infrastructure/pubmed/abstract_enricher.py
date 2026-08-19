@@ -81,6 +81,19 @@ from app.infrastructure.pubmed.llm_extractor import (
     ExtractionResult,
 )
 
+# The cache backend abstraction lives in
+# ``app.infrastructure.cache``. We default to the in-memory
+# implementation (preserves the historical behavior) but the
+# container module can inject ``RedisCache`` instead when
+# ``CACHE_BACKEND=redis``. See
+# ``docs/multi-worker-cache-investigation.md`` for the rationale.
+from app.infrastructure.cache import (
+    HIT,
+    HIT_NONE,
+    CacheProtocol,
+    InMemoryLRUCache,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -151,6 +164,7 @@ class AbstractEnricher:
         timeout: float | None = None,
         cache_size: int = DEFAULT_CACHE_SIZE,
         llm_extractor: "LLMExtractor | None" = None,
+        cache: "CacheProtocol | None" = None,
     ) -> None:
         self._owns_client = client is None
         self._client = client or httpx.Client(
@@ -165,20 +179,28 @@ class AbstractEnricher:
                 "Accept-Language": "en-US,en;q=0.5",
             },
         )
-        # LRU cache: most-recently-fetched DOI is at the
-        # back. When the cache is full, the least-recently
-        # used entry is evicted. ``OrderedDict.move_to_end``
-        # is the standard LRU pattern.
+        # Cache backend. Default is the in-memory LRU (the
+        # historical behavior). The container module injects
+        # a ``RedisCache`` instance when ``CACHE_BACKEND=redis``,
+        # which gives all uvicorn workers a shared cache
+        # (multi-worker fix -- see
+        # ``docs/multi-worker-cache-investigation.md``).
         #
-        # The cache stores ``ExtractionResult | None`` so
-        # both the abstract text AND the provenance flag
-        # (``inferred``) survive the cache. ``None`` means
-        # "this DOI genuinely has no abstract" -- we don't
-        # re-fetch the same DOI in this session.
-        self._cache: OrderedDict[str, ExtractionResult | None] = OrderedDict()
-        self._cache_size = max(0, int(cache_size))
-        self._cache_hits = 0
-        self._cache_misses = 0
+        # If both ``cache`` and ``cache_size`` are provided,
+        # ``cache`` wins (the size is then irrelevant since
+        # the impl's capacity was already configured at
+        # construction time). The ``cache_size`` parameter is
+        # preserved for back-compat with code that built the
+        # enricher without thinking about cache backends.
+        if cache is None:
+            cache = InMemoryLRUCache(capacity=cache_size)
+        self._cache: "CacheProtocol" = cache
+        # Keep ``_cache_size`` as a passthrough for the
+        # ``capacity`` field in ``cache_stats()``. With the
+        # in-memory backend, this matches the actual capacity;
+        # with Redis, the value comes from the
+        # ``RedisCache.capacity`` (set at construction time).
+        self._cache_size = cache.capacity
         # Optional LLM-based fallback. ``None`` means the
         # deterministic path is the only fallback. The
         # LLM path only fires when the deterministic path
@@ -232,18 +254,35 @@ class AbstractEnricher:
         # the DOI with a prefix and without would cause
         # two network requests.
         cache_key = self._normalize_doi(doi)
-        if self._cache_size > 0 and cache_key in self._cache:
-            # Cache hit. ``move_to_end`` marks this entry
-            # as most-recently-used so it doesn't get
-            # evicted on the next miss.
-            self._cache.move_to_end(cache_key)
-            self._cache_hits += 1
-            logger.debug("AbstractEnricher cache HIT for %s", doi)
-            cached = self._cache[cache_key]
-            return cached  # ExtractionResult | None
-        if self._cache_size > 0:
-            self._cache_misses += 1
-            logger.debug("AbstractEnricher cache MISS for %s", doi)
+        # ``self._cache.get`` returns a 3-valued status:
+        #   HIT      -- key present, value is an ExtractionResult
+        #   HIT_NONE -- key present, value is None (negative cache)
+        #   MISS     -- key not present
+        # The cache backend handles the LRU-refresh on hit
+        # (moves-to-end) and the per-impl counter increments.
+        # The enricher doesn't need to track hits/misses
+        # itself -- they're in ``self._cache.stats()``.
+        status, cached = self._cache.get(cache_key)
+        if status in (HIT, HIT_NONE):
+            # Use the same log messages the historical
+            # code used so log scrapers and the
+            # ``make verify`` smoke battery keep working.
+            if status == HIT:
+                logger.debug(
+                    "AbstractEnricher cache HIT for %s", doi
+                )
+            else:
+                # HIT_NONE -- the cache has a "no abstract"
+                # entry for this DOI. Log it the same as a
+                # HIT so operators can see we're honoring
+                # the negative cache. A separate log level
+                # (e.g. ``DEBUG-NONE``) would be over-engineered.
+                logger.debug(
+                    "AbstractEnricher cache HIT for %s", doi
+                )
+            return cached
+        # status == MISS -- fall through to the HTTP fetch.
+        logger.debug("AbstractEnricher cache MISS for %s", doi)
 
         url = self._build_url(doi)
         # ``raw_html`` is set ONLY when the HTTP response
@@ -314,20 +353,26 @@ class AbstractEnricher:
                 )
 
         # Store the result (even ``None``) so we don't
-        # re-fetch the same DOI in this session. Evict
-        # the oldest entry if the cache is full.
+        # re-fetch the same DOI in this session. The cache
+        # backend is responsible for LRU eviction -- the
+        # in-memory impl evicts via OrderedDict.popitem; the
+        # Redis impl evicts via ZRANGE+DEL+ZREM. Either way,
+        # callers don't see evictions.
+        #
+        # The ``result`` here is an ``ExtractionResult | None``.
+        # The protocol's ``set`` accepts ``object | None`` and
+        # stores it unchanged -- for the in-memory impl,
+        # that's the object; for the Redis impl, we round-trip
+        # through JSON. The contract on the way back (via
+        # ``get``) is "object with .abstract and .inferred
+        # attributes" -- which ExtractionResult satisfies
+        # directly, and the Redis impl's dict shape (a
+        # JSON-serialized ExtractionResult) also satisfies
+        # because both have those attributes. The cast below
+        # tells the type checker this is safe.
         if self._cache_size > 0:
-            if cache_key in self._cache:
-                # Shouldn't happen (the cache check at the
-                # top would have returned), but defensively
-                # move it to the end if the value changed.
-                self._cache.move_to_end(cache_key)
-                self._cache[cache_key] = result
-            else:
-                self._cache[cache_key] = result
-                if len(self._cache) > self._cache_size:
-                    self._cache.popitem(last=False)
-        return result
+            self._cache.set(cache_key, result)
+        return result  # type: ignore[return-value]
 
     def cache_stats(self) -> dict[str, int]:
         """Return cache statistics for diagnostics.
@@ -335,13 +380,16 @@ class AbstractEnricher:
         Useful for the bootstrap diagnostics log and for
         tests. Returns a dict with ``hits``, ``misses``,
         ``size``, and ``capacity`` keys.
+
+        Note on multi-worker mode: when ``CACHE_BACKEND=memory``
+        and the container runs with ``uvicorn --workers N``,
+        these counters are PER WORKER (each process has its
+        own in-memory LRU). When ``CACHE_BACKEND=redis``, the
+        counters are system-wide (atomic INCR on Redis), so
+        operators see the real totals regardless of which
+        worker handles the admin call.
         """
-        return {
-            "hits": self._cache_hits,
-            "misses": self._cache_misses,
-            "size": len(self._cache),
-            "capacity": self._cache_size,
-        }
+        return self._cache.stats().as_dict()
 
     def clear_cache(self) -> None:
         """Drop all cached entries.
@@ -349,10 +397,16 @@ class AbstractEnricher:
         Useful when a researcher wants to force a refresh
         (e.g. they fixed a typo in their DOI) or for
         tests that need a clean slate between cases.
+
+        Note on multi-worker mode: when ``CACHE_BACKEND=redis``,
+        this is a system-wide operation (DEL on every key in
+        the Redis namespace). When ``CACHE_BACKEND=memory``,
+        this only clears the cache of the worker that handles
+        the request -- operators with multi-worker deployments
+        should set ``CACHE_BACKEND=redis`` if they need
+        system-wide clears.
         """
         self._cache.clear()
-        self._cache_hits = 0
-        self._cache_misses = 0
 
     def invalidate(self, doi: str) -> bool:
         """
@@ -376,12 +430,18 @@ class AbstractEnricher:
         Does NOT touch hit/miss counters -- those are
         process-wide aggregate counts and should not be
         reset by single-entry invalidation.
+
+        Note on multi-worker mode: when ``CACHE_BACKEND=redis``,
+        this is a system-wide invalidation (DEL on the entry
+        in Redis -- other workers see the miss on their next
+        read). When ``CACHE_BACKEND=memory``, this only
+        invalidates the cache of the worker that handles the
+        request -- 3 other workers' caches stay intact.
+        Set ``CACHE_BACKEND=redis`` to get system-wide
+        invalidation.
         """
         cache_key = self._normalize_doi(doi)
-        if cache_key in self._cache:
-            del self._cache[cache_key]
-            return True
-        return False
+        return self._cache.delete(cache_key)
 
     @staticmethod
     def _build_url(doi: str) -> str:
