@@ -43,3 +43,9 @@ python-multipart>=0.0.9,<1.0
 
 # --- OpenAI Python client (used by every OpenAI-compat LLM provider) ---
 openai>=1.40,<2.0
+
+# --- Redis client (only required when CACHE_BACKEND=redis).
+# The redis-py package's pure-Python parser is sufficient for
+# our throughput; we don't pull in hiredis because the C
+# extension adds build complexity for a marginal speedup. ---
+redis>=5.0,<6.0
