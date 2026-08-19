@@ -181,6 +181,7 @@ class TestNoisyThirdPartyLoggers:
             "httpcore.connection",
             "urllib3",
             "asyncio",
+            "sqlalchemy.engine",
         ):
             logger = logging.getLogger(noisy_name)
             assert logger.level >= logging.WARNING, (

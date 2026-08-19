@@ -102,6 +102,14 @@ def configure_logging() -> None:
         "httpcore.connection",
         "urllib3",    # requests dependency (if used)
         "asyncio",    # Python stdlib async runtime
+        "sqlalchemy.engine",  # SQL trace (BEGIN, COMMIT,
+                              # SELECT, ...) -- per-query
+                              # detail. Even if the app
+                              # doesn't use SQLAlchemy
+                              # today, the package is a
+                              # transitive dep and could
+                              # start emitting if a future
+                              # change adds ORM usage.
     ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
