@@ -397,6 +397,40 @@ dashboards don't break when the enricher is off.
 6 new tests (4 force-refresh + 2 clear-cache) pin
 the contract. 389/389 backend tests pass.
 
+* **``make verify`` target and ``scripts/verify.sh``
+  end-to-end smoke test.** The user has repeatedly asked
+  "test the whole bootstrap and make sure it runs from
+  the beginning to the end without hiccups"; this
+  delivers it as a single command. ``make verify``
+  (or ``make verify-no-color`` for clean CI logs) runs
+  ``scripts/verify.sh`` which:
+
+  1. Cleans up any leftover container / image
+  2. Writes a stub ``.env`` (no real LLM creds needed)
+  3. Runs ``python3 bootstrap.py --skip-gui --no-browser``
+     to build + start the container
+  4. Waits for ``/health`` to return ``healthy``
+  5. Hits every ``/admin/*`` endpoint and verifies
+     the response shape
+  6. Creates a workspace, fetches a real Nature DOI,
+     and verifies the deterministic meta-tag path
+     returns the expected abstract with
+     ``inferred_abstract=false``
+  7. Tears down the container and removes the image
+
+  Exit codes: 0 on success, 1 on failure, 2 if a
+  required tool is missing. Every step prints
+  progress, so a reviewer can see exactly where things
+  went wrong without re-running with extra flags.
+  ``trap teardown EXIT`` ensures the container is
+  removed even if a check fails midway. ``NO_COLOR=1``
+  disables ANSI color output for CI logs.
+
+  This is the scriptable equivalent of the live-verify
+  pattern I've been running session by session. It
+  completes in ~30 seconds when Docker layers are
+  cached, and ~3 minutes for a cold cache.
+
 ### Removed
 
 * **AddPapersPanel — "Manual" tab.** Replaced by the DOI +

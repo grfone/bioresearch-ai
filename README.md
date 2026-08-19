@@ -234,6 +234,42 @@ troubleshooting, and the daily workflow.
 
 ---
 
+## Quick smoke test
+
+Once you've got the app running (either via `python3 bootstrap.py`
+or `docker compose up`), verify it actually works end-to-end:
+
+```bash
+make verify
+```
+
+This runs `scripts/verify.sh`, which:
+
+1. Cleans up any leftover container / image
+2. Writes a stub `.env` (no real LLM creds needed for the
+   smoke tests)
+3. Runs `python3 bootstrap.py --skip-gui --no-browser` to
+   build + start the container
+4. Waits for `/health` to return `healthy`
+5. Hits every `/admin/*` endpoint and verifies the
+   response shape (`enricher-stats`, `orchestrator-stats`,
+   `papers/refresh/<doi>`, `enricher-cache`)
+6. Creates a workspace, fetches a real Nature DOI, and
+   verifies the deterministic meta-tag path returns the
+   expected ~807-char abstract with `inferred_abstract=false`
+7. Tears down the container and removes the image
+
+The script exits 0 on success, 1 on failure, 2 if a
+required tool (curl, jq, docker, python3) is missing.
+Every step prints progress, so a reviewer can see
+exactly where things went wrong without re-running
+with extra flags.
+
+Set `NO_COLOR=1` to disable ANSI color output (useful
+for CI logs that don't interpret escape codes).
+
+---
+
 ## Manual installation (advanced)
 
 If you prefer not to use Docker, the legacy workflow is:
