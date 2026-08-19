@@ -29,8 +29,8 @@ Configuration
 -------------
 Environment variables (loaded from .env):
 
-API_KEY
-    Required: Minimax API authentication token.
+MINIMAX_API_KEY
+    Required: MiniMax API authentication token.
 
 MINIMAX_MODEL
     Optional: Model name. Defaults to MiniMax-Text-01
@@ -76,8 +76,8 @@ class MinimaxProvider(LLMProvider):
         Parameters
         ----------
         api_key : str | None
-            Minimax API key. If not provided, it will be loaded from
-            the API_KEY environment variable (including .env file).
+            MiniMax API key. If not provided, it will be loaded from
+            the MINIMAX_API_KEY environment variable (including .env file).
         model : str | None
             Model identifier. Falls back to MINIMAX_MODEL env var or default.
         timeout : float
@@ -97,11 +97,11 @@ class MinimaxProvider(LLMProvider):
         # Load the specific .env file
         load_dotenv(dotenv_path=env_path)
 
-        self._api_key = api_key or os.getenv("API_KEY")
+        self._api_key = api_key or os.getenv("MINIMAX_API_KEY")
 
         if not self._api_key:
             raise ValueError(
-                f"API_KEY environment variable is missing. "
+                f"MINIMAX_API_KEY environment variable is missing. "
                 f"Tried to load .env from: {env_path}. "
                 "Please check your .env file."
             )
