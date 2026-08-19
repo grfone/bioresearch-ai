@@ -354,6 +354,35 @@ class AbstractEnricher:
         self._cache_hits = 0
         self._cache_misses = 0
 
+    def invalidate(self, doi: str) -> bool:
+        """
+        Remove a single entry from the LRU cache.
+
+        Returns True if an entry was removed, False if no
+        entry existed for that DOI. Identifiers are
+        normalized the same way as the cache key so
+        ``"10.1038/x"``, ``"https://doi.org/10.1038/x"``,
+        and ``"DOI.ORG/10.1038/x"`` all map to the same
+        cached entry.
+
+        Useful when:
+        - A researcher fixes a typo in their DOI; cached
+          None entries prevent re-lookup.
+        - The publisher's metadata has changed (e.g.
+          abstract added) and the cached version is stale.
+        - An operator wants to debug a specific cached
+          value without nuking the whole cache.
+
+        Does NOT touch hit/miss counters -- those are
+        process-wide aggregate counts and should not be
+        reset by single-entry invalidation.
+        """
+        cache_key = self._normalize_doi(doi)
+        if cache_key in self._cache:
+            del self._cache[cache_key]
+            return True
+        return False
+
     @staticmethod
     def _build_url(doi: str) -> str:
         """Normalize the DOI to the canonical URL form.
