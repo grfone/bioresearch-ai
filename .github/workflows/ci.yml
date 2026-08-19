@@ -16,10 +16,13 @@ name: CI
 #      React components, hooks, and TypeScript models.
 #
 #   3. docker-build: builds the production :minimal
-#      Docker image and verifies the container starts
-#      and responds healthy. Catches Dockerfile
-#      regressions (broken COPY paths, missing deps,
-#      port conflicts).
+#      Docker image, starts a container from it, and
+#      runs scripts/verify-ci.sh against it. The verify
+#      script hits every /admin/* endpoint, exercises a
+#      real workspace + DOI fetch, and verifies the
+#      force-refresh + clear-cache admin endpoints work.
+#      Catches Dockerfile regressions AND admin endpoint
+#      regressions that unit tests can't.
 #
 # Total wall-clock target: under 6 minutes on a fresh
 # runner. The docker-build job is the slowest at ~3 min
@@ -175,12 +178,34 @@ jobs:
             -t bioresearch-ai:ci-minimal \
             .
 
-      - name: Smoke-test container boot
-        # Bring up the container, hit /health, and tear
-        # down. This catches regressions where the
-        # Dockerfile builds cleanly but the container
-        # crashes on startup (missing env vars,
-        # import errors, port conflicts).
+      - name: Install verify.sh prerequisites
+        # verify-ci.sh needs bash, curl, jq. bash + curl
+        # come with the GitHub-hosted runner image; jq
+        # does not.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq
+
+      - name: Smoke-test container boot + admin battery
+        # Bring up the container, then run scripts/verify-ci.sh
+        # against it. verify-ci.sh hits every /admin/*
+        # endpoint plus exercises a real workspace +
+        # DOI fetch + force-refresh + cache clear, and
+        # exits non-zero on any failure.
+        #
+        # This catches regressions that the simple
+        # ``curl /health`` check would miss: broken
+        # admin endpoints, schema changes in the FSM
+        # counts endpoint, force-refresh endpoint bugs,
+        # etc.
+        #
+        # The verify-ci.sh container check is opt-in via
+        # VERIFY_CI=1 -- if a future change makes the
+        # admin endpoints depend on something the smoke
+        # container can't provide (e.g. real LLM creds),
+        # setting VERIFY_CI=0 in the workflow disables
+        # just the smoke step without removing the rest
+        # of the job.
+        env:
+          VERIFY_CI: "1"
         run: |
           docker run -d \
             --name bioresearch-ai-ci-smoke \
@@ -191,7 +216,7 @@ jobs:
             -e OPENAI_BASE_URL=http://localhost:9 \
             -e PUBMED_EMAIL=ci@example.com \
             -e "DATABASE_URL=sqlite:////tmp/ci-smoke.db" \
-            -e ABSTRACT_ENRICHER_ENABLED=false \
+            -e ABSTRACT_ENRICHER_ENABLED=true \
             -e LLM_ABSTRACT_EXTRACTION_ENABLED=false \
             -e LOG_LEVEL=WARNING \
             bioresearch-ai:ci-minimal
@@ -209,6 +234,12 @@ jobs:
               exit 1
             fi
           done
+          # Now run the smoke battery. Set BACKEND_PORT=8001
+          # so verify-ci.sh hits the smoke container
+          # rather than localhost:8000.
+          if [ "${VERIFY_CI}" = "1" ]; then
+            BACKEND_PORT=8001 NO_COLOR=1 ./scripts/verify-ci.sh
+          fi
 
       - name: Tear down smoke-test container
         if: always()
