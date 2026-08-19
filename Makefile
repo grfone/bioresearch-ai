@@ -1,4 +1,4 @@
-.PHONY: install backend frontend run test test-frontend test-frontend-unit test-frontend-build build-frontend verify verify-no-color
+.PHONY: install backend frontend run test test-frontend test-frontend-unit test-frontend-build build-frontend verify verify-no-color verify-ci verify-ci-no-color
 
 install:
 	pip install -r requirements.txt
@@ -75,3 +75,26 @@ verify:
 # for clean log capture in CI or shell recording.
 verify-no-color:
 	NO_COLOR=1 ./scripts/verify.sh
+
+
+# Same as ``verify`` but assumes the container is already
+# running. Does NOT build, start, or tear down -- just hits
+# /health + runs the admin endpoint smoke tests.
+#
+# Designed for CI workflows where another step has already
+# started the container, and for cheap local re-runs after
+# ``make verify`` has already done the bootstrap. Useful
+# when you've made a small code change and want to
+# re-validate the admin endpoints without rebuilding
+# the whole image.
+#
+# Same shared library as ``verify`` -- both scripts run
+# the same checks against the same admin endpoints.
+verify-ci:
+	./scripts/verify-ci.sh
+
+
+# Same as ``verify-ci`` but suppresses ANSI color output
+# for clean log capture.
+verify-ci-no-color:
+	NO_COLOR=1 ./scripts/verify-ci.sh
