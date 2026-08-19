@@ -114,6 +114,7 @@ from app.infrastructure.literature.europe_pmc_client import (
 from app.infrastructure.literature.multi_source import (
     MultiSourceSearcher,
 )
+from app.infrastructure.cache import make_cache
 from app.infrastructure.literature.openalex_client import (
     OpenAlexSearcher,
 )
@@ -395,7 +396,32 @@ def get_identifier_resolver() -> IdentifierResolver:
                     LLMProviderEnum(settings.llm.provider)
                 )
                 llm_extractor = LLMExtractor(llm_provider=llm_provider)
-            enricher = AbstractEnricher(llm_extractor=llm_extractor)
+            # Construct the cache backend. ``CACHE_BACKEND``
+            # defaults to ``memory`` (in-process LRU, one
+            # cache per worker -- the historical behavior).
+            # Set ``CACHE_BACKEND=redis`` to share a single
+            # cache across all uvicorn workers via Redis.
+            # See ``docs/multi-worker-cache-investigation.md``
+            # for the multi-worker cost analysis.
+            #
+            # On a misconfigured Redis (e.g. wrong host,
+            # unreachable server), ``make_cache`` succeeds
+            # at construction but the FIRST ``get`` call
+            # raises ``redis.exceptions.ConnectionError``.
+            # That's the right behavior -- silent fallback
+            # to the in-memory impl would re-introduce the
+            # fragmentation bug. Operators see the error in
+            # the logs and fix the Redis config.
+            cache = make_cache(
+                settings.literature.cache_backend,
+                capacity=settings.literature.cache_size,
+                redis_url=settings.literature.redis_url,
+                redis_key_prefix=settings.literature.redis_key_prefix,
+            )
+            enricher = AbstractEnricher(
+                llm_extractor=llm_extractor,
+                cache=cache,
+            )
         _identifier_resolver = IdentifierResolver(
             pubmed_provider=provider,
             abstract_enricher=enricher,

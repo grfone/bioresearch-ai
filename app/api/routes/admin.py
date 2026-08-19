@@ -53,8 +53,6 @@ def enricher_stats() -> dict:
     for the AbstractEnricher LRU cache.
 
     Useful for:
-    - Confirming the singleton pattern is holding across
-      uvicorn worker processes (one process = one cache).
     - Verifying the cache hit rate in production.
     - Debugging "why is the second DOI lookup still slow?"
       -- if hits is 0 after many requests, the cache isn't
@@ -69,6 +67,24 @@ def enricher_stats() -> dict:
         ``{"status": "disabled"}`` if
         ``ABSTRACT_ENRICHER_ENABLED=false`` in .env (the
         enricher isn't constructed at all).
+
+    Multi-worker behavior
+    --------------------
+    The cache backend is selected at startup by the
+    ``CACHE_BACKEND`` env var. With ``CACHE_BACKEND=memory``
+    (the default), each uvicorn worker has its own in-process
+    LRU, so the counters returned here are PER WORKER -- the
+    worker that handles this admin call may show different
+    numbers than other workers. This is the historical
+    behavior and is fine for single-worker deployments.
+
+    With ``CACHE_BACKEND=redis``, all workers share a single
+    cache backed by a Redis instance. The counters are
+    system-wide (atomic INCR on Redis), so this endpoint
+    reports the real totals regardless of which worker
+    handles the call. See
+    ``docs/multi-worker-cache-investigation.md`` for the full
+    cost analysis that motivates this dual-backend design.
 
     The endpoint never raises -- the singleton is
     optional, and a missing enricher is a valid
@@ -173,6 +189,16 @@ def force_refresh_paper(doi: str) -> dict:
       and wants to retry the lookup (cached ``None``
       entries would otherwise block re-lookup).
 
+    Multi-worker behavior
+    --------------------
+    With ``CACHE_BACKEND=memory`` (the default), this only
+    invalidates the cache of the worker that handles the
+    request. The other workers' caches for this DOI are
+    untouched, so a follow-up request that lands on a
+    different worker may return the stale value. Set
+    ``CACHE_BACKEND=redis`` to get system-wide invalidation
+    -- every worker sees the miss on its next read.
+
     Returns
     -------
     dict
@@ -247,6 +273,17 @@ def clear_enricher_cache() -> dict:
     - Cache hit rate is suspiciously low; clearing and
       letting it refill is faster than waiting for the
       LRU to expire.
+
+    Multi-worker behavior
+    --------------------
+    With ``CACHE_BACKEND=memory`` (the default), this only
+    clears the cache of the worker that handles the request.
+    Set ``CACHE_BACKEND=redis`` to get a system-wide clear
+    (DEL on every key in the Redis namespace). With
+    multi-worker deployments, the ``memory`` mode can be
+    surprising -- operators expect ``flushall`` to mean
+    flush all, but with per-worker caches it really means
+    "flush this one worker".
 
     Returns
     -------

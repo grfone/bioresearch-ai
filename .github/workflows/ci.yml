@@ -93,6 +93,12 @@ jobs:
           # Plus the test-only deps that aren't in
           # minimal-requirements.txt.
           pip install pytest pytest-asyncio
+          # fakeredis>=2.20: in-process Redis emulator
+          # used by tests/unit/test_cache_protocol.py to
+          # exercise the RedisCache implementation without
+          # needing a running Redis server. Lower bound
+          # only -- the fakeredis 2.x API is stable.
+          pip install 'fakeredis>=2.20'
 
       - name: Run pytest
         env:

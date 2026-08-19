@@ -91,5 +91,66 @@ class LiteratureSettings(BaseSettings):
         alias="LLM_ABSTRACT_EXTRACTION_ENABLED",
     )
 
+    # ---- Abstract-enricher cache backend ----
+    #
+    # The cache lives between the deterministic regex path
+    # and the LLM fallback path; it stores the resolved
+    # abstract (or None for "this DOI has no abstract")
+    # keyed by the normalized DOI. Two backends are
+    # supported:
+    #
+    #   - ``memory`` (default): in-process LRU. Each uvicorn
+    #     worker has its own cache. Fine for single-worker
+    #     deployments and tests.
+    #
+    #   - ``redis``: shared LRU backed by a Redis instance.
+    #     All workers in the cluster see the same cache.
+    #     Required for multi-worker deployments where you
+    #     don't want the same DOI to be re-fetched (and
+    #     re-paid for in LLM API costs) on each worker.
+    #     See ``docs/multi-worker-cache-investigation.md``.
+    #
+    # On a misconfigured Redis (wrong host, unreachable
+    # server), the first ``get`` call raises
+    # ``redis.exceptions.ConnectionError``. This is the
+    # right behavior -- silent fallback to the in-memory
+    # impl would re-introduce the fragmentation bug. The
+    # error surfaces in the API response and the logs;
+    # operators fix the Redis config.
+    cache_backend: str = Field(
+        default="memory",
+        alias="CACHE_BACKEND",
+    )
+    # Maximum number of entries the cache will hold. ``0``
+    # disables the cache entirely (every lookup is a miss
+    # and no INCR/INCRBY happens). With the in-memory
+    # backend, this caps the OrderedDict size; with the
+    # Redis backend, the sorted set is trimmed to this
+    # size by evicting the LRU.
+    cache_size: int = Field(
+        default=256,
+        alias="CACHE_SIZE",
+    )
+    # Only used when ``CACHE_BACKEND=redis``. Format:
+    # ``redis://host:port/db``. If empty when
+    # ``CACHE_BACKEND=redis``, ``make_cache`` raises
+    # ``ValueError`` at startup.
+    redis_url: str = Field(
+        default="",
+        alias="REDIS_URL",
+    )
+    # Only used when ``CACHE_BACKEND=redis``. The key
+    # namespace. All keys created by the cache are prefixed
+    # with this string. If you change this prefix, the
+    # existing cache (under the old prefix) becomes
+    # invisible -- not deleted, just orphaned. Pick a
+    # prefix specific to the bioresearch-ai app so it
+    # doesn't collide with other apps sharing the same
+    # Redis instance.
+    redis_key_prefix: str = Field(
+        default="bioresearch:abstract:",
+        alias="REDIS_KEY_PREFIX",
+    )
+
 
 literature_settings = LiteratureSettings()
