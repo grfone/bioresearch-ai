@@ -226,3 +226,60 @@ which steps ran.
   from `PAPERS_RETRIEVED` returns HTTP 200 with state
   `REPORTED`, with `state_history` showing the
   intermediate summarise transitions.
+
+---
+
+## Follow-up (2026-08-20): frontend search flows
+
+ADR-008 only lifted the backend FSM gate. A separate bug
+surfaced after deployment: even with the gate open, the
+Generate Report button stayed greyed out for users who
+arrived at `/workspace/{id}` with 20 papers in the
+Literature list.
+
+### Root cause
+
+The frontend's three search flows — `Home.handleSubmit`,
+`LiteratureSearch.handleAddSelected`, and
+`useWorkspace.searchAndAddPapers` — were routing through
+the legacy `POST /search` endpoint. That endpoint returns
+hits but does NOT mutate the workspace FSM. Papers ended
+up in local Zustand state via `addPapersToCurrent`, but
+the workspace FSM state stayed at `CREATED`, so
+`allowed_actions` did not contain `report`. The
+Generate Report button correctly reflected the local FSM
+and stayed greyed out.
+
+Worse: even if the user clicked through and the button
+were enabled, the server's view of the workspace was an
+empty `CREATED` shell — the local papers were a UI cache
+the server knew nothing about. Any click would have
+produced nothing useful.
+
+### Sibling fix
+
+Commit `6e565bb` ("fix(search): route frontend search
+flows through FSM-aware endpoints") reroutes all three
+flows through the FSM-aware endpoints:
+
+- `LiteratureSearch.handleAddSelected` now calls
+  `api.addPapersBulk(workspaceId, papersToAdd)` and then
+  `setCurrentWorkspace(updated)`. The returned workspace
+  is the canonical post-bulk state with `PAPERS_RETRIEVED`
+  and `report` in `allowed_actions`.
+- `Home.handleSubmit` now calls
+  `api.runSearchAction(workspace.workspace_id, question)`
+  before navigating to `/workspace/{id}`. The returned
+  workspace is already in `PAPERS_RETRIEVED`; the page
+  mounts with the correct FSM state.
+- `useWorkspace.searchAndAddPapers` now routes through
+  `api.runSearchAction` + `setCurrentWorkspace`.
+
+### Lesson for future ADRs
+
+A backend ADR that opens an FSM gate is only half the
+fix. The frontend must actually reach the FSM state
+that the gate accepts. This ADR documents both halves;
+future ADR authors should check that any new state
+transition is reachable from the user-facing flow that
+supposedly unlocks it.
