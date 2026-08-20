@@ -53,16 +53,18 @@ const mockApi = api as unknown as {
   addPaperByTitle: ReturnType<typeof vi.fn>;
 };
 
-// Mock the workspace store so addPapersToCurrent doesn't need a
-// real Zustand context. The function is called by the panel
-// after a successful commit; we just record the call.
+// Mock the workspace store so we don't need a real
+// Zustand context. The component now mirrors the
+// server's ``WorkspaceResponse`` via
+// ``setCurrentWorkspace`` (commit 6e565bb + this commit
+// fix the FSM-aware local-mirror pattern across the
+// whole workspace page). We expose both
+// ``addPapersToCurrent`` (legacy) and
+// ``setCurrentWorkspace`` (current) so the test can
+// assert which one is called per path.
 vi.mock('../state/workspaceStore', () => ({
   useWorkspaceStore: (selector: (state: any) => any) => {
-    const fakeState = {
-      addPapersToCurrent: vi.fn(),
-      removePaper: vi.fn(),
-    };
-    return selector(fakeState);
+    return selector(mockWorkspaceStoreState);
   },
 }));
 
@@ -78,6 +80,21 @@ vi.mock('../state/toastStore', () => ({
 }));
 import { toast } from '../state/toastStore';
 
+// Hoisted shared mock state so individual tests can assert
+// against ``setCurrentWorkspace`` (the new FSM-aware
+// local-mirror) and ``addPapersToCurrent`` (the legacy
+// local-push). Without this, the inline closure inside the
+// vi.mock factory creates a fresh object per call, and the
+// tests can't reach the same mock instance as the component
+// under test.
+const { mockWorkspaceStoreState } = vi.hoisted(() => ({
+  mockWorkspaceStoreState: {
+    addPapersToCurrent: vi.fn(),
+    setCurrentWorkspace: vi.fn(),
+    removePaper: vi.fn(),
+  },
+}));
+
 describe('AddPapersPanel', () => {
   beforeEach(() => {
     mockApi.resolvePapers.mockReset();
@@ -85,6 +102,9 @@ describe('AddPapersPanel', () => {
     mockApi.addPaper.mockReset();
     mockApi.uploadPdf.mockReset();
     mockApi.addPaperByTitle.mockReset();
+    mockWorkspaceStoreState.addPapersToCurrent.mockReset();
+    mockWorkspaceStoreState.setCurrentWorkspace.mockReset();
+    mockWorkspaceStoreState.removePaper.mockReset();
   });
 
   afterEach(() => {
@@ -368,6 +388,87 @@ describe('AddPapersPanel', () => {
         expect(toast.error).toHaveBeenCalledWith('Network error');
       });
     });
+
+    it('mirrors the server response via setCurrentWorkspace (FSM-aware)', async () => {
+      // Regression test for the "Generate Report button stayed
+      // greyed out after I added a paper" bug: the panel
+      // used to call ``addPapersToCurrent(response.papers)``
+      // (local-push only) which left ``workspace.state`` /
+      // ``allowed_actions`` stale. It must instead call
+      // ``setCurrentWorkspace(response)`` so the workspace
+      // page re-renders with the post-add FSM state and the
+      // Generate Report button becomes enabled. See commit
+      // 6e565bb for the sibling fix on the search paths.
+      const user = userEvent.setup();
+      const resolvedPaper = {
+        title: 'A real paper.',
+        authors: [],
+        journal: null,
+        year: null,
+        abstract: '',
+        doi: '10.1038/nature12373',
+        pmid: null,
+        keywords: [],
+        url: null,
+      };
+      mockApi.resolvePapers.mockResolvedValue({
+        results: [
+          {
+            resolved: {
+              identifier: '10.1038/nature12373',
+              identifier_type: 'doi',
+              paper: resolvedPaper,
+            },
+            failed: null,
+          },
+        ],
+        resolved_count: 1,
+        failed_count: 0,
+      });
+      const serverWorkspace = {
+        workspace_id: 'ws-1',
+        question: 'x',
+        state: 'PAPERS_RETRIEVED',
+        papers: [resolvedPaper],
+        total_papers: 1,
+        allowed_actions: ['report', 'summarize', 'search'],
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      };
+      mockApi.addPapersBulk.mockResolvedValue(serverWorkspace);
+
+      render(
+        <AddPapersPanel workspaceId="ws-1" enabled={true} />,
+      );
+
+      await user.type(
+        screen.getByLabelText(/DOI list/i),
+        '10.1038/nature12373',
+      );
+      await user.click(
+        screen.getByRole('button', { name: /Resolve DOIs/i }),
+      );
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole('button', { name: /Add 1 resolved paper/i }),
+        ).toBeInTheDocument();
+      });
+
+      await user.click(
+        screen.getByRole('button', { name: /Add 1 resolved paper/i }),
+      );
+
+      // The fix: the panel must call setCurrentWorkspace with
+      // the full server response, NOT the legacy
+      // addPapersToCurrent(response.papers) local-push.
+      expect(
+        mockWorkspaceStoreState.setCurrentWorkspace,
+      ).toHaveBeenCalledWith(serverWorkspace);
+      expect(
+        mockWorkspaceStoreState.addPapersToCurrent,
+      ).not.toHaveBeenCalled();
+    });
   });
 
   describe('PDF tab', () => {
@@ -452,6 +553,62 @@ describe('AddPapersPanel', () => {
       await waitFor(() => {
         expect(mockApi.uploadPdf).toHaveBeenCalledWith('ws-1', file);
       });
+    });
+
+    it('mirrors the server response via setCurrentWorkspace (FSM-aware)', async () => {
+      // The user's exact reproduction: "I just added a paper
+      // and the Generate Report button got greyed out."
+      // The panel used to call
+      // ``addPapersToCurrent(response.papers)`` which only
+      // pushed the new paper into local state but left the
+      // workspace FSM stuck at CREATED (no ``report`` in
+      // ``allowed_actions``). It must instead mirror the
+      // full server response so the workspace page
+      // re-renders with the post-add FSM state.
+      const serverWorkspace = {
+        workspace_id: 'ws-1',
+        question: 'x',
+        state: 'PAPERS_RETRIEVED',
+        papers: [
+          { title: 'From PDF', doi: '10.1038/nature12373', pmid: null },
+        ],
+        total_papers: 21,
+        allowed_actions: [
+          'add_paper', 'remove_paper', 'report', 'search', 'summarize',
+        ],
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      };
+      mockApi.uploadPdf.mockResolvedValue(serverWorkspace);
+
+      render(
+        <AddPapersPanel workspaceId="ws-1" enabled={true} />,
+      );
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('tab', { name: /PDF/i }));
+
+      const fileInput = screen.getByLabelText(/Drop a PDF here/i)
+        .closest('label')
+        ?.querySelector('input[type="file"]') as HTMLInputElement;
+
+      const file = new File(['%PDF-1.4 fake'], 'paper.pdf', {
+        type: 'application/pdf',
+      });
+      Object.defineProperty(fileInput, 'files', {
+        value: [file],
+        configurable: true,
+      });
+      fireEvent.change(fileInput);
+
+      await waitFor(() => {
+        expect(
+          mockWorkspaceStoreState.setCurrentWorkspace,
+        ).toHaveBeenCalledWith(serverWorkspace);
+      });
+      expect(
+        mockWorkspaceStoreState.addPapersToCurrent,
+      ).not.toHaveBeenCalled();
     });
 
     it('shows the extractor error from the API', async () => {
@@ -810,6 +967,71 @@ describe('AddPapersPanel', () => {
       expect(toast.success).toHaveBeenCalledWith(
         'Added "amyloid cascade 2025" from paper.pdf.',
       );
+    });
+
+    it('mirrors the title-fallback response via setCurrentWorkspace', async () => {
+      // Third commit path that used to call
+      // ``addPapersToCurrent(response.papers)``. Same
+      // FSM-aware mirror as the DOI-bulk and PDF-upload
+      // paths.
+      const user = userEvent.setup();
+      mockApi.uploadPdf.mockRejectedValue(noIdError);
+      const serverWorkspace = {
+        workspace_id: 'ws-1',
+        question: 'x',
+        state: 'PAPERS_RETRIEVED',
+        papers: [
+          {
+            title: 'amyloid cascade 2025',
+            authors: [],
+            journal: null,
+            year: null,
+            abstract: '',
+            doi: null,
+            pmid: '40000001',
+            keywords: [],
+            url: null,
+          },
+        ],
+        total_papers: 1,
+        allowed_actions: ['report', 'summarize', 'search'],
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      };
+      mockApi.addPaperByTitle.mockResolvedValue(serverWorkspace);
+
+      render(<AddPapersPanel workspaceId="ws-1" enabled={true} />);
+
+      const fileInput = await goToPdfTabAndGetFileInput(user);
+      const file = new File(['%PDF-1.4 fake'], 'paper.pdf', {
+        type: 'application/pdf',
+      });
+      Object.defineProperty(fileInput, 'files', {
+        value: [file],
+        configurable: true,
+      });
+      fireEvent.change(fileInput);
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole('button', { name: /Find paper by title/i }),
+        ).toBeInTheDocument();
+      });
+
+      await user.type(
+        screen.getByPlaceholderText(/Amyloid cascade in 2025/i),
+        'amyloid cascade 2025',
+      );
+      submitFallbackForm();
+
+      await waitFor(() => {
+        expect(
+          mockWorkspaceStoreState.setCurrentWorkspace,
+        ).toHaveBeenCalledWith(serverWorkspace);
+      });
+      expect(
+        mockWorkspaceStoreState.addPapersToCurrent,
+      ).not.toHaveBeenCalled();
     });
 
     it('surfaces title_no_confident_match as an inline error', async () => {

@@ -102,7 +102,21 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
   const [titleFallbackBusy, setTitleFallbackBusy] = useState(false);
   const [titleFallbackError, setTitleFallbackError] = useState<string | null>(null);
 
-  const addPapersToCurrent = useWorkspaceStore((s) => s.addPapersToCurrent);
+  // FSM-aware local-mirror: replace the legacy
+  // ``addPapersToCurrent`` (which only pushed papers into
+  // local state and left ``workspace.state`` /
+  // ``workspace.allowed_actions`` stale). All three commit
+  // paths (DOI bulk, PDF upload, title-fallback) call
+  // server-side endpoints that already return a canonical
+  // ``WorkspaceResponse`` with the post-add state. We
+  // mirror that response into the local store so the
+  // workspace page re-renders with the right FSM state
+  // — the Generate Report button becomes enabled as soon
+  // as the user adds their first paper. See commit
+  // ``6e565bb`` for the sibling fix on the search flows.
+  const setCurrentWorkspace = useWorkspaceStore(
+    (s) => s.setCurrentWorkspace,
+  );
 
   const handleResolve = async () => {
     const ids = parseDois(bulkText);
@@ -162,8 +176,15 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
     }
     setCommitting(true);
     try {
+      // ``addPapersBulk`` returns a canonical
+      // ``WorkspaceResponse`` with the post-add FSM state.
+      // Mirror it into the local store so the Generate
+      // Report button becomes enabled as soon as papers
+      // are added. The legacy ``addPapersToCurrent`` only
+      // pushed papers into the local list and left
+      // ``workspace.state`` / ``allowed_actions`` stale.
       const response = await api.addPapersBulk(workspaceId, resolved);
-      addPapersToCurrent(response.papers);
+      setCurrentWorkspace(response);
       toast.success(
         `Added ${resolved.length} paper${resolved.length === 1 ? '' : 's'}.`,
       );
@@ -228,8 +249,12 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
     setTitleFallbackOpen(false);
     setTitleFallbackError(null);
     try {
+      // ``uploadPdf`` returns a canonical
+      // ``WorkspaceResponse`` with the post-add FSM state.
+      // Mirror it so the Generate Report button becomes
+      // enabled as soon as the PDF is processed.
       const response = await api.uploadPdf(workspaceId, file);
-      addPapersToCurrent(response.papers);
+      setCurrentWorkspace(response);
       const count = response.papers.length;
       setPdfSuccess(
         `Added ${count} paper${count === 1 ? '' : 's'} from ${file.name}.`,
@@ -284,13 +309,18 @@ export const AddPapersPanel: React.FC<AddPapersPanelProps> = ({
     setTitleFallbackBusy(true);
     setTitleFallbackError(null);
     try {
+      // ``addPaperByTitle`` returns a canonical
+      // ``WorkspaceResponse`` (same contract as
+      // ``addPapersBulk`` and ``uploadPdf``). Mirror it
+      // so the Generate Report button becomes enabled
+      // as soon as the title fallback succeeds.
       const response = await api.addPaperByTitle(workspaceId, {
         title,
         first_author: titleFallbackAuthor.trim() || null,
         journal: titleFallbackJournal.trim() || null,
         year: yearNum,
       });
-      addPapersToCurrent(response.papers);
+      setCurrentWorkspace(response);
       const matched = response.papers[response.papers.length - 1];
       toast.success(
         `Added "${matched?.title ?? title}" from ${titleFallbackName ?? 'PDF'}.`,
