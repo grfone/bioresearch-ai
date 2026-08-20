@@ -62,6 +62,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../hooks/useWorkspace';
+import { useWorkspaceStore } from '../state/workspaceStore';
 import type { ReportResponse } from '../models/report';
 import { hasLimitations, hasFutureWork } from '../models/report';
 import { FileText, RefreshCw, AlertCircle, Lightbulb } from 'lucide-react';
@@ -81,23 +82,91 @@ export const Report: React.FC = () => {
 
   const [report, setReport] = useState<ReportResponse | null>(null);
   const [generating, setGenerating] = useState(false);
+  // Phase label shown next to the spinner. Mirrors the
+  // orchestrator's actual phases for the report action:
+  //   1. ``Loading workspace...`` while ``fetchWorkspace``
+  //      is in flight (the user always sees this -- it's
+  //      a prerequisite for everything else).
+  //   2. ``Summarizing...`` ONLY IF the workspace has no
+  //      summary yet. The orchestrator's ``report()`` does
+  //      an auto-summarise when ``session.summary is None``
+  //      (see ADR-008); we mirror that decision in the UI
+  //      so the user doesn't see "Summarizing..." for a
+  //      workspace that already has a summary (the
+  //      auto-summarise branch is skipped server-side too).
+  //   3. ``Generating report...`` while the report use
+  //      case is in flight.
+  // The Compare step is NOT shown because
+  // ``WorkspaceOrchestrator.report()`` doesn't actually
+  // call the compare use case (see ADR-008 follow-up --
+  // compare is data-side still set on the workspace model
+  // but doesn't block report generation).
+  const [phase, setPhase] = useState<string>('Loading workspace…');
   const [genError, setGenError] = useState<string | null>(null);
+  // True while the page is in any loading phase (initial
+  // ``fetchWorkspace``, optional ``Summarizing``, and
+  // ``Generating report``). We track this separately from
+  // ``loading`` (which is only the fetch) and ``generating``
+  // (which is only the report call) because there's a brief
+  // gap between them: after fetchWorkspace resolves, both
+  // flags are false momentarily before handleGenerateReport
+  // sets ``generating: true``. We don't want to flash the
+  // report-or-error UI during that gap.
+  const [inFlight, setInFlight] = useState(true);
 
   // Load workspace and generate report on mount if not already available.
   useEffect(() => {
-    if (workspaceId) {
-      fetchWorkspace(workspaceId).then(() => {
-        // If workspace has report_available, we could fetch the report by generating it.
-        // We'll generate anyway.
-        handleGenerateReport();
-      });
-    }
-  }, [workspaceId]);
+    if (!workspaceId) return;
+    let cancelled = false;
+    setInFlight(true);
+    setPhase('Loading workspace…');
+    (async () => {
+      try {
+        await fetchWorkspace(workspaceId);
+        if (cancelled) return;
+        // The workspace FSM now lives in the
+        // useWorkspaceStore -- read the freshly-fetched
+        // ``summary`` to decide whether the orchestrator
+        // will auto-summarise inside report().
+        const fresh = useWorkspaceStore.getState().currentWorkspace;
+        const willSummarize =
+          fresh?.workspace_id === workspaceId && fresh.summary == null;
+        if (willSummarize) {
+          setPhase('Summarizing…');
+        } else {
+          setPhase('Generating report…');
+        }
+        await handleGenerateReport();
+      } catch (err) {
+        if (cancelled) return;
+        setGenError(err instanceof Error ? err.message : 'Failed to load workspace.');
+      } finally {
+        if (!cancelled) setInFlight(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleGenerateReport = async () => {
     if (!workspaceId) return;
     setGenerating(true);
+    setInFlight(true);
     setGenError(null);
+    // Compute the phase from the current workspace state:
+    // if the orchestrator will auto-summarise (no
+    // summary yet), show 'Summarizing...'; otherwise skip
+    // straight to 'Generating report...'. We do this here
+    // too -- not just in the useEffect -- so the Retry
+    // button on the error UI picks the right phase on
+    // subsequent attempts, even after the useEffect has
+    // already finished and left ``phase`` set to a stale
+    // value.
+    const fresh = useWorkspaceStore.getState().currentWorkspace;
+    const willSummarize =
+      fresh?.workspace_id === workspaceId && fresh.summary == null;
+    setPhase(willSummarize ? 'Summarizing…' : 'Generating report…');
     try {
       const result = await generateReport();
       setReport(result);
@@ -107,15 +176,27 @@ export const Report: React.FC = () => {
       setGenError(err instanceof Error ? err.message : 'Failed to generate report.');
     } finally {
       setGenerating(false);
+      setInFlight(false);
     }
   };
 
-  if (loading || generating) {
+  if (loading || generating || inFlight) {
+    // ``phase`` carries the current label throughout the
+    // lifecycle (initial value: 'Loading workspace…').
+    // ``setPhase`` calls in the useEffect + handleGenerateReport
+    // advance it through 'Summarizing…' (if the
+    // orchestrator will auto-summarise) and
+    // 'Generating report…' as the work progresses.
+    // The ternary is a safety net: if ``phase`` is somehow
+    // empty (e.g. the Retry button clicked handleGenerateReport
+    // directly), default to 'Loading workspace…' rather
+    // than rendering an empty label.
+    const phaseLabel = phase || 'Loading workspace…';
     return (
         <div className="page section flex items-center justify-center min-h-screen">
           <div className="text-center">
             <div className="spinner mx-auto mb-4"/>
-            <p className="text-secondary">{generating ? 'Generating report…' : 'Loading…'}</p>
+            <p className="text-secondary">{phaseLabel}</p>
           </div>
         </div>
     );
@@ -127,7 +208,23 @@ export const Report: React.FC = () => {
           <div className="text-center text-error">
             <p>Error generating report.</p>
             <p className="text-sm text-secondary mt-2">{error?.message || genError}</p>
-            <button className="btn btn-outline mt-4" onClick={handleGenerateReport}>
+            <button
+              className="btn btn-outline mt-4"
+              onClick={async () => {
+                // Retry: refresh first (so we know the
+                // current workspace state and pick the
+                // correct phase), then re-run generation.
+                if (!workspaceId) return;
+                setInFlight(true);
+                setPhase('Loading workspace…');
+                try {
+                  await fetchWorkspace(workspaceId);
+                  await handleGenerateReport();
+                } catch (err) {
+                  setGenError(err instanceof Error ? err.message : 'Failed to retry.');
+                }
+              }}
+            >
               <RefreshCw size={16}/>
               Retry
             </button>

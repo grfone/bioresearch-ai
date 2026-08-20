@@ -63,6 +63,7 @@ export const Home: React.FC = () => {
   const navigate = useNavigate();
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingPhase, setLoadingPhase] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const setCurrentWorkspace = useWorkspaceStore((s) => s.setCurrentWorkspace);
 
@@ -74,20 +75,25 @@ export const Home: React.FC = () => {
     setError(null);
 
     try {
-      // 1. Create workspace
+      // Phase 1: create the workspace. The label flips from
+      // "Creating workspace…" once the call resolves and we
+      // move to Phase 2. The user sees a concrete signal of
+      // progress -- not a single undifferentiated spinner
+      // for the entire 6-12 second wait.
+      setLoadingPhase('Creating workspace…');
       const workspace = await api.createWorkspace({ question: question.trim() });
       setCurrentWorkspace(workspace);
 
-      // 2. Auto-search with the same question via the
-      //    FSM-aware endpoint. The legacy ``POST /search``
-      //    returns hits but does NOT mutate the workspace
-      //    FSM, which left Generate Report greyed out even
-      //    with 20 papers loaded. ``runSearchAction`` goes
-      //    through ``POST /workspaces/{id}/actions/search``
-      //    so the returned workspace reflects
-      //    PAPERS_RETRIEVED with ``report`` in
-      //    ``allowed_actions`` -- ready for the user to
-      //    click Generate Report on the next page.
+      // Phase 2: auto-search via the FSM-aware endpoint. The
+      // legacy ``POST /search`` returns hits but does NOT
+      // mutate the workspace FSM, which left Generate Report
+      // greyed out even with 20 papers loaded.
+      // ``runSearchAction`` goes through
+      // ``POST /workspaces/{id}/actions/search`` so the
+      // returned workspace reflects PAPERS_RETRIEVED with
+      // ``report`` in ``allowed_actions`` -- ready for the
+      // user to click Generate Report on the next page.
+      setLoadingPhase('Searching literature…');
       const updated = await api.runSearchAction(
         workspace.workspace_id,
         question.trim(),
@@ -100,6 +106,7 @@ export const Home: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Failed to create workspace.');
     } finally {
       setLoading(false);
+      setLoadingPhase('');
     }
   };
 
@@ -128,12 +135,12 @@ export const Home: React.FC = () => {
                      flex items-center justify-center"
           role="status"
           aria-live="polite"
-          aria-label="Creating workspace and searching literature"
+          aria-label={loadingPhase || 'Loading'}
         >
           <div className="text-center">
             <div className="spinner mx-auto mb-4" />
             <p className="text-secondary">
-              Creating workspace and searching literature…
+              {loadingPhase || 'Loading…'}
             </p>
           </div>
         </div>

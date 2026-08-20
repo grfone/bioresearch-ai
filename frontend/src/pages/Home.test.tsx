@@ -114,12 +114,13 @@ describe('Home', () => {
       screen.getByRole('button', { name: /Start Research/i }),
     );
 
-    // The loader should mount immediately, BEFORE the
-    // backend round-trips resolve. This is the user-visible
-    // fix for "this thing is taking forever to load".
+    // Phase 1: the loader should mount immediately with the
+    // "Creating workspace..." label, BEFORE the create call
+    // resolves. This is the user-visible fix for "this thing
+    // is taking forever to load".
     await waitFor(() => {
       expect(
-        screen.getByText(/Creating workspace and searching literature/i),
+        screen.getByText(/Creating workspace/i),
       ).toBeInTheDocument();
     });
     // role="status" + aria-live="polite" announce the
@@ -128,11 +129,8 @@ describe('Home', () => {
     const loader = screen.getByRole('status');
     expect(loader).toHaveAttribute('aria-live', 'polite');
 
-    // Clean up: resolve the pending promises so the test
-    // can tear down without warnings. We use a single
-    // microtask flush because the test may resolve
-    // ``createResolve`` before ``mockRunSearchAction`` has
-    // been invoked by ``Home.handleSubmit``.
+    // Clean up: resolve the create promise so the test
+    // can move past Phase 1.
     createResolve({
       workspace_id: 'ws-1',
       question: 'biomarkers for Alzheimer Disease',
@@ -143,11 +141,21 @@ describe('Home', () => {
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
     });
-    // Wait for runSearchAction to be called (it depends
-    // on createResolve having resolved). Then resolve it.
+
+    // Phase 2: the label should advance to
+    // "Searching literature..." once createWorkspace
+    // resolves and runSearchAction is invoked. We assert
+    // on the new label BEFORE resolving the search promise,
+    // so we catch the transition.
     await waitFor(() => {
       expect(mockRunSearchAction).toHaveBeenCalled();
     });
+    expect(
+      screen.getByText(/Searching literature/i),
+    ).toBeInTheDocument();
+
+    // Clean up: resolve the search promise so the test
+    // can tear down without warnings.
     searchResolve({
       workspace_id: 'ws-1',
       question: 'biomarkers for Alzheimer Disease',
