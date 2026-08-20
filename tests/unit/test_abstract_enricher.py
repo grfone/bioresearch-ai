@@ -294,6 +294,184 @@ class TestMetaTagExtraction:
 
 
 # -----------------------------------------------------------------
+# Section-based full-text extraction (preferred over meta tags)
+# -----------------------------------------------------------------
+
+
+# Real HTML samples from the three publishers we target with
+# the section-based regex. These are minimal fragments showing
+# just the section structure; the rest of the page is
+# irrelevant and is elided with "..." comments.
+SPRINGER_SECTION_HTML = """
+<html><body>
+<meta name="description" content="This is the publisher's teaser
+ending with literal three dots ...">
+<section aria-labelledby="Abs1" data-title="Abstract" lang="en">
+  <h2 id="Abs1">Abstract</h2>
+  <div class="c-article-section__content" id="Abs1-content">
+    <p>This is the full abstract. Collision cross section values tend to
+remain consistent across experiments. <i>m/z</i> and retention times are
+discussed. We trained deep learning neural networks on the METLIN-CCS
+dataset. The mean relative error was 3.20 percent in 5-fold
+cross-validation.</p>
+  </div>
+</section>
+</body></html>
+"""
+
+NATURE_SECTION_HTML = """
+<html><body>
+<section id="Abs1">
+  <h2>Abstract</h2>
+  <div><p>Deep learning allows computational models that are composed of
+multiple processing layers to learn representations of data with
+multiple levels of abstraction.</p></div>
+</section>
+</body></html>
+"""
+
+# Oxford Academic / IEEE style: section carries ``data-title="Abstract"``
+# but no id/aria-labelledby.
+OUP_SECTION_HTML = """
+<html><body>
+<section data-title="Abstract">
+  <h2>Abstract</h2>
+  <div><p>Oxford Academic style abstract. The full text is in the
+section body, not the meta tag.</p></div>
+</section>
+</body></html>
+"""
+
+# Page with BOTH a meta description (short) AND a section (full).
+# The section wins because it has more content.
+BOTH_HTML = """
+<html><body>
+<meta name="description" content="Short teaser.">
+<section aria-labelledby="Abs1" data-title="Abstract" lang="en">
+  <h2 id="Abs1">Abstract</h2>
+  <div><p>This is the full abstract body text, much longer than the
+meta description teaser above.</p></div>
+</section>
+</body></html>
+"""
+
+
+class TestSectionExtraction:
+    """Section-based full-text extraction from the publisher's
+    canonical ``<section>...</section>`` block.
+
+    Why this exists
+    ---------------
+    Many publishers (Springer Nature, Nature, Oxford Academic,
+    IEEE) put the *full* abstract in
+    ``<section id="Abs1"><p>...</p></section>`` while their
+    ``<meta name="description">`` is a short teaser -- sometimes
+    ending with literal ``"..."`` (Springer's publisher
+    convention). The section-based regex catches the full text;
+    the meta-tag regex would catch only the teaser.
+    """
+
+    def test_extracts_springer_section(self):
+        """Springer Nature's ``<section aria-labelledby="Abs1">``
+        is the canonical case. The full abstract is in the
+        section's ``<p>`` -- not in the meta description.
+        """
+        enricher = _make_enricher(
+            lambda req: httpx.Response(200, text=SPRINGER_SECTION_HTML)
+        )
+        result = enricher.fetch("10.1007/978-3-031-64636-2_17")
+        assert result is not None
+        # The full abstract mentions specific details that
+        # the meta teaser omits.
+        assert "METLIN-CCS" in result.abstract
+        assert "3.20 percent" in result.abstract
+        # The publisher's trailing "..." in the meta tag is
+        # NOT what we return -- the section body is the
+        # canonical full text.
+        assert not result.abstract.endswith("...")
+
+    def test_extracts_nature_section(self):
+        """Nature uses ``<section id="Abs1">`` (not aria-labelledby).
+        """
+        enricher = _make_enricher(
+            lambda req: httpx.Response(200, text=NATURE_SECTION_HTML)
+        )
+        result = enricher.fetch("10.1038/nature14539")
+        assert result is not None
+        assert "Deep learning" in result.abstract
+        assert "multiple processing layers" in result.abstract
+
+    def test_extracts_oup_section(self):
+        """Oxford Academic / IEEE: section carries ``data-title="Abstract"``
+        but no id-based marker. We match the data-title.
+        """
+        enricher = _make_enricher(
+            lambda req: httpx.Response(200, text=OUP_SECTION_HTML)
+        )
+        result = enricher.fetch("10.1093/bioinformatics/btab105")
+        assert result is not None
+        assert "Oxford Academic" in result.abstract
+
+    def test_prefers_section_over_meta_when_both_present(self):
+        """When both meta description and section are present,
+        the section wins because it has more content.
+
+        The meta description is short ("Short teaser." -- 14
+        chars, below our 40-char floor). The section body has
+        the full abstract. We should return the section body.
+        """
+        enricher = _make_enricher(
+            lambda req: httpx.Response(200, text=BOTH_HTML)
+        )
+        result = enricher.fetch("10.1234/both")
+        assert result is not None
+        assert "Short teaser" not in result.abstract
+        assert "full abstract body text" in result.abstract
+
+    def test_falls_back_to_meta_tag_when_no_section(self):
+        """Pages without a section block fall back to the
+        meta-tag regexes. This preserves the historical
+        behavior for PLOS, Frontiers, etc.
+        """
+        enricher = _make_enricher(
+            lambda req: httpx.Response(200, text=NATURE_HTML)
+        )
+        result = enricher.fetch("10.1038/nature14539")
+        assert result is not None
+        # ``NATURE_HTML`` doesn't have a section block; we
+        # extract from the meta tag (Nature happens to have
+        # both -- the test fixture uses the meta-only form).
+        assert "Deep learning" in result.abstract
+
+    def test_returns_none_when_no_section_and_no_meta(self):
+        """Pages with neither a section nor a meta tag return None."""
+        enricher = _make_enricher(
+            lambda req: httpx.Response(200, text=DATADOME_HTML)
+        )
+        result = enricher.fetch("10.1234/blocked")
+        assert result is None
+
+    def test_section_body_strips_nested_tags(self):
+        """The section body often contains nested HTML tags
+        (``<i>``, ``<b>``, ``<sup>`` for math like ``<i>m/z</i>``).
+        These should be stripped to plain text in the
+        returned abstract.
+        """
+        # The SPRINGER_SECTION_HTML fixture already contains
+        # ``<i>m/z</i>`` -- verify the abstract doesn't carry
+        # the raw tags through.
+        enricher = _make_enricher(
+            lambda req: httpx.Response(200, text=SPRINGER_SECTION_HTML)
+        )
+        result = enricher.fetch("10.1007/978-3-031-64636-2_17")
+        assert result is not None
+        assert "<i>" not in result.abstract
+        assert "</i>" not in result.abstract
+        # The plain text should still be there.
+        assert "m/z" in result.abstract
+
+
+# -----------------------------------------------------------------
 # Network / HTTP error handling
 # -----------------------------------------------------------------
 
@@ -455,6 +633,61 @@ class TestCleanAbstract:
         text = (
             "We measured glucose (10 mM) and insulin (1 nM) "
             "in hepatocytes. The fold-change was 2.3+/-0.5."
+        )
+        assert _clean_abstract(text) == text
+
+    def test_strips_trailing_publisher_ellipsis(self):
+        """Springer's meta descriptions end with literal "..." as
+        a "see the page for more" signal. Stripping it makes the
+        abstract read as complete rather than truncated.
+
+        Without the strip, the user sees ``"...This..."`` and
+        assumes the abstract is truncated mid-sentence. After
+        the strip, they see ``"...This."`` -- still slightly
+        truncated-feeling but accurate.
+
+        The fixture is intentionally longer than the 40-char
+        floor so the strip and the length check don't fight
+        each other (the strip is BEFORE the length check, but
+        if we strip a fixture that's already too short, the
+        strip returns ``""`` -- which is the right answer for
+        "too short to be an abstract" but a confusing test
+        signal). We use a realistic Spring-style abstract.
+        """
+        # A Spring-style meta description ending in literal "..."
+        text = (
+            "Collision cross section values tend to remain "
+            "consistent across experiments. This makes them "
+            "useful for metabolite annotation..."
+        )
+        assert _clean_abstract(text) == (
+            "Collision cross section values tend to remain "
+            "consistent across experiments. This makes them "
+            "useful for metabolite annotation"
+        )
+
+    def test_strips_trailing_ellipsis_with_surrounding_spaces(self):
+        """Publisher teasers sometimes have ``" ... "`` (spaces
+        around the ellipsis). Strip those too.
+        """
+        text = (
+            "We trained several machine learning models on the "
+            "METLIN-CCS dataset for metabolite annotation ... "
+        )
+        assert _clean_abstract(text) == (
+            "We trained several machine learning models on the "
+            "METLIN-CCS dataset for metabolite annotation"
+        )
+
+    def test_preserves_mid_text_ellipsis(self):
+        """Ellipses in the middle of the abstract are real
+        mathematical or citation text (``see Eq. (1) ... (3)``)
+        -- they must NOT be stripped. The strip is anchored
+        at end-of-string.
+        """
+        text = (
+            "We measured glucose (10 mM) and insulin ... "
+            "(1 nM) in hepatocytes. The fold-change was 2.3+/-0.5."
         )
         assert _clean_abstract(text) == text
 

@@ -522,16 +522,130 @@ class AbstractEnricher:
         ),
     )
 
+    # Section-based full-abstract extraction. Many publishers
+    # (Springer Nature, Nature, IEEEXplore, Oxford Academic)
+    # put the *full* abstract in a section identified by one
+    # of two HTML conventions:
+    #
+    #   1. ``<section id="Abs1">...<p>FULL ABSTRACT</p>...</section>``
+    #      (Nature, Oxford Academic, IEEE -- the section
+    #      itself carries the id)
+    #
+    #   2. ``<section aria-labelledby="Abs1" data-title="Abstract">``
+    #      ...<p>FULL ABSTRACT</p>...</section>``
+    #      (Springer Nature -- the id is on the inner ``<h2>``,
+    #      and the section references it via ``aria-labelledby``).
+    #      The ``data-title="Abstract"`` attribute is an
+    #      additional Springer-specific signal we can use as
+    #      a fallback if neither id-based pattern matches.
+    #
+    # Both forms wrap the abstract in a ``<p>`` block inside
+    # the section. We prefer the section over the meta-tag
+    # fallback because it's the canonical full text -- Springer's
+    # ``<meta name="description">`` is a 267-char teaser ending
+    # in literal ``"..."`` while the section body has the full
+    # abstract.
+    #
+    # The regex captures everything between the section open
+    # tag (matched by id or aria-labelledby or data-title) and
+    # the section close ``</section>``. Inside, we capture the
+    # *first* ``<p>...</p>`` block (subsequent ``<p>``s are
+    # usually acknowledgements, funding statements, or
+    # "(c) ..." paragraphs).
+    _SECTION_ABS_PATTERN: re.Pattern[str] = re.compile(
+        # Pattern 1: section carries id="Abs[0-9]+"
+        r'<section\b[^>]*\bid=["\']Abs\d+["\'][^>]*>'
+        # Match up to 4 KB of content inside the section.
+        # This is enough for the longest abstracts (~3-4 KB
+        # chars) without backtracking on huge pages.
+        r'(.{1,4096}?)'
+        r'</section>'
+        # Pattern 2: section references id via aria-labelledby
+        # (the inner heading has the id="Abs[0-9]+")
+        r'|'
+        r'<section\b[^>]*aria-labelledby=["\']Abs\d+["\'][^>]*>'
+        r'(.{1,4096}?)'
+        r'</section>'
+        # Pattern 3: Springer-style ``data-title="Abstract"``
+        # attribute on the section itself. This is the most
+        # generic fallback -- if the publisher tagged the
+        # section with its semantic name, we use it.
+        r'|'
+        r'<section\b[^>]*data-title=["\']Abstract["\'][^>]*>'
+        r'(.{1,4096}?)'
+        r'</section>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    # First <p>...</p> inside the captured section. We
+    # accept nested tags (``<i>``, ``<b>``, ``<sup>`` etc.)
+    # but stop at the matching </p>. The non-greedy ``+?``
+    # prevents crossing into a second paragraph.
+    _SECTION_ABS_P_PATTERN: re.Pattern[str] = re.compile(
+        r'<p\b[^>]*>(.+?)</p>',
+        re.IGNORECASE | re.DOTALL,
+    )
+
     def _extract_abstract(self, html_text: str) -> str | None:
-        """Pull the abstract from one of the known meta tags.
+        """Pull the abstract from the page.
+
+        Two strategies, tried in order:
+
+        1. **Section-based**: look for
+           ``<section id="Abs[0-9]+">...</section>`` and
+           extract the first ``<p>`` inside it. This is the
+           canonical full-text path used by Springer
+           Nature, Nature, and most Oxford Academic
+           journals. Springer book chapters are the
+           canonical example: their ``<meta
+           name="description">`` is a 267-char teaser
+           ending in literal ``"..."``, but the section
+           body has the full abstract.
+        2. **Meta-tag based**: fall back to the existing
+           patterns (``citation_abstract``, ``description``,
+           ``og:description``). Used by PLOS, Frontiers,
+           and most open-access journals.
 
         Returns the first non-empty match, or ``None`` if
-        none of the meta tags are present.
+        neither strategy finds anything.
 
         HTML entity decoding and whitespace cleanup is
         delegated to ``_clean_abstract`` so the two
         responsibilities live in one place.
         """
+        # 1. Section-based extraction (preferred).
+        # The pattern has three alternatives with body groups
+        # at positions 1, 3, 5. ``lastindex`` tells us which
+        # alternative matched. We pull the body from whichever
+        # group actually has content.
+        section_match = self._SECTION_ABS_PATTERN.search(html_text)
+        if (
+            section_match is not None
+            and section_match.lastindex is not None
+        ):
+            # ``lastindex`` is the highest group that
+            # matched. The body group for each alternative is
+            # at the same offset within that alternative
+            # (always the *last* group in its alternative),
+            # so we can read it directly as ``lastindex``.
+            # Alternative 1: groups 1+2; body is 1. lastidx=1
+            # Alternative 2: groups 3+4; body is 3. lastidx=3
+            # Alternative 3: groups 5+6; body is 5. lastidx=5
+            section_body = section_match.group(section_match.lastindex)
+            p_match = self._SECTION_ABS_P_PATTERN.search(section_body)
+            if p_match is not None:
+                # Strip the nested tags from the <p> block
+                # (``<i>``, ``<b>``, etc.) so the abstract
+                # reads as plain text. The regex captures the
+                # raw HTML; we strip tags here so the
+                # downstream ``_clean_abstract`` can treat
+                # the text uniformly regardless of whether
+                # the source was a section or a meta tag.
+                raw_html = p_match.group(1)
+                plain = re.sub(r"<[^>]+>", " ", raw_html)
+                cleaned = _clean_abstract(plain)
+                if cleaned:
+                    return cleaned
+        # 2. Meta-tag extraction (fallback).
         for pattern in self._META_PATTERNS:
             match = pattern.search(html_text)
             if match is None:
@@ -548,10 +662,29 @@ def _clean_abstract(text: str) -> str:
 
     - Decode HTML entities (``&micro;`` -> ``µ``).
     - Collapse whitespace runs to single spaces.
-    - Strip trailing whitespace.
+    - Strip trailing whitespace and publisher's literal
+      ``"..."`` truncation marker.
     - Drop the abstract if it's too short to be useful
       (some sites return just the title or a short
       summary).
+
+    The trailing-ellipsis strip
+    ----------------------------
+    Some publishers (notably Springer Nature book
+    chapters) put a literal ``"..."`` at the end of their
+    short meta descriptions -- it's their way of signalling
+    "more on the actual page". When we fall back to the
+    meta description (because the section extraction missed),
+    we don't want the user to see ``"This..."`` and think
+    the abstract is truncated when it's actually complete.
+    Stripping the trailing ``"..."`` (only when followed by
+    end-of-string) gives us ``"This."`` -- still slightly
+    truncated-feeling but accurate.
+
+    We DON'T strip ellipses in the middle of the text --
+    ``"see Eq. (1) ... (2) ... (3) for details"`` should
+    pass through unchanged. The regex anchors on a literal
+    trailing ellipsis only.
     """
     # Decode entities first so that, e.g., ``&micro;`` is
     # counted as a single character when measuring length.
@@ -562,6 +695,19 @@ def _clean_abstract(text: str) -> str:
     # Collapse all whitespace (including newlines and
     # non-breaking spaces) to single spaces.
     normalized = re.sub(r"\s+", " ", decoded).strip()
+    # Strip a trailing literal "..." (with or without
+    # surrounding spaces) so publisher-supplied teasers
+    # don't show "This..." as if the abstract is truncated
+    # mid-sentence. Anchor at end-of-string so we don't
+    # touch mid-text ellipses.
+    #
+    # IMPORTANT: this strip happens BEFORE the length check
+    # so an abstract like ``"This is the abstract. ..."``
+    # (27 visible chars + 3 dots) doesn't fall below the
+    # 40-char floor. The dots are publisher boilerplate, not
+    # content -- we strip them so the 40-char measurement
+    # reflects the abstract's true length.
+    normalized = re.sub(r"\s*\.{3}\s*$", "", normalized)
     if len(normalized) < 40:
         # Too short to be an abstract -- probably a meta
         # description like "Read the paper" or just the
