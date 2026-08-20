@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 
 from app.core.enums.search_source import (
     SearchSource,
@@ -142,16 +143,64 @@ class MultiSourceSearcher(LiteratureSearcher):
     def search_with_filters(
         self, filters: SearchFilters
     ) -> list[SearchResult]:
-        """Fan out to every registered source, dedupe, rank."""
-        raw_results: list[SearchResult] = []
-        for source, searcher in self._searchers.items():
+        """Fan out to every registered source in parallel, dedupe, rank.
+
+        Parallelism
+        -----------
+        Sources run concurrently via a bounded
+        ``ThreadPoolExecutor``. With 3 enabled sources (PubMed,
+        OpenAlex, Europe PMC by default), the wall-clock time
+        is ``max(source_times)`` rather than the sum. An
+        OpenAlex that takes 4.5s no longer blocks PubMed (0.5s)
+        and Europe PMC (0.7s) from returning in parallel.
+
+        Why ``ThreadPoolExecutor`` and not ``asyncio.gather``
+        ------------------------------------------------------
+        The underlying ``search_with_filters`` is synchronous
+        (blocking ``httpx.Client`` calls). To run these in
+        parallel without rewriting every searcher as async,
+        we run them on a thread pool. The pool size is
+        bounded by the number of sources (no point having
+        more workers than sources) so we don't accumulate
+        idle threads.
+
+        Error handling
+        --------------
+        Each source's failure is logged and that source is
+        silently dropped from the result. The searcher
+        still returns whatever the remaining sources
+        produced -- a single misconfigured source doesn't
+        break the whole search.
+        """
+        sources = list(self._searchers.items())
+        n_workers = min(len(sources), 4)
+        logger.debug(
+            "MultiSourceSearcher: fanning out to %d sources "
+            "(max %d workers)",
+            len(sources),
+            n_workers,
+        )
+
+        def _search_one(
+            item: tuple[SearchSource, LiteratureSearcher],
+        ) -> list[SearchResult]:
+            source, searcher = item
             try:
-                results = searcher.search_with_filters(filters)
+                return searcher.search_with_filters(filters)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "search on %s failed: %s", source.value, exc
                 )
-                continue
+                return []
+
+        with ThreadPoolExecutor(
+            max_workers=n_workers,
+            thread_name_prefix="multi-source-search",
+        ) as pool:
+            per_source_results = list(pool.map(_search_one, sources))
+
+        raw_results: list[SearchResult] = []
+        for results in per_source_results:
             raw_results.extend(results)
 
         deduped = _dedupe(raw_results)
