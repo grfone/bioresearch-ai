@@ -412,6 +412,7 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
 
   return (
     <div
+      id="advanced-search-panel"
       className="overlay"
       onClick={onClose}
       role="dialog"

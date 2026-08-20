@@ -865,6 +865,28 @@ Guillermo Ramajo Fernández
 
 }
 
+/* Prominent primary CTA — used for the action that the
+
+   user has been working toward (e.g. "Generate Report"
+
+   after collecting papers). Slightly larger than the
+
+   standard primary button so it visually anchors the
+
+   action bar. We do NOT make it red/green/etc — the
+
+   existing primary blue is the brand color, and the size
+
+   bump alone signals "this is the next step". */
+
+.btn-action-primary {
+    padding: var(--space-3) var(--space-5);
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.01em;
+    gap: var(--space-2);
+}
+
 
 /*=============================================================================
     Secondary Button

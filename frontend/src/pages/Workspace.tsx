@@ -39,23 +39,13 @@ import { EvidenceComparisonPanel } from '../components/EvidenceComparisonPanel';
 import {
   AlertCircle,
   BookOpen,
-  Check,
-  ChevronDown,
   Clock,
-  FilePlus2,
-  FileText,
-  FileUp,
-  GitCompareArrows,
-  Hash,
   Loader2,
-  Play,
   Plus,
-  RotateCcw,
-  Sparkles,
-  Trash2,
   Upload,
   X,
 } from 'lucide-react';
+import { WorkspaceActionBar } from '../components/WorkspaceActionBar';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { toast } from '../state/toastStore';
 import {
@@ -111,10 +101,26 @@ export const Workspace: React.FC = () => {
   };
 
   const handleGenerateReport = async () => {
-    await handleRunAction('report', 'Report generation');
-    if (can('report') === false && workspace?.state === 'REPORTED') {
-      navigate(`/report/${workspaceId}`);
+    // The workspace FSM transitions to REPORTED on success;
+    // a REPORTED workspace exposes a navigable report at
+    // /report/{id}. We always navigate after a successful
+    // report run, regardless of the pre-run allowed_actions
+    // (the user may be retrying from REPORTED with a fresh
+    // question, in which case the FSM cycles back to
+    // PAPERS_RETRIEVED and the navigation may briefly point
+    // at the previous report).
+    try {
+      await runAction('report');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`Report generation failed: ${message}`);
+      return;
     }
+    // Navigation is unconditional on success. The Report
+    // page itself checks the workspace state and shows an
+    // "old report" banner if the workspace is no longer
+    // REPORTED, so we don't need to gate here.
+    navigate(`/report/${workspaceId}`);
   };
 
   const handleRemovePaper = (paper: any) => {
@@ -125,39 +131,10 @@ export const Workspace: React.FC = () => {
     }
   };
 
-  // The processing-action tier (Summarize, Compare, Generate Report)
-  // is collapsed by default at CREATED so the bar stays focused on
-  // the paper-entry workflow. Once papers exist it auto-expands so
-  // returning users see their next actions immediately — not
-  // "once papers exist on mount" (which would miss papers added
-  // after the user navigates to this page), but "as soon as the
-  // workspace has any papers at all".
-  const [showProcessingActions, setShowProcessingActions] =
-    useState(!!workspace?.total_papers);
-
-  // Auto-expand the processing-action bar whenever papers appear
-  // in the workspace. Without this effect, the initial
-  // ``useState`` only runs on mount — if the workspace is empty
-  // when the user lands on the page (very common: they always
-  // start by running Search), the bar stays collapsed even
-  // after Search returns 20 papers and the user is staring at
-  // the Literature list wondering why Summarize / Compare /
-  // Generate Report look disabled (they're not — they're
-  // hidden behind the toggle).
-  useEffect(() => {
-    if (
-      workspace &&
-      workspace.total_papers > 0 &&
-      !showProcessingActions
-    ) {
-      setShowProcessingActions(true);
-    }
-  }, [workspace?.total_papers, showProcessingActions, workspace]);
-
-  // The Advanced Search modal opens when the user clicks
-  // "Search PubMed" in the action bar. The modal's primary
+  // The Advanced Search dropdown opens when the user clicks
+  // the "Advanced Search" button. The dropdown's primary
   // CTA posts the filter bundle to the same backend endpoint
-  // — when ``filters`` is supplied, the route dispatches
+  // — when ``filters`` are non-default, the route dispatches
   // through ``WorkspaceOrchestrator.search_with_filters``.
   const [advancedSearchOpen, setAdvancedSearchOpen] = useState(false);
 
@@ -290,106 +267,14 @@ export const Workspace: React.FC = () => {
         shortcutHint={shortcutLabel({ key: 'k', ctrl: true }, isMacPlatform())}
       />
 
-      {/* Action bar — two-tier per UX consultant.
-          Primary tier (Search) is always visible because it's the
-          default workflow at CREATED. Secondary tier (Summarize /
-          Compare / Generate Report / Complete / Retry / Clear All)
-          collapses behind a toggle so the bar stays clean while
-          the user is still in the paper-entry phase. */}
-      <div className="lab-bench-action-bar" role="toolbar" aria-label="Workspace actions">
-        <div className="lab-bench-action-bar-primary">
-          <span className="lab-bench-action-bar-primary-label">Retrieve</span>
-          <button
-            className="btn btn-primary"
-            onClick={() => setAdvancedSearchOpen(true)}
-            disabled={!can('search')}
-            data-action="search"
-            title={
-              can('search')
-                ? 'Open the Advanced Search modal to pick sources (PubMed, OpenAlex, Europe PMC, bioRxiv), year range, sort, and document type'
-                : 'Search is not allowed in the current state'
-            }
-          >
-            <Play size={16} />
-            Advanced Search…
-          </button>
-          <button
-            type="button"
-            className="lab-bench-action-bar-toggle"
-            onClick={() => setShowProcessingActions((v) => !v)}
-            aria-expanded={showProcessingActions}
-          >
-            <ChevronDown
-              size={14}
-              style={{
-                transform: showProcessingActions ? 'rotate(180deg)' : 'rotate(0deg)',
-                transition: 'transform 150ms ease',
-              }}
-            />
-            {showProcessingActions ? 'Hide' : 'Show'} processing actions
-          </button>
-        </div>
-
-        <div
-          className="lab-bench-action-bar-secondary"
-          hidden={!showProcessingActions}
-        >
-          <button
-            className="btn btn-primary"
-            onClick={() => handleRunAction('summarize', 'Summarization')}
-            disabled={!can('summarize')}
-            data-action="summarize"
-          >
-            <Sparkles size={16} />
-            Summarize
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={() => handleRunAction('compare', 'Evidence comparison')}
-            disabled={!can('compare')}
-            data-action="compare"
-          >
-            <GitCompareArrows size={16} />
-            Compare
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={handleGenerateReport}
-            disabled={!can('report')}
-            data-action="report"
-          >
-            <FileText size={16} />
-            Generate Report
-          </button>
-          <span style={{ flex: 1 }} />
-          <button
-            className="btn btn-secondary"
-            onClick={() => handleRunAction('complete', 'Completion')}
-            disabled={!can('complete')}
-            data-action="complete"
-          >
-            <FilePlus2 size={16} />
-            Complete
-          </button>
-          <button
-            className="btn btn-secondary"
-            onClick={() => handleRunAction('retry', 'Retry')}
-            disabled={!can('retry')}
-            data-action="retry"
-          >
-            <RotateCcw size={16} />
-            Retry
-          </button>
-          <button
-            className="btn btn-secondary"
-            onClick={handleClearPapers}
-            disabled={currentWorkspace.total_papers === 0}
-          >
-            <Trash2 size={16} />
-            Clear All
-          </button>
-        </div>
-      </div>
+      {/* Action bar — simplified. See
+          ``components/WorkspaceActionBar.tsx`` for the
+          rationale and the callback contract. */}
+      <WorkspaceActionBar
+        canReport={can('report')}
+        onGenerateReport={handleGenerateReport}
+        onOpenAdvancedSearch={() => setAdvancedSearchOpen(true)}
+      />
 
       {/* Summary */}
       {currentWorkspace.summary && (
@@ -431,6 +316,7 @@ export const Workspace: React.FC = () => {
 
         <div className="mb-6">
           <LiteratureSearch
+            workspaceId={currentWorkspace.workspace_id}
             initialQuery={currentWorkspace.question}
             onSelectComplete={(count) => {
               toast.success(
