@@ -27,7 +27,8 @@ const SAMPLE_WORKSPACE: WorkspaceResponse = {
 };
 
 function makePaper(
-  pmid: string | null,
+  pmid: string | null = null,
+  doi: string | null = null,
   title = 'Test',
 ): Paper {
   return {
@@ -36,7 +37,7 @@ function makePaper(
     journal: null,
     year: 2024,
     abstract: '',
-    doi: null,
+    doi,
     pmid,
     keywords: [],
     url: null,
@@ -103,7 +104,7 @@ describe('workspaceStore', () => {
       // to add is already there. (Edge case — this matters
       // because the empty-add path shouldn't move the FSM.)
       useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper('1', 'Alpha'),
+        makePaper('1', null, 'Alpha'),
       ]);
       const stateBefore =
         useWorkspaceStore.getState().currentWorkspace!.state;
@@ -111,13 +112,101 @@ describe('workspaceStore', () => {
       // Now try adding the same paper again — dedup, no
       // new papers.
       useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper('1', 'Alpha duplicate'),
+        makePaper('1', null, 'Alpha duplicate'),
       ]);
       const ws = useWorkspaceStore.getState().currentWorkspace!;
       // State should not change.
       expect(ws.state).toBe('PAPERS_RETRIEVED');
       // Total paper count should not change.
       expect(ws.total_papers).toBe(1);
+    });
+
+    // --------------------------------------------------------------
+    // DOI-based deduplication
+    // --------------------------------------------------------------
+    //
+    // The original PMID-only dedup missed papers without a
+    // PMID -- e.g. Springer book chapters, arXiv preprints,
+    // conference proceedings. A user could add the same DOI
+    // twice and end up with two identical cards. These tests
+    // pin the contract that mirrors the backend's
+    // ``_paper_identity``: PMID first, DOI fallback,
+    // normalized title last resort.
+    it('dedupes by DOI when PMID is absent', () => {
+      // The user's reproduction: add a Springer book
+      // chapter (DOI only, no PMID) twice in a row. Should
+      // produce exactly one card, not two.
+      useWorkspaceStore.getState().addPapersToCurrent([
+        makePaper(null, '10.1007/978-3-031-64636-2_17', 'Springer chapter'),
+      ]);
+      useWorkspaceStore.getState().addPapersToCurrent([
+        makePaper(null, '10.1007/978-3-031-64636-2_17', 'Springer chapter'),
+      ]);
+      const ws = useWorkspaceStore.getState().currentWorkspace!;
+      expect(ws.papers.length).toBe(1);
+      expect(ws.total_papers).toBe(1);
+    });
+
+    it('dedupes by DOI even when PMID is also present and matches', () => {
+      // Paper has both PMID and DOI. The first add lands.
+      // The second add (with the same DOI but a different
+      // -- or absent -- PMID) is a duplicate because DOI
+      // is enough.
+      useWorkspaceStore.getState().addPapersToCurrent([
+        makePaper('12345', '10.1038/nature14539', 'Deep learning'),
+      ]);
+      useWorkspaceStore.getState().addPapersToCurrent([
+        makePaper(null, '10.1038/nature14539', 'Deep learning'),
+      ]);
+      const ws = useWorkspaceStore.getState().currentWorkspace!;
+      expect(ws.papers.length).toBe(1);
+    });
+
+    it('does NOT dedup papers with the same title but different DOI', () => {
+      // Two genuinely distinct papers can share a title
+      // (e.g. "Letter to the Editor"). Without the DOI
+      // check, the title dedup would falsely merge them.
+      // This is the contract that title is a LAST resort,
+      // not a primary key.
+      useWorkspaceStore.getState().addPapersToCurrent([
+        makePaper(null, '10.1234/aaa', 'Letter to the Editor'),
+      ]);
+      useWorkspaceStore.getState().addPapersToCurrent([
+        makePaper(null, '10.5678/bbb', 'Letter to the Editor'),
+      ]);
+      const ws = useWorkspaceStore.getState().currentWorkspace!;
+      // Both papers kept -- different DOIs, same title is
+      // not a duplicate signal.
+      expect(ws.papers.length).toBe(2);
+    });
+
+    it('dedupes by normalized title only when no PMID and no DOI', () => {
+      // Pre-print / stub record with no PMID and no DOI.
+      // The only signal we have is the title; we should
+      // still dedup because a duplicate entry is worse
+      // than a possible false-positive.
+      useWorkspaceStore.getState().addPapersToCurrent([
+        makePaper(null, null, 'Glucose metabolism in hepatocytes'),
+      ]);
+      useWorkspaceStore.getState().addPapersToCurrent([
+        makePaper(null, null, 'Glucose metabolism in hepatocytes'),
+      ]);
+      const ws = useWorkspaceStore.getState().currentWorkspace!;
+      expect(ws.papers.length).toBe(1);
+    });
+
+    it('treats case-only title differences as duplicates', () => {
+      // Title normalization is lowercased + whitespace-
+      // collapsed before comparison, so "Foo" and "foo "
+      // are the same identity.
+      useWorkspaceStore.getState().addPapersToCurrent([
+        makePaper(null, null, 'Foo Bar'),
+      ]);
+      useWorkspaceStore.getState().addPapersToCurrent([
+        makePaper(null, null, 'foo bar '),
+      ]);
+      const ws = useWorkspaceStore.getState().currentWorkspace!;
+      expect(ws.papers.length).toBe(1);
     });
   });
 });

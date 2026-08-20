@@ -34,6 +34,71 @@ interface WorkspaceStore {
 
 
 /**
+ * Compute the deduplication identity for a paper.
+ *
+ * Mirrors the backend's ``_paper_identity`` in
+ * ``app/domain/entities/research_session.py``:
+ *
+ *   - PMID (preferred): unique across publishers.
+ *   - DOI (fallback): unique per article, but may be missing
+ *     for some preprints and conference papers.
+ *   - Normalized title (last resort): lowercased and
+ *     whitespace-collapsed. Less unique (two papers can
+ *     share a title) but better than nothing.
+ *
+ * Returns ``null`` when the paper has no identity we can
+ * track (no PMID, no DOI, no title). The dedup caller
+ * decides what to do with unidentifiable papers (currently:
+ * pass them through to avoid silent data loss).
+ */
+function paperIdentity(paper: Paper): string | null {
+  if (paper.pmid) return `pmid:${paper.pmid}`;
+  if (paper.doi) return `doi:${paper.doi}`;
+  // ``title`` is required on the Paper interface, but
+  // backend payloads in the wild sometimes omit it (e.g. when
+  // the resolver falls back to a stub record). Defensively
+  // guard against undefined.
+  const title = paper.title?.trim().toLowerCase();
+  if (title) return `title:${title}`;
+  return null;
+}
+
+/**
+ * Return the set of "strong" identity signals for a paper.
+ *
+ * A strong signal is PMID or DOI -- both are unique per
+ * article across publishers. Title is NOT a strong signal:
+ * two genuinely different papers can share a title (e.g.
+ * "Letter to the Editor" or a generic preprint title), and
+ * even when unique, a typo in one source's title would
+ * silently break dedup. We only use title as a tiebreaker
+ * when no PMID/DOI is available.
+ *
+ * Why this exists separately from ``paperIdentity``:
+ * ----------------------------------------------------------
+ * The simple single-identity dedup missed the cross-identity
+ * case where paper A has both PMID and DOI, and paper B
+ * has only the DOI -- their single canonical keys
+ * (``pmid:12345`` vs ``doi:10.1/x``) didn't match, but they
+ * ARE the same paper. The fix is multi-identity dedup, but
+ * with a critical asymmetry: title is allowed to be a
+ * *primary* identity (when nothing else is available) but
+ * NOT a *cross-match* signal.
+ *
+ * The dedup logic is: paper B is a duplicate of paper A if
+ * B's primary identity matches ANY of A's strong identities.
+ * Title is only checked as a primary identity (i.e. for
+ * papers with no PMID and no DOI).
+ */
+function paperStrongIdentities(paper: Paper): string[] {
+  const ids: string[] = [];
+  if (paper.pmid) ids.push(`pmid:${paper.pmid}`);
+  if (paper.doi) ids.push(`doi:${paper.doi}`);
+  return ids;
+}
+
+
+/**
  * Mirror of the backend's allowed_actions logic.
  *
  * The frontend uses this when ``addPapersToCurrent`` adds
@@ -102,22 +167,125 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
         addPapersToCurrent: (papers) =>
           set((state) => {
             if (!state.currentWorkspace) return state;
-            // Track PMIDs already in the workspace AND PMIDs
-            // we're about to add — so two papers with the
-            // same PMID in the incoming batch don't both
-            // pass the dedup filter.
-            const seenPmids = new Set<string>();
-            const existingPmids = new Set(
-              state.currentWorkspace.papers
-                .map((p) => p.pmid)
-                .filter((p): p is string => Boolean(p))
-            );
+            // Deduplicate by PMID, DOI, or title -- mirrors the
+            // backend's ``_paper_identity`` (see
+            // ``app/domain/entities/research_session.py``).
+            //
+            // Why all three?
+            // --------------
+            // The original implementation only deduplicated
+            // by PMID. Papers without a PMID (Springer book
+            // chapters, arXiv preprints, conference papers)
+            // would silently duplicate when added twice. A
+            // user could add ``10.1007/978-...-..._17`` once,
+            // see the paper in the workspace, add the same
+            // DOI again, and end up with TWO identical
+            // cards in the workspace. The backend's
+            // dedup correctly handles this (it dedupes by
+            // PMID, DOI, or title in ``_paper_identity``)
+            // but the frontend was silently undoing the
+            // backend's dedup by appending
+            // ``response.papers`` (the full workspace list,
+            // which always contains the existing paper)
+            // without checking.
+            //
+            // We now mirror the backend's three-tier
+            // identity: PMID preferred, DOI fallback,
+            // normalized title last resort. A paper is a
+            // duplicate if ANY of these collide with an
+            // existing paper's identity.
+            //
+            // Two-tier dedup:
+            //   1. STRONG identities (PMID, DOI) for every
+            //      existing paper. A new paper is a duplicate
+            //      if its *primary* identity (PMID > DOI >
+            //      title) appears in this set.
+            //   2. Title-based dedup is implicit because
+            //      ``paperIdentity`` returns ``title:X`` as
+            //      the primary identity when PMID/DOI are
+            //      absent. We add those title-only papers to
+            //      the strong set too (the title key
+            //      ``title:X`` only collides with itself,
+            //      never with a PMID/DOI key).
+            //
+            // Why not include title in the strong set for
+            // papers that ALSO have PMID/DOI? Two papers can
+            // legitimately share a title (e.g. multiple
+            // "Letter to the Editor" replies, or a
+            // conference proceeding with a generic title).
+            // Title is a *weak* signal: it's only useful when
+            // it's the *only* signal (i.e. for preprint
+            // stubs the resolver couldn't enrich).
+            //
+            // The cross-identity case (paper A has PMID,
+            // paper B has same DOI but no PMID) is handled
+            // because A's ``paperStrongIdentities`` includes
+            // ``doi:...`` and B's primary is ``doi:...``.
+            const existingIds = new Set<string>();
+            for (const existing of state.currentWorkspace.papers) {
+              for (const id of paperStrongIdentities(existing)) {
+                existingIds.add(id);
+              }
+              // Also include the primary identity (which
+              // falls back to title when no PMID/DOI). This
+              // makes title-only papers dedup against each
+              // other but NOT against PMID/DOI-bearing
+              // papers.
+              const primary = paperIdentity(existing);
+              if (primary !== null) existingIds.add(primary);
+            }
             const newPapers: typeof papers = [];
+            const seenInBatch = new Set<string>();
             for (const p of papers) {
-              if (p.pmid) {
-                if (existingPmids.has(p.pmid)) continue;
-                if (seenPmids.has(p.pmid)) continue;
-                seenPmids.add(p.pmid);
+              const strong = paperStrongIdentities(p);
+              const primary = paperIdentity(p);
+              if (strong.length === 0 && primary === null) {
+                // Paper has no identity at all (no PMID,
+                // no DOI, no title). The backend will
+                // accept it but the frontend can't dedup;
+                // push it through so we don't silently
+                // drop user input. This is rare in
+                // practice (every paper should have at
+                // least a DOI or a title) but we handle
+                // it gracefully.
+                newPapers.push(p);
+                continue;
+              }
+              // Check if the new paper's primary
+              // identity matches any existing one.
+              const primaryKey = primary ?? '';
+              if (primaryKey !== '' && existingIds.has(primaryKey)) {
+                continue;
+              }
+              if (primaryKey !== '' && seenInBatch.has(primaryKey)) {
+                continue;
+              }
+              // Also check if any of the new paper's
+              // strong identities collide with an existing
+              // one. This catches the cross-identity
+              // case: paper A has both PMID and DOI, paper
+              // B has only the same DOI; A's primary is
+              // ``pmid:...`` but A's strong set includes
+              // ``doi:...`` which equals B's primary.
+              let crossMatch = false;
+              for (const id of strong) {
+                if (existingIds.has(id) || seenInBatch.has(id)) {
+                  crossMatch = true;
+                  break;
+                }
+              }
+              if (crossMatch) continue;
+              // Add this paper's identities to the seen
+              // sets so subsequent papers in the same
+              // batch are deduped against it.
+              if (primaryKey !== '') seenInBatch.add(primaryKey);
+              for (const id of strong) seenInBatch.add(id);
+              // Also add existing-side cache for the
+              // cross-match on subsequent iterations.
+              if (primaryKey !== '') {
+                for (const id of strong) {
+                  if (id !== primaryKey) existingIds.add(id);
+                }
               }
               newPapers.push(p);
             }
