@@ -242,7 +242,28 @@ export const api = {
     return fetchJson(buildUrl('/'));
   },
 
-  /** Search literature using the main `/search` endpoint. */
+  /**
+   * Search literature using the main ``/search`` endpoint.
+   *
+   * **Preview only** — does NOT mutate the workspace FSM.
+   * The returned hits appear in a dropdown for the user to
+   * review and pick from; the actual commit to the workspace
+   * happens via a follow-up call to one of:
+   *
+   *   - ``runSearchAction`` (auto-commit: server runs the
+   *     search, persists all hits, advances FSM to
+   *     ``PAPERS_RETRIEVED``);
+   *   - ``addPapersBulk`` (manual commit: server persists
+   *     the pre-resolved list, dedups by PMID/DOI, advances
+   *     FSM to ``PAPERS_RETRIEVED``);
+   *   - ``addPaperByTitle`` (single-paper title fallback).
+   *
+   * The split exists so the ``LiteratureSearch`` component
+   * can show a "review and pick which ones" UX without
+   * persisting the entire hit list until the user commits.
+   * A Home-page auto-search should use ``runSearchAction``
+   * instead — see commit ``6e565bb``.
+   */
   search: (request: SearchRequest): Promise<SearchResponse> => {
     return fetchJson(buildUrl('/search'), {
       method: 'POST',
@@ -250,7 +271,14 @@ export const api = {
     });
   },
 
-  /** Search literature using the legacy `/papers/search` endpoint. */
+  /**
+   * Search literature using the legacy ``/papers/search`` endpoint.
+   *
+   * Deprecated — no backend route is registered for this path
+   * anymore. Kept here for now in case an external integration
+   * depends on the symbol; will be removed in a follow-up
+   * cleanup commit.
+   */
   searchPapers: (request: SearchRequest): Promise<SearchResponse> => {
     return fetchJson(buildUrl('/papers/search'), {
       method: 'POST',

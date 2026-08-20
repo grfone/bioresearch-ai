@@ -79,6 +79,17 @@ export const LiteratureSearch: React.FC<LiteratureSearchProps> = ({
     setSelected(new Set());
 
     try {
+      // Preview only — fetch the hits via the legacy
+      // ``api.search`` endpoint and show them in a
+      // dropdown. We do NOT use ``api.runSearchAction``
+      // here because we don't want to persist every
+      // returned paper automatically: the user picks
+      // which ones to commit via ``handleAddSelected``,
+      // which uses ``api.addPapersBulk`` (the FSM-aware
+      // commit path). Splitting preview from commit is
+      // what gives this component its "review before
+      // you add" UX. See commit ``6e565bb`` for the
+      // sibling fix on the auto-search paths.
       const result = await api.search({ question: query.trim() });
       setResults(result.papers);
       // Select all by default — the consultant's Workflow C
