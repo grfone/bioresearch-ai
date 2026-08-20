@@ -35,7 +35,6 @@ import { AddPapersPanel } from '../components/AddPapersPanel';
 import { AdvancedSearchModal } from '../components/AdvancedSearchModal';
 import { WorkspaceEmptyState } from '../components/WorkspaceEmptyState';
 import { WorkspaceStatusBar } from '../components/WorkspaceStatusBar';
-import { EvidenceComparisonPanel } from '../components/EvidenceComparisonPanel';
 import {
   AlertCircle,
   BookOpen,
@@ -286,13 +285,22 @@ export const Workspace: React.FC = () => {
         </div>
       )}
 
-      {/* Evidence Comparison */}
-      <div className="mb-6">
-        <EvidenceComparisonPanel
-          workspaceId={currentWorkspace.workspace_id}
-          hasComparison={currentWorkspace.has_evidence_comparison}
-        />
-      </div>
+      {/* Evidence Comparison used to render here, but the
+          COMPARE action is now bundled into REPORT (the
+          orchestrator auto-runs summarise + compare as
+          part of the one-click report flow -- see ADR-008).
+          The COMPARE-only panel had no user after that, and
+          its empty-state ("No cross-paper comparison yet.
+          Run the COMPARE action to generate one from the
+          workspace's papers.") would now be confusing: the
+          panel renders but the action no longer exists in
+          the action bar. We keep the underlying data on
+          the workspace model -- ``has_evidence_comparison``
+          is still set by the auto-compare inside
+          ``WorkspaceOrchestrator.report`` -- but the panel
+          is no longer surfaced. If a future feature needs
+          to inspect the comparison in isolation, we can
+          re-mount this with a different surface. */}
 
       {/* Literature Search + Papers List, wrapped in a ref so the
           empty-state cards above can scroll into view. */}
