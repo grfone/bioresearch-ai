@@ -105,6 +105,39 @@ export const Home: React.FC = () => {
 
   return (
     <div className="page section min-h-screen flex flex-col items-center justify-center">
+      {/* Full-screen loader overlay.
+
+          Mirrors the ``Report`` page's loader (see
+          ``pages/Report.tsx``): a centered spinner with a
+          status label. We show this the moment the user
+          submits the form, BEFORE the create + search
+          network round-trips finish. The button text
+          ("Creating…") inside the form is not enough
+          feedback for a 6-12 second wait -- the user
+          needs to know the app is actively working.
+
+          The overlay disappears the moment React Router
+          unmounts this page (after the
+          ``navigate("/workspace/...")`` call below). We
+          do NOT need a separate setTimeout because the
+          component is replaced synchronously by the
+          router transition. */}
+      {loading && (
+        <div
+          className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm
+                     flex items-center justify-center"
+          role="status"
+          aria-live="polite"
+          aria-label="Creating workspace and searching literature"
+        >
+          <div className="text-center">
+            <div className="spinner mx-auto mb-4" />
+            <p className="text-secondary">
+              Creating workspace and searching literature…
+            </p>
+          </div>
+        </div>
+      )}
       <div className="max-w-2xl w-full text-center">
         {/* Hero */}
         <div className="mb-12 animate-fade-up">
