@@ -33,6 +33,13 @@ import { useWorkspaceStore } from '../state/workspaceStore';
 import type { Paper } from '../models/paper';
 
 interface LiteratureSearchProps {
+  /** The workspace to add papers to. Required so the
+   *  "Add selected" action can route through the FSM-aware
+   *  ``POST /workspaces/{id}/papers/bulk`` endpoint, which
+   *  persists papers server-side and updates the workspace
+   *  FSM state -- instead of the legacy flow that pushed
+   *  papers into local Zustand state only. */
+  workspaceId: string;
   /** Initial question to pre-fill the search input */
   initialQuery?: string;
   /** Callback fired after a successful batch add (the user
@@ -47,6 +54,7 @@ interface LiteratureSearchProps {
 }
 
 export const LiteratureSearch: React.FC<LiteratureSearchProps> = ({
+  workspaceId,
   initialQuery = '',
   onSelectComplete,
   inputRef,
@@ -59,7 +67,7 @@ export const LiteratureSearch: React.FC<LiteratureSearchProps> = ({
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [committing, setCommitting] = useState(false);
 
-  const addPapers = useWorkspaceStore((state) => state.addPapersToCurrent);
+  const setCurrentWorkspace = useWorkspaceStore((state) => state.setCurrentWorkspace);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,6 +115,7 @@ export const LiteratureSearch: React.FC<LiteratureSearchProps> = ({
     }
   };
 
+
   const handleAddSelected = async () => {
     if (!results || selected.size === 0) {
       toast.error('Pick at least one paper to add.');
@@ -115,18 +124,27 @@ export const LiteratureSearch: React.FC<LiteratureSearchProps> = ({
     setCommitting(true);
     try {
       const papersToAdd = results.filter((_, i) => selected.has(i));
-      // The backend dedupes by PMID/DOI, so we don't strictly
-      // need to filter here, but doing so saves a round trip
-      // for papers the user deselected.
-      addPapers(papersToAdd);
+      // Persist via the FSM-aware bulk endpoint. The backend
+      // dedupes by PMID/DOI, persists the papers on the
+      // workspace, and returns the updated workspace state --
+      // the workspace now has the new papers and the FSM has
+      // transitioned to PAPERS_RETRIEVED, so ``report``
+      // appears in ``allowed_actions`` and the Generate Report
+      // button is enabled.
+      const updated = await api.addPapersBulk(workspaceId, papersToAdd);
+      setCurrentWorkspace(updated);
+      const addedCount = updated.total_papers;
       toast.success(
-        `Added ${papersToAdd.length} paper${papersToAdd.length === 1 ? '' : 's'}.`,
+        `Added ${addedCount} paper${addedCount === 1 ? '' : 's'}.`,
       );
-      onSelectComplete?.(papersToAdd.length);
+      onSelectComplete?.(addedCount);
       // Clear the search results so the user sees the workspace
       // updated. The query stays so they can re-run if they want.
       setResults(null);
       setSelected(new Set());
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to add papers: ${message}`);
     } finally {
       setCommitting(false);
     }

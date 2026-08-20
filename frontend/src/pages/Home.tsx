@@ -65,7 +65,6 @@ export const Home: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const setCurrentWorkspace = useWorkspaceStore((s) => s.setCurrentWorkspace);
-  const addPapersToCurrent = useWorkspaceStore((s) => s.addPapersToCurrent);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,9 +78,21 @@ export const Home: React.FC = () => {
       const workspace = await api.createWorkspace({ question: question.trim() });
       setCurrentWorkspace(workspace);
 
-      // 2. Auto-search with the same question
-      const searchResult = await api.search({ question: question.trim() });
-      addPapersToCurrent(searchResult.papers);
+      // 2. Auto-search with the same question via the
+      //    FSM-aware endpoint. The legacy ``POST /search``
+      //    returns hits but does NOT mutate the workspace
+      //    FSM, which left Generate Report greyed out even
+      //    with 20 papers loaded. ``runSearchAction`` goes
+      //    through ``POST /workspaces/{id}/actions/search``
+      //    so the returned workspace reflects
+      //    PAPERS_RETRIEVED with ``report`` in
+      //    ``allowed_actions`` -- ready for the user to
+      //    click Generate Report on the next page.
+      const updated = await api.runSearchAction(
+        workspace.workspace_id,
+        question.trim(),
+      );
+      setCurrentWorkspace(updated);
 
       // 3. Navigate to workspace
       navigate(`/workspace/${workspace.workspace_id}`);

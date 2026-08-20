@@ -61,8 +61,25 @@ interface UseWorkspaceResult {
   fetchWorkspace: (id: string) => Promise<void>;
   /** Update the workspace (question). */
   updateWorkspace: (request: WorkspaceRequest) => Promise<void>;
-  /** Search literature and add papers to the current workspace. */
-  searchAndAddPapers: (question: string) => Promise<{ papers: unknown[]; total_results: number }>;
+  /**
+   * Search literature and advance the workspace FSM to
+   * ``PAPERS_RETRIEVED``.
+   *
+   * Routes through the FSM-aware endpoint
+   * ``POST /workspaces/{id}/actions/search`` rather than the
+   * legacy ``POST /search``. The legacy endpoint returns
+   * search hits but does NOT mutate the workspace, which left
+   * the FSM in ``CREATED`` even though ``total_papers`` was
+   * 20 -- the Generate Report button stayed greyed out. The
+   * FSM-aware endpoint persists papers on the server and
+   * returns the updated workspace state, so
+   * ``allowed_actions`` immediately includes ``report`` (the
+   * new "one-click report from PAPERS_RETRIEVED" path -- see
+   * ADR-008).
+   */
+  searchAndAddPapers: (
+    question: string,
+  ) => Promise<WorkspaceResponse>;
   /** Run a single FSM action. Refreshes the workspace on success. */
   runAction: (
     action: WorkspaceAction,
@@ -157,9 +174,18 @@ export function useWorkspace(
       setLoading(true);
       setError(null);
       try {
-        const searchResult = await api.search({ question });
-        addPapersToCurrent(searchResult.papers);
-        return searchResult;
+        // FSM-aware search: persists papers server-side and
+        // advances the workspace to PAPERS_RETRIEVED. The
+        // returned workspace is the canonical post-search
+        // state -- its ``allowed_actions`` list reflects the
+        // new state, so the Generate Report button is
+        // enabled without a follow-up fetch.
+        const data = await api.runSearchAction(
+          workspaceId,
+          question,
+        );
+        setCurrentWorkspace(data);
+        return data;
       } catch (err) {
         const errorObj = err instanceof Error ? err : new Error(String(err));
         setError(errorObj);
@@ -168,7 +194,7 @@ export function useWorkspace(
         setLoading(false);
       }
     },
-    [workspaceId, addPapersToCurrent],
+    [workspaceId, setCurrentWorkspace],
   );
 
   // Run a single FSM action. Refreshes the workspace on success.

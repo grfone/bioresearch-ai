@@ -21,6 +21,12 @@ import { LiteratureSearch } from './LiteratureSearch';
 vi.mock('../api/client', () => ({
   api: {
     search: vi.fn(),
+    // ``LiteratureSearch`` now routes the "Add selected"
+    // action through the FSM-aware ``addPapersBulk`` endpoint
+    // (so the server's view of the workspace stays in sync
+    // with the UI). We expose it here as a vi.fn() so tests
+    // can assert it's called with the right payload.
+    addPapersBulk: vi.fn(),
   },
 }));
 
@@ -28,12 +34,13 @@ vi.mock('../state/workspaceStore', () => ({
   // The real ``useWorkspaceStore`` is a Zustand hook that
   // accepts a selector function. The selector receives the
   // full state and returns a slice. The component reads
-  // ``state.addPapersToCurrent`` so we expose it through a
+  // ``state.setCurrentWorkspace`` so we expose it through
   // a fake selector.
   useWorkspaceStore: (selector: (state: any) => any) => {
     const fakeState = {
       addPapersToCurrent: vi.fn(),
       removePaper: vi.fn(),
+      setCurrentWorkspace: vi.fn(),
     };
     return selector(fakeState);
   },
@@ -49,7 +56,10 @@ vi.mock('../state/toastStore', () => ({
 import { api } from '../api/client';
 import { toast } from '../state/toastStore';
 
-const mockApi = api as unknown as { search: ReturnType<typeof vi.fn> };
+const mockApi = api as unknown as {
+  search: ReturnType<typeof vi.fn>;
+  addPapersBulk: ReturnType<typeof vi.fn>;
+};
 
 const samplePapers = [
   {
@@ -79,6 +89,24 @@ const samplePapers = [
 describe('LiteratureSearch', () => {
   beforeEach(() => {
     mockApi.search.mockReset();
+    mockApi.addPapersBulk.mockReset();
+    // Default: the bulk endpoint succeeds and returns a
+    // workspace that mirrors the papers sent in. Tests that
+    // exercise different bulk paths can override this.
+    mockApi.addPapersBulk.mockImplementation(
+      (_workspaceId: string, papers: unknown[]) => {
+        return Promise.resolve({
+          workspace_id: 'test-workspace',
+          question: 'x',
+          state: 'PAPERS_RETRIEVED',
+          papers: papers as any,
+          total_papers: Array.isArray(papers) ? papers.length : 0,
+          allowed_actions: ['report', 'summarize', 'search'],
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        });
+      },
+    );
   });
 
   afterEach(() => {
@@ -88,7 +116,7 @@ describe('LiteratureSearch', () => {
   describe('search submission', () => {
     it('does not call api.search when the input is empty', async () => {
       const user = userEvent.setup();
-      render(<LiteratureSearch initialQuery="" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="" />);
 
       const submit = screen.getByRole('button', { name: /Search/i });
       await user.click(submit);
@@ -105,7 +133,7 @@ describe('LiteratureSearch', () => {
       });
 
       const user = userEvent.setup();
-      render(<LiteratureSearch initialQuery="alzheimer" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="alzheimer" />);
 
       await user.click(screen.getByRole('button', { name: /Search/i }));
 
@@ -121,7 +149,7 @@ describe('LiteratureSearch', () => {
       });
 
       const user = userEvent.setup();
-      render(<LiteratureSearch initialQuery="alzheimer" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="alzheimer" />);
 
       await user.click(screen.getByRole('button', { name: /Search/i }));
 
@@ -135,7 +163,7 @@ describe('LiteratureSearch', () => {
       mockApi.search.mockRejectedValue(new Error('PubMed is down'));
 
       const user = userEvent.setup();
-      render(<LiteratureSearch initialQuery="alzheimer" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="alzheimer" />);
 
       await user.click(screen.getByRole('button', { name: /Search/i }));
 
@@ -155,7 +183,7 @@ describe('LiteratureSearch', () => {
       });
 
       const user = userEvent.setup();
-      render(<LiteratureSearch initialQuery="alzheimer" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="alzheimer" />);
 
       await user.click(screen.getByRole('button', { name: /Search/i }));
 
@@ -176,7 +204,7 @@ describe('LiteratureSearch', () => {
       });
 
       const user = userEvent.setup();
-      render(<LiteratureSearch initialQuery="alzheimer" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="alzheimer" />);
 
       await user.click(screen.getByRole('button', { name: /Search/i }));
 
@@ -204,7 +232,7 @@ describe('LiteratureSearch', () => {
       });
 
       const user = userEvent.setup();
-      render(<LiteratureSearch initialQuery="alzheimer" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="alzheimer" />);
 
       await user.click(screen.getByRole('button', { name: /Search/i }));
 
@@ -231,7 +259,7 @@ describe('LiteratureSearch', () => {
       });
 
       const user = userEvent.setup();
-      render(<LiteratureSearch initialQuery="alzheimer" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="alzheimer" />);
 
       await user.click(screen.getByRole('button', { name: /Search/i }));
 
@@ -258,7 +286,7 @@ describe('LiteratureSearch', () => {
       });
 
       const user = userEvent.setup();
-      render(<LiteratureSearch initialQuery="alzheimer" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="alzheimer" />);
 
       await user.click(screen.getByRole('button', { name: /Search/i }));
 
@@ -284,7 +312,7 @@ describe('LiteratureSearch', () => {
       const user = userEvent.setup();
       const onSelectComplete = vi.fn();
       render(
-        <LiteratureSearch
+        <LiteratureSearch workspaceId="test-workspace"
           initialQuery="alzheimer"
           onSelectComplete={onSelectComplete}
         />,
@@ -312,7 +340,7 @@ describe('LiteratureSearch', () => {
       });
 
       const user = userEvent.setup();
-      render(<LiteratureSearch initialQuery="alzheimer" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="alzheimer" />);
 
       await user.click(screen.getByRole('button', { name: /Search/i }));
 
@@ -337,7 +365,7 @@ describe('LiteratureSearch', () => {
       });
 
       const user = userEvent.setup();
-      render(<LiteratureSearch initialQuery="alzheimer" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="alzheimer" />);
 
       await user.click(screen.getByRole('button', { name: /Search/i }));
 
@@ -350,13 +378,13 @@ describe('LiteratureSearch', () => {
 
   describe('shortcut hint', () => {
     it('renders the PC shortcut hint by default', () => {
-      render(<LiteratureSearch initialQuery="" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="" />);
       const kbd = document.querySelector('.literature-search-shortcut-hint kbd');
       expect(kbd?.textContent).toBe('Ctrl+K');
     });
 
     it('renders the Mac shortcut hint when shortcutHint="⌘K"', () => {
-      render(<LiteratureSearch initialQuery="" shortcutHint="⌘K" />);
+      render(<LiteratureSearch workspaceId="test-workspace" initialQuery="" shortcutHint="⌘K" />);
       const kbd = document.querySelector('.literature-search-shortcut-hint kbd');
       expect(kbd?.textContent).toBe('⌘K');
     });
