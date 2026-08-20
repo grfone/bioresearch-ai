@@ -63,7 +63,7 @@ The goal is **not to replace scientists**, but to help them navigate biomedical 
 
 | Feature | Description |
 |----------|-------------|
-| 🔍 Literature Search | Search PubMed using natural language |
+| 🔍 Literature Search | Search PubMed, OpenAlex, Europe PMC, and bioRxiv in parallel from a single natural-language query |
 | 📄 Paper Summaries | Generate concise AI summaries for each publication |
 | 🧠 Evidence Synthesis | Combine evidence from multiple studies |
 | 📚 Citation Awareness | Every report references the supporting papers |
@@ -71,6 +71,8 @@ The goal is **not to replace scientists**, but to help them navigate biomedical 
 | 🎨 React Frontend | Modern and responsive user interface |
 | 🧩 Modular LLM Providers | Easily switch between multiple AI providers |
 | 💾 Persistent Workspaces | Save and continue research sessions |
+| 📑 PDF Upload | Drop a PDF, the DOI/PMID on the first page is auto-extracted and resolved |
+| 🔌 Multi-worker Ready | Set `CACHE_BACKEND=redis` to share the abstract-enricher cache across uvicorn workers ([ADR-003](docs/adr/ADR-003-pluggable-cache-backend.md)) |
 
 ---
 
@@ -424,6 +426,39 @@ bioresearch-ai/
 
 ---
 
+# Design decisions
+
+We capture every non-trivial architectural decision in an
+Architecture Decision Record (ADR). ADRs document the context,
+the chosen approach, the alternatives considered, and the
+consequences — both positive and negative. Future contributors
+read them to understand *why* the system works the way it does.
+
+| ADR | Decision | Status |
+|-----|----------|--------|
+| [ADR-001](docs/adr/ADR-001-adopt-clean-architecture.md) | Adopt Clean Architecture | Accepted |
+| [ADR-002](docs/adr/ADR-002-adopt-domain-driven-design) | Adopt Domain-Driven Design | Accepted |
+| [ADR-003](docs/adr/ADR-003-pluggable-cache-backend.md) | Pluggable cache backend (in-memory vs Redis) | Accepted |
+| [ADR-004](docs/adr/ADR-004-section-based-abstract-extraction.md) | Section-based abstract extraction | Accepted |
+| [ADR-005](docs/adr/ADR-005-multi-identity-paper-dedup.md) | Multi-identity paper deduplication (PMID/DOI/title) | Accepted |
+| [ADR-006](docs/adr/ADR-006-parallel-multi-source-search.md) | Parallel multi-source literature search | Accepted |
+| [ADR-007](docs/adr/ADR-007-configurable-pdf-upload-cap.md) | Configurable PDF upload size cap (50 MB default) | Accepted |
+
+Three ADRs are particularly worth reading for new
+contributors:
+
+- **[ADR-003](docs/adr/ADR-003-pluggable-cache-backend.md)** — the
+  in-memory vs Redis cache split and the multi-worker
+  fragmentation fix.
+- **[ADR-005](docs/adr/ADR-005-multi-identity-paper-dedup.md)** —
+  why a paper is deduplicated by PMID/DOI/title but title
+  is a *weak* signal.
+- **[ADR-006](docs/adr/ADR-006-parallel-multi-source-search.md)** —
+  why literature search uses `ThreadPoolExecutor` instead
+  of rewriting every searcher as async.
+
+---
+
 # Documentation
 
 Additional documentation is available in:
@@ -433,6 +468,7 @@ Additional documentation is available in:
 - 🤝 CONTRIBUTING.md
 - 🔒 SECURITY.md
 - 📝 CHANGELOG.md
+- 🏛️ [ADRs](docs/adr/README.md) — Architecture Decision Records
 
 ---
 
