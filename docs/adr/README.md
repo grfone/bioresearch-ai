@@ -22,6 +22,8 @@ These documents serve as long-term project documentation and help future contrib
   `ThreadPoolExecutor` for parallel fan-out; OpenAlex no longer blocks the other sources.
 - [ADR-007: Configurable PDF upload size cap](ADR-007-configurable-pdf-upload-cap.md) —
   `PDF_UPLOAD_MAX_BYTES` env var, 50 MB default, 200 MB hard cap.
+- [ADR-008: One-click report from PAPERS_RETRIEVED](ADR-008-one-click-report-from-papers-retrieved.md) —
+  drop the "Summarize first" gate; orchestrator auto-summarises when needed.
 
 ## Every ADR follows the same format:
 
