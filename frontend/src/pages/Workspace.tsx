@@ -275,15 +275,19 @@ export const Workspace: React.FC = () => {
         onOpenAdvancedSearch={() => setAdvancedSearchOpen(true)}
       />
 
-      {/* Summary */}
-      {currentWorkspace.summary && (
-        <div className="glass-panel mb-6">
-          <h4 className="text-sm font-semibold uppercase text-muted tracking-wider mb-2">
-            Evidence Summary
-          </h4>
-          <p className="text-secondary leading-relaxed">{currentWorkspace.summary}</p>
-        </div>
-      )}
+      {/* Evidence Summary used to render here, but the
+          user asked to drop it: the summary was a duplicate
+          preview of what the final Report page already shows,
+          and it sat between the action bar and the literature
+          list as a long block that the user had to scroll
+          past on every visit. The ``session.summary`` data
+          is still set on the workspace model by the
+          auto-summarise step in ``WorkspaceOrchestrator.report``
+          (see ADR-008) and surfaces in the dedicated
+          ``/report/{id}`` page. If a future feature needs
+          to preview the summary inline, we can re-mount
+          this with a different surface (e.g. a collapsible
+          detail panel). */}
 
       {/* Evidence Comparison used to render here, but the
           COMPARE action is now bundled into REPORT (the
