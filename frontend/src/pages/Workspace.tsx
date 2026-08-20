@@ -99,26 +99,27 @@ export const Workspace: React.FC = () => {
     }
   };
 
-  const handleGenerateReport = async () => {
-    // The workspace FSM transitions to REPORTED on success;
-    // a REPORTED workspace exposes a navigable report at
-    // /report/{id}. We always navigate after a successful
-    // report run, regardless of the pre-run allowed_actions
-    // (the user may be retrying from REPORTED with a fresh
-    // question, in which case the FSM cycles back to
-    // PAPERS_RETRIEVED and the navigation may briefly point
-    // at the previous report).
-    try {
-      await runAction('report');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      toast.error(`Report generation failed: ${message}`);
-      return;
-    }
-    // Navigation is unconditional on success. The Report
-    // page itself checks the workspace state and shows an
-    // "old report" banner if the workspace is no longer
-    // REPORTED, so we don't need to gate here.
+  const handleGenerateReport = () => {
+    // Navigate immediately so the user sees the
+    // ``Report`` page's loading screen the instant they
+    // click "Generate Report". Previously we awaited the
+    // full ``runAction('report')`` round-trip here (which
+    // takes 11-43s because the orchestrator auto-summarises
+    // + auto-compares + reports inside one FSM action --
+    // see ADR-008). The user spent that whole window
+    // staring at the Workspace page with no feedback.
+    //
+    // The Report page now owns the generation lifecycle:
+    // on mount it ``fetchWorkspace``s, then auto-triggers
+    // ``generateReport``. The legacy endpoint
+    // (``POST /reports/generate``) is also FSM-aware --
+    // it delegates to ``orchestrator.report`` which
+    // auto-summarises when ``session.summary is None``.
+    //
+    // The error path is now: if the generation fails, the
+    // Report page's existing error UI surfaces the message
+    // and offers a Retry button. We do NOT need a try/
+    // catch here because we are not awaiting anything.
     navigate(`/report/${workspaceId}`);
   };
 
