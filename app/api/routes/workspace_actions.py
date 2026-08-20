@@ -90,10 +90,12 @@ from app.api.schemas.workspace_status_response import (
 from app.application.services.workspace_orchestrator import (
     WorkspaceOrchestrator,
 )
+from app.config.literature import literature_settings
 from app.config.container import (
     get_identifier_resolver,
     get_workspace_orchestrator,
 )
+from app.config.literature import literature_settings
 from app.core.enums.workspace_state import WorkspaceAction
 from app.core.exceptions import (
     CitationValidationError,
@@ -745,10 +747,21 @@ def resolve_and_add_paper(
 # ----------------------------------------------------------------------
 
 
-# 10 MB is a reasonable cap for a single research paper. Anything
-# larger is probably a thesis or a book — those are different
-# workflows and we surface a clear error.
-_PDF_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
+# PDF upload size cap. The previous hardcoded 10 MB cap was too
+# small for legitimate research papers (a 21 MB thesis chapter
+# is a perfectly normal input). 50 MB is the default; operators
+# can override via ``PDF_UPLOAD_MAX_BYTES`` in .env.
+#
+# Note: this constant is set at startup from
+# ``LiteratureSettings.pdf_upload_max_bytes``. The hard cap
+# (``_PDF_UPLOAD_MAX_BYTES_HARD_CAP``) below prevents a
+# misconfigured env var from opening the door to resource
+# exhaustion -- a 10 GB file would OOM the container.
+_PDF_UPLOAD_MAX_BYTES_HARD_CAP = 200 * 1024 * 1024  # 200 MB
+_PDF_UPLOAD_MAX_BYTES: int = min(
+    _PDF_UPLOAD_MAX_BYTES_HARD_CAP,
+    max(0, int(literature_settings.pdf_upload_max_bytes)),
+)
 
 
 @router.post(
@@ -761,7 +774,9 @@ async def add_paper_from_pdf(
     file: UploadFile = File(
         ...,
         description="PDF file to extract identifiers from. "
-                    "Max 10 MB. The first page is scanned for "
+                    "Max 50 MB by default; configurable via the "
+                    "PDF_UPLOAD_MAX_BYTES env var (hard ceiling "
+                    "200 MB). The first page is scanned for "
                     "DOI (10.xxxx/...) and PMID patterns.",
     ),
     resolver: IdentifierResolver = Depends(get_identifier_resolver),
@@ -774,8 +789,9 @@ async def add_paper_from_pdf(
 
     Returns HTTP 422 if the PDF can't be parsed, has no DOI/PMID
     on the first page, or the identifier fails to resolve. Returns
-    HTTP 413 if the file is larger than 10 MB. Returns HTTP 409 if
-    the current state doesn't allow ``add_paper``.
+    HTTP 413 if the file is larger than the configured cap
+    (default 50 MB, max 200 MB). Returns HTTP 409 if the current
+    state doesn't allow ``add_paper``.
     """
     if file.content_type and not file.content_type.startswith("application/pdf"):
         raise HTTPException(

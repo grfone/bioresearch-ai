@@ -131,6 +131,37 @@ class LiteratureSettings(BaseSettings):
         default=256,
         alias="CACHE_SIZE",
     )
+    # Maximum PDF upload size in bytes. The previous
+    # hardcoded 10 MB cap was too small for legitimate
+    # research papers (a 21 MB file is a perfectly normal
+    # thesis chapter or annotated review). 50 MB is the
+    # new default; operators can override via the env
+    # var. We don't allow unlimited uploads because a
+    # malicious user could trivially OOM the container
+    # with a 10 GB file -- the upper bound is hard-coded
+    # at 200 MB (``_PDF_UPLOAD_MAX_BYTES_HARD_CAP`` in
+    # the route) so an unfortunate env var can't open
+    # the door to resource exhaustion.
+    pdf_upload_max_bytes: int = Field(
+        default=50 * 1024 * 1024,  # 50 MB
+        alias="PDF_UPLOAD_MAX_BYTES",
+    )
+
+    # Maximum PDF upload size in bytes. The previous
+    # hardcoded 10 MB cap was too small for legitimate
+    # research papers (a 21 MB file is a perfectly normal
+    # thesis chapter or annotated review). 50 MB is the
+    # new default; operators can override via the env
+    # var. We don't allow unlimited uploads because a
+    # malicious user could trivially OOM the container
+    # with a 10 GB file -- the upper bound is hard-coded
+    # at 200 MB (``_PDF_UPLOAD_MAX_BYTES_HARD_CAP`` in
+    # the route) so an unfortunate env var can't open
+    # the door to resource exhaustion.
+    pdf_upload_max_bytes: int = Field(
+        default=50 * 1024 * 1024,  # 50 MB
+        alias="PDF_UPLOAD_MAX_BYTES",
+    )
     # Only used when ``CACHE_BACKEND=redis``. Format:
     # ``redis://host:port/db``. If empty when
     # ``CACHE_BACKEND=redis``, ``make_cache`` raises
