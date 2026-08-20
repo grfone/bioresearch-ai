@@ -44,16 +44,32 @@ def test_workspace_renders_add_papers_panel() -> None:
     )
 
 
-def test_workspace_action_bar_is_grouped_into_rows() -> None:
-    """The action bar must be split into Retrieve / Process /
-    Lifecycle rows so the primary action is prominent at any
-    state."""
+def test_workspace_action_bar_is_generated_report_cta_and_dropdown() -> None:
+    """The action bar must be a minimal pair of controls: a prominent
+    Generate Report primary CTA (the user has collected papers,
+    their next step is the final report) and an Advanced Search
+    dropdown toggle. Earlier versions had a 3-row
+    Retrieve / Process / Lifecycle layout that the user requested
+    we strip down ("Let's keep things simple").
+
+    The bar's markup must:
+      - reference the dedicated WorkspaceActionBar component
+        (so the bar is testable in isolation -- see
+        WorkspaceActionBar.test.tsx);
+      - NOT pin a tier system ("Process", "Lifecycle", or row
+        labels) on the workspace page itself;
+      - NOT contain the old 3-row class ``lab-bench-action-row``.
+    """
     text = WORKSPACE_TSX.read_text()
-    for label in ("Retrieve", "Process", "Lifecycle"):
-        assert label in text, (
-            f"action bar must have a '{label}' row label so the "
-            "primary action is visible at each FSM state"
-        )
+    assert "WorkspaceActionBar" in text, (
+        "Workspace.tsx must delegate to <WorkspaceActionBar /> so "
+        "the bar is a single, well-tested component."
+    )
+    # The obsolete 3-row model must be gone.
+    assert "lab-bench-action-row" not in text, (
+        "the obsolete 3-row action-bar model must not remain in "
+        "Workspace.tsx"
+    )
 
 
 def test_workspace_does_not_hide_add_papers_behind_a_toggle() -> None:
@@ -127,28 +143,40 @@ def test_workspace_renders_three_zone_empty_state() -> None:
 
 
 
-def test_workspace_action_bar_uses_two_tier_model() -> None:
-    """The action bar must follow the consultant's two-tier model:
-    primary tier (Search PubMed) always visible, secondary tier
-    (Summarize / Compare / Generate Report / Complete / Retry /
-    Clear All) hidden behind a toggle that auto-expands when
-    papers exist.
+def test_workspace_action_bar_uses_minimal_one_click_model() -> None:
+    """The action bar must follow the simplified "one click to
+    report" model: Generate Report is the only primary CTA,
+    Advanced Search is the only collapsible element, and the
+    old secondary tier (Summarize / Compare / Complete / Retry /
+    Clear All) plus its ``showProcessingActions`` toggle are
+    gone. The user explicitly removed them ("Let's keep
+    things simple").
+
+    The bar's markup must:
+      - NOT reference ``showProcessingActions`` (the toggle is
+        gone);
+      - NOT mention the secondary tier's container class
+        ``lab-bench-action-bar-secondary``;
+      - still render the primary tier
+        (``lab-bench-action-bar-primary``) because that's the
+        container the new minimal layout lives in.
     """
     text = WORKSPACE_TSX.read_text()
-    assert "showProcessingActions" in text, (
-        "Workspace.tsx must gate the secondary action tier behind "
-        "a state toggle so the bar stays clean at CREATED"
+    assert "showProcessingActions" not in text, (
+        "Workspace.tsx must not have a showProcessingActions "
+        "toggle -- the user removed the secondary tier."
     )
-    assert "lab-bench-action-bar-primary" in text, (
-        "primary tier must use the lab-bench-action-bar-primary "
-        "className"
+    assert "lab-bench-action-bar-secondary" not in text, (
+        "the secondary tier must not be rendered in "
+        "Workspace.tsx -- it was removed when the bar was "
+        "simplified"
     )
-    assert "lab-bench-action-bar-secondary" in text, (
-        "secondary tier must use the lab-bench-action-bar-secondary "
-        "className and be hidden when collapsed"
-    )
-    # The old 3-row model must be gone.
-    assert "lab-bench-action-row" not in text, (
-        "the obsolete 3-row action-bar model must not remain in "
-        "Workspace.tsx"
+    # The action bar's container class lives in the dedicated
+    # WorkspaceActionBar component (not in Workspace.tsx --
+    # that would duplicate the markup). The dedicated
+    # component's tests pin the className; we just verify the
+    # page references the component.
+    assert "WorkspaceActionBar" in text, (
+        "the workspace page must reference <WorkspaceActionBar /> "
+        "so the bar's markup is testable in isolation"
     )

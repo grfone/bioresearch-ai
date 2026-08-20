@@ -250,19 +250,32 @@ def test_summarize_action_advances_state(app_with_stubs) -> None:
 
 
 def test_illegal_action_returns_409(app_with_stubs) -> None:
-    """The FSM guard rejects illegal actions with 409 + allowed list."""
+    """The FSM guard rejects illegal actions with 409 + allowed list.
+
+    Historically this test pinned the ``REPORT`` action from
+    ``PAPERS_RETRIEVED`` as illegal. That gate has been
+    intentionally removed (see ADR-008): the orchestrator now
+    auto-summarises when ``summary is None`` so the user can
+    get a report in one click. We now use a different
+    ``(state, action)`` pair that is still illegal -- the
+    ``COMPLETE`` action from ``PAPERS_RETRIEVED``.
+    """
     app, _, workspaces = app_with_stubs
     client = TestClient(app)
     wid = next(iter(workspaces))
-    # Session is in PAPERS_RETRIEVED — REPORT is illegal.
-    response = client.post(f"/workspaces/{wid}/actions/report")
+    # Session is in PAPERS_RETRIEVED -- COMPLETE is illegal
+    # (a workspace can only be completed after the report has
+    # been generated).
+    response = client.post(f"/workspaces/{wid}/actions/complete")
     assert response.status_code == 409
     body = response.json()
     detail = body["detail"]
     assert detail["error"] == "illegal_workspace_action"
     assert detail["current_state"] == "PAPERS_RETRIEVED"
-    assert detail["action"] == "report"
-    assert "summarize" in detail["allowed_actions"]
+    assert detail["action"] == "complete"
+    # The list of allowed actions should NOT include ``complete``
+    # for a workspace in PAPERS_RETRIEVED.
+    assert "complete" not in detail["allowed_actions"]
 
 
 def test_compare_action_endpoint_reachable(app_with_stubs) -> None:

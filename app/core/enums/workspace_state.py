@@ -238,6 +238,14 @@ TRANSITIONS: dict[WorkspaceState, dict[WorkspaceAction, WorkspaceState]] = {
     WorkspaceState.PAPERS_RETRIEVED: {
         WorkspaceAction.SEARCH: WorkspaceState.SEARCHING,
         WorkspaceAction.SUMMARIZE: WorkspaceState.SUMMARIZING,
+        # ``REPORT`` is allowed from ``PAPERS_RETRIEVED`` so a
+        # user with papers but no summary can still get a
+        # report with one click. The orchestrator
+        # (``WorkspaceOrchestrator.report``) auto-runs the
+        # summarisation step when ``session.summary is None``;
+        # the state machine just records the user-visible
+        # transition. See ADR-008 for the rationale.
+        WorkspaceAction.REPORT: WorkspaceState.REPORTING,
         WorkspaceAction.REMOVE_PAPER: WorkspaceState.PAPERS_RETRIEVED,
         WorkspaceAction.ADD_PAPER: WorkspaceState.PAPERS_RETRIEVED,
     },

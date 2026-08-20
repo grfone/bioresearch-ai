@@ -668,6 +668,16 @@ class WorkspaceOrchestrator:
         is generated from the workspace's *current* papers, not
         from a fresh PubMed search.
 
+        One-click from PAPERS_RETRIEVED
+        ------------------------------
+        ``REPORT`` is now a legal action from ``PAPERS_RETRIEVED``
+        (see ADR-008). The user can click "Generate Report" without
+        first running "Summarize". When ``session.summary is None``
+        we transparently call :meth:`summarize` first so the
+        report generation always has a real summary to work from
+        -- the alternative (a vacuous report from no summary)
+        would degrade quality.
+
         Parameters
         ----------
         workspace_id : UUID
@@ -679,12 +689,31 @@ class WorkspaceOrchestrator:
             The updated workspace.
         """
         session = self._repository.get(workspace_id)
+
+        # Auto-summarise when the user skipped the explicit
+        # Summarize step. This makes the
+        # ``PAPERS_RETRIEVED -> REPORTED`` transition a single
+        # action from the user's perspective; the state machine
+        # records the intermediate ``SUMMARIZING -> SUMMARIZED``
+        # transitions for audit (see
+        # ``tests/unit/test_workspace_orchestrator_report.py``).
         if session.summary is None:
-            raise IllegalWorkspaceActionError(
-                current_state=session.state.value,
-                action=WorkspaceAction.REPORT.value,
-                allowed=[a.value for a in allowed_actions(session.state)],
+            self.summarize(workspace_id)
+            # Refresh the local copy so the subsequent
+            # ``_enter_action`` reads the post-summarise
+            # state, not the pre-summarise state.
+            session = self._repository.get(workspace_id)
+            # ``summarize()`` either succeeds (summary populated,
+            # state == SUMMARIZED) or raises -- in the success
+            # path this assertion is a load-bearing invariant.
+            # ``assert`` is intentional: Pyright narrows
+            # ``session.summary`` from ``Summary | None`` to
+            # ``Summary`` for the call below.
+            assert session.summary is not None, (
+                f"summarize() returned without populating "
+                f"summary for workspace {workspace_id}"
             )
+
         self._enter_action(session, WorkspaceAction.REPORT)
 
         try:

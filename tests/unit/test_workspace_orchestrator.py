@@ -355,18 +355,62 @@ def test_report_uses_workspace_papers_not_research(
     assert papers_seen == ["111", "222"]
 
 
-def test_report_raises_when_no_summary(
+def test_report_auto_summarises_when_summary_missing(
     orchestrator: WorkspaceOrchestrator,
     repo: InMemoryRepository,
 ) -> None:
+    """One-click report from PAPERS_RETRIEVED.
+
+    Historically ``WorkspaceOrchestrator.report()`` raised
+    ``IllegalWorkspaceActionError`` when ``session.summary is
+    None``. Per ADR-008 the orchestrator now auto-summarises
+    first so the user can get a report with one click.
+
+    The new contract:
+
+      1. ``report()`` does NOT raise when ``summary is None``.
+      2. The orchestrator calls ``summarize()`` first
+         (the state machine records the intermediate
+         ``SUMMARIZING -> SUMMARIZED`` transitions).
+      3. The final state is ``REPORTED``.
+      4. The report generator sees a populated summary.
+    """
+    # Replace the orchestrator's summarise use case with one
+    # that uses a stub LLM (the fixture already has
+    # ``StubLLM()`` wired in). We construct a fresh
+    # ``SummarizePapersUseCase`` here so this test stays
+    # self-contained -- no monkeypatching.
+    class _MarkerLLM(LLMProvider):
+        """Stub LLM whose output lets us prove auto-summarise ran."""
+
+        def generate(self, prompt: Prompt):
+            return LLMResponse(
+                content="auto-summarise-marker",
+                model="stub",
+                prompt_tokens=1,
+                completion_tokens=1,
+                total_tokens=2,
+                finish_reason="stop",
+            )
+
+    orchestrator._summarize_use_case = SummarizePapersUseCase(_MarkerLLM())
+
     ws = ResearchSession(
         question=ResearchQuestion(question="x"),
         state=WorkspaceState.PAPERS_RETRIEVED,
     )
     ws.add_papers([_paper("111")])
     repo.create(ws)
-    with pytest.raises(IllegalWorkspaceActionError):
-        orchestrator.report(ws.id)
+
+    # Should NOT raise -- the orchestrator auto-summarises
+    # transparently and proceeds to the report step.
+    result = orchestrator.report(ws.id)
+
+    # Final state should be REPORTED, with summary populated.
+    assert result.state is WorkspaceState.REPORTED
+    assert result.summary is not None
+    # The marker proves the summarise step actually ran.
+    assert "auto-summarise-marker" in result.summary.text
 
 
 def test_complete_advances_to_completed(
