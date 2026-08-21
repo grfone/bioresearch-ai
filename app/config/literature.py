@@ -131,35 +131,39 @@ class LiteratureSettings(BaseSettings):
         default=256,
         alias="CACHE_SIZE",
     )
-    # Maximum PDF upload size in bytes. The previous
+    # Maximum PDF upload size in bytes. The original
     # hardcoded 10 MB cap was too small for legitimate
     # research papers (a 21 MB file is a perfectly normal
-    # thesis chapter or annotated review). 50 MB is the
-    # new default; operators can override via the env
-    # var. We don't allow unlimited uploads because a
-    # malicious user could trivially OOM the container
-    # with a 10 GB file -- the upper bound is hard-coded
-    # at 200 MB (``_PDF_UPLOAD_MAX_BYTES_HARD_CAP`` in
-    # the route) so an unfortunate env var can't open
-    # the door to resource exhaustion.
+    # thesis chapter or annotated review). The default is
+    # now 200 MB to accommodate large annotated reviews
+    # and book chapters; operators can lower it via the
+    # ``PDF_UPLOAD_MAX_BYTES`` env var if they need a
+    # tighter cap. We don't allow unlimited uploads
+    # because a malicious user could trivially OOM the
+    # container with a 10 GB file -- the upper bound is
+    # hard-coded at 200 MB (``_PDF_UPLOAD_MAX_BYTES_HARD_CAP``
+    # in the route) so an unfortunate env var cannot
+    # bypass the cap.
     pdf_upload_max_bytes: int = Field(
-        default=50 * 1024 * 1024,  # 50 MB
+        default=200 * 1024 * 1024,  # 200 MB
         alias="PDF_UPLOAD_MAX_BYTES",
     )
 
-    # Maximum PDF upload size in bytes. The previous
+    # Maximum PDF upload size in bytes. The original
     # hardcoded 10 MB cap was too small for legitimate
     # research papers (a 21 MB file is a perfectly normal
-    # thesis chapter or annotated review). 50 MB is the
-    # new default; operators can override via the env
-    # var. We don't allow unlimited uploads because a
-    # malicious user could trivially OOM the container
-    # with a 10 GB file -- the upper bound is hard-coded
-    # at 200 MB (``_PDF_UPLOAD_MAX_BYTES_HARD_CAP`` in
-    # the route) so an unfortunate env var can't open
-    # the door to resource exhaustion.
+    # thesis chapter or annotated review). The default is
+    # now 200 MB to accommodate large annotated reviews
+    # and book chapters; operators can lower it via the
+    # ``PDF_UPLOAD_MAX_BYTES`` env var if they need a
+    # tighter cap. We don't allow unlimited uploads
+    # because a malicious user could trivially OOM the
+    # container with a 10 GB file -- the upper bound is
+    # hard-coded at 200 MB (``_PDF_UPLOAD_MAX_BYTES_HARD_CAP``
+    # in the route) so an unfortunate env var cannot
+    # bypass the cap.
     pdf_upload_max_bytes: int = Field(
-        default=50 * 1024 * 1024,  # 50 MB
+        default=200 * 1024 * 1024,  # 200 MB
         alias="PDF_UPLOAD_MAX_BYTES",
     )
     # Only used when ``CACHE_BACKEND=redis``. Format:

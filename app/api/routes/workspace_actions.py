@@ -747,10 +747,12 @@ def resolve_and_add_paper(
 # ----------------------------------------------------------------------
 
 
-# PDF upload size cap. The previous hardcoded 10 MB cap was too
-# small for legitimate research papers (a 21 MB thesis chapter
-# is a perfectly normal input). 50 MB is the default; operators
-# can override via ``PDF_UPLOAD_MAX_BYTES`` in .env.
+# PDF upload size cap. The original hardcoded 10 MB cap was
+# too small for legitimate research papers (a 21 MB thesis
+# chapter is a perfectly normal input). The default is now
+# 200 MB to accommodate large annotated reviews and book
+# chapters; operators can lower it via ``PDF_UPLOAD_MAX_BYTES``
+# in .env if they need a tighter cap.
 #
 # Note: this constant is set at startup from
 # ``LiteratureSettings.pdf_upload_max_bytes``. The hard cap
@@ -774,7 +776,7 @@ async def add_paper_from_pdf(
     file: UploadFile = File(
         ...,
         description="PDF file to extract identifiers from. "
-                    "Max 50 MB by default; configurable via the "
+                    "Max 200 MB by default; configurable via the "
                     "PDF_UPLOAD_MAX_BYTES env var (hard ceiling "
                     "200 MB). The first page is scanned for "
                     "DOI (10.xxxx/...) and PMID patterns.",
@@ -790,8 +792,8 @@ async def add_paper_from_pdf(
     Returns HTTP 422 if the PDF can't be parsed, has no DOI/PMID
     on the first page, or the identifier fails to resolve. Returns
     HTTP 413 if the file is larger than the configured cap
-    (default 50 MB, max 200 MB). Returns HTTP 409 if the current
-    state doesn't allow ``add_paper``.
+    (default 200 MB, hard ceiling 200 MB). Returns HTTP 409 if the
+    current state doesn't allow ``add_paper``.
     """
     if file.content_type and not file.content_type.startswith("application/pdf"):
         raise HTTPException(

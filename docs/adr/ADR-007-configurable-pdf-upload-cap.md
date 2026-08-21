@@ -185,3 +185,68 @@ the route's OpenAPI summary.
   constant and the 413 error message.
 - `docs/adr/ADR-005-multi-identity-paper-dedup.md` — the
   related dedup fix (same user complaint).
+
+
+
+---
+
+## Follow-up (surgical fix): raise default to 200 MB
+
+The original ADR picked 50 MB as the default because the
+99th-percentile biomedical research PDF fits comfortably
+under that cap. Real-world researcher feedback after
+deployment:
+
+- **Annotated review papers** with embedded high-resolution
+  figures routinely hit 80-150 MB.
+- **Scanned theses and book chapters** (especially when
+  the researcher has annotated them in a tool like
+  Hypothesis or ReadCube) are routinely 100-200 MB.
+- **Springer/Elsevier/EBSCO** host PDFs in this size range
+  for legitimate scientific use.
+
+Rather than ship a separate ADR for a one-line change,
+we made the surgical edit: bump the default from 50 MB to
+200 MB, leaving the 200 MB hard cap untouched. Operators
+can still tighten the cap via the `PDF_UPLOAD_MAX_BYTES`
+env var (e.g. for a multi-tenant deployment where users
+shouldn't upload multi-hundred-MB files).
+
+### What changed
+
+- `app/config/literature.py::LiteratureSettings.pdf_upload_max_bytes`
+  default: `50 * 1024 * 1024` -> `200 * 1024 * 1024`
+  (both class fields; the duplicate was a stale remnant
+  of an earlier patch that we cleaned up while we were
+  there).
+- `app/api/routes/workspace_actions.py` docstrings:
+  OpenAPI param description and route docstring both
+  updated from "Max 50 MB" to "Max 200 MB" so the docs
+  match the code.
+- `README.md` ADR table entry: ADR-007 description
+  updated from "50 MB default" to "200 MB default".
+
+### What did NOT change
+
+- `_PDF_UPLOAD_MAX_BYTES_HARD_CAP` remains `200 * 1024 * 1024`.
+  Operators cannot raise the cap via env var beyond 200 MB.
+- The 413 error message structure ("PDF is N bytes; the
+  max is M. Split it or use the PMID/DOI tab instead.")
+  is unchanged. Only the value of M changes when the cap
+  is hit.
+- The bootstrap writes `PDF_UPLOAD_MAX_BYTES` to `.env`
+  only when the user wants to override the default.
+  Adding it as a comment line in `.env` would let
+  operators discover it; that's a follow-up if anyone
+  notices the discoverability gap.
+
+### Lessons
+
+The original ADR's hard cap of 200 MB was the right call
+even at the time -- we just underestimated how often
+real PDFs hit it. The follow-up shows that ADR-007's
+"env-controlled with a hard safety ceiling" design
+absorbed the change without any structural rework: a
+single default-value bump plus docstring updates. This is
+what the original ADR was designed for.
+

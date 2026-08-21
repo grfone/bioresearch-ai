@@ -442,7 +442,7 @@ read them to understand *why* the system works the way it does.
 | [ADR-004](docs/adr/ADR-004-section-based-abstract-extraction.md) | Section-based abstract extraction | Accepted |
 | [ADR-005](docs/adr/ADR-005-multi-identity-paper-dedup.md) | Multi-identity paper deduplication (PMID/DOI/title) | Accepted |
 | [ADR-006](docs/adr/ADR-006-parallel-multi-source-search.md) | Parallel multi-source literature search | Accepted |
-| [ADR-007](docs/adr/ADR-007-configurable-pdf-upload-cap.md) | Configurable PDF upload size cap (50 MB default) | Accepted |
+| [ADR-007](docs/adr/ADR-007-configurable-pdf-upload-cap.md) | Configurable PDF upload size cap (200 MB default) | Accepted |
 
 Three ADRs are particularly worth reading for new
 contributors:
