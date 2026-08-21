@@ -1,12 +1,10 @@
 # CI / Continuous Integration
 
-This directory contains GitHub Actions workflows for
-bioresearch-ai.
+This document covers the GitHub Actions workflows that run
+on every push and pull request. The actual workflow files
+live in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 
-## `workflows/ci.yml`
-
-Three parallel jobs run on every push to `master` and
-every pull request targeting `master`:
+## Three parallel jobs
 
 | Job | What it does | Why |
 |-----|--------------|-----|
@@ -36,19 +34,18 @@ The live `/admin/*` smoke check requires:
 - Network access to CrossRef, OpenAlex, etc.
 - A real DOI to fetch
 
-CI doesn't have any of these. The manual live-verify
-pattern (described in `references/bootstrap-live-verification.md`
-under `python-project-bootstrap-ship`) is the right tool
-for end-to-end contract checks. CI is for fast, hermetic
-regressions that don't depend on external resources.
+CI doesn't have any of these. The manual `make verify`
+flow (described in the project root README) is the right
+tool for end-to-end contract checks. CI is for fast,
+hermetic regressions that don't depend on external
+resources.
 
 ### Concurrency
 
-The workflow uses
-`concurrency.cancel-in-progress: true`. If you push a
-follow-up commit while CI is running, GitHub cancels
-the in-flight run and starts a new one. Saves runner
-minutes when iterating quickly.
+The workflow uses `concurrency.cancel-in-progress: true`.
+If you push a follow-up commit while CI is running,
+GitHub cancels the in-flight run and starts a new one.
+Saves runner minutes when iterating quickly.
 
 ### Local validation
 
