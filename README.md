@@ -48,7 +48,7 @@ Ask a biomedical question in natural language...
 
 BioResearch AI will:
 
-- 🔍 Search PubMed
+- 🔍 Search PubMed, OpenAlex, Europe PMC, and bioRxiv in parallel
 - 📄 Retrieve relevant publications
 - 🧠 Generate AI-powered summaries
 - ⚖️ Compare findings across studies
@@ -56,6 +56,22 @@ BioResearch AI will:
 - ✅ Keep every conclusion linked to the supporting evidence
 
 The goal is **not to replace scientists**, but to help them navigate biomedical literature faster and make evidence-based decisions.
+
+---
+
+# Recent progress
+
+A snapshot of the work since v0.1.0:
+
+- **Deterministic finite state machine** for the workspace lifecycle (`CREATED → SEARCHING → PAPERS_RETRIEVED → SUMMARIZING → SUMMARIZED → COMPARING → COMPARED → REPORTING → REPORTED → COMPLETED`) — illegal actions are rejected with HTTP 409 and the list of legal next actions
+- **Cross-paper evidence comparison** — consensus, contradictions, gaps, future directions, and a side-by-side matrix
+- **Lab-bench UI** with state, progress, action availability, and transition history
+- **PDF upload** — drop a PDF, the DOI/PMID on the first page is auto-extracted and resolved
+- **Multi-worker ready** via a pluggable cache backend (in-memory by default, Redis for multi-worker deployments)
+- **One-click install** via `python3 bootstrap.py` (detects OS, installs Docker, builds the image, opens the running app)
+- **8 ADRs** documenting the architectural decisions (see [docs/adr/](docs/adr/README.md))
+
+See the [Roadmap](#roadmap) below for what's left.
 
 ---
 
@@ -67,12 +83,11 @@ The goal is **not to replace scientists**, but to help them navigate biomedical 
 | 📄 Paper Summaries | Generate concise AI summaries for each publication |
 | 🧠 Evidence Synthesis | Combine evidence from multiple studies |
 | 📚 Citation Awareness | Every report references the supporting papers |
+| 📑 PDF Upload | Drop a PDF, the DOI/PMID on the first page is auto-extracted and resolved |
 | ⚡ FastAPI Backend | REST API following Clean Architecture |
 | 🎨 React Frontend | Modern and responsive user interface |
 | 🧩 Modular LLM Providers | Easily switch between multiple AI providers |
 | 💾 Persistent Workspaces | Save and continue research sessions |
-| 📑 PDF Upload | Drop a PDF, the DOI/PMID on the first page is auto-extracted and resolved |
-| 🔌 Multi-worker Ready | Set `CACHE_BACKEND=redis` to share the abstract-enricher cache across uvicorn workers ([ADR-003](docs/adr/ADR-003-pluggable-cache-backend.md)) |
 
 ---
 
@@ -101,55 +116,29 @@ The goal is **not to replace scientists**, but to help them navigate biomedical 
 </p>
 
 
-BioResearch AI assists researchers throughout the scientific discovery process. The workspace evolves through a deterministic finite state machine:
+BioResearch AI assists researchers throughout the scientific discovery process:
 
 ```text
 Research Question
         │
         ▼
-[ FSM: CREATED ]
-        │  search
-        ▼
-[ FSM: SEARCHING ]
+Literature Search
         │
         ▼
-Literature Search → Paper Retrieval
-        │
-        ▼
-[ FSM: PAPERS_RETRIEVED ]
-        │  summarize
-        ▼
-[ FSM: SUMMARIZING ]
+Paper Retrieval
         │
         ▼
 AI Summaries
         │
         ▼
-[ FSM: SUMMARIZED ]
-        │  compare
-        ▼
-[ FSM: COMPARING ]
-        │
-        ▼
-Evidence Comparison (consensus, contradictions, gaps)
-        │
-        ▼
-[ FSM: COMPARED ]
-        │  report
-        ▼
-[ FSM: REPORTING ]
+Evidence Synthesis
         │
         ▼
 Executive Report
         │
         ▼
-[ FSM: REPORTED → COMPLETED ]
-        │
-        ▼
-Citation Validation (every paper ID is verified against the workspace)
+Citation Validation
 ```
-
-The FSM is the single source of truth for what can happen next. Illegal actions are rejected with HTTP 409 including the list of legal alternatives.
 
 ---
 
@@ -219,7 +208,7 @@ Adding a new LLM provider or biomedical database requires implementing a new ada
 
 # Installation
 
-The fastest way to run BioResearch AI on any machine is:
+The fastest way to run BioResearch AI on any machine:
 
 ```bash
 git clone https://github.com/grfone/bioresearch-ai.git
@@ -227,55 +216,25 @@ cd bioresearch-ai
 python3 bootstrap.py
 ```
 
-`bootstrap.py` is the single entry point. It detects your OS,
-installs Docker if needed, builds the image, opens a first-run
-GUI that asks for your LLM credentials, probes each one live, and
-finally opens the running app in your default browser.
+`bootstrap.py` is the single entry point. It detects your OS, installs Docker if needed, builds the image, opens a first-run GUI that asks for your LLM credentials, probes each one live, and finally opens the running app in your default browser.
 
-See [`INSTALL.md`](./INSTALL.md) for the full step-by-step,
-troubleshooting, and the daily workflow.
-
----
+See [`INSTALL.md`](./INSTALL.md) for the full step-by-step, troubleshooting, and the daily workflow.
 
 ## Quick smoke test
 
-Once you've got the app running (either via `python3 bootstrap.py`
-or `docker compose up`), verify it actually works end-to-end:
+Once you've got the app running, verify it works end-to-end:
 
 ```bash
 make verify
 ```
 
-This runs `scripts/verify.sh`, which:
-
-1. Cleans up any leftover container / image
-2. Writes a stub `.env` (no real LLM creds needed for the
-   smoke tests)
-3. Runs `python3 bootstrap.py --skip-gui --no-browser` to
-   build + start the container
-4. Waits for `/health` to return `healthy`
-5. Hits every `/admin/*` endpoint and verifies the
-   response shape (`enricher-stats`, `orchestrator-stats`,
-   `papers/refresh/<doi>`, `enricher-cache`)
-6. Creates a workspace, fetches a real Nature DOI, and
-   verifies the deterministic meta-tag path returns the
-   expected ~807-char abstract with `inferred_abstract=false`
-7. Tears down the container and removes the image
-
-The script exits 0 on success, 1 on failure, 2 if a
-required tool (curl, jq, docker, python3) is missing.
-Every step prints progress, so a reviewer can see
-exactly where things went wrong without re-running
-with extra flags.
-
-Set `NO_COLOR=1` to disable ANSI color output (useful
-for CI logs that don't interpret escape codes).
+This runs `scripts/verify.sh`, which builds the container, hits every `/admin/*` endpoint, fetches a real Nature DOI, and tears down. See the script header for the full step list.
 
 ---
 
 ## Manual installation (advanced)
 
-If you prefer not to use Docker, the legacy workflow is:
+If you prefer not to use Docker:
 
 ### Backend
 
@@ -299,9 +258,7 @@ cp .env.example .env
 
 Add your API keys inside the `.env` file.
 
----
-
-## Frontend
+### Frontend
 
 Navigate to the frontend directory
 
@@ -331,8 +288,6 @@ uvicorn main:app --reload
 
 The backend API will be available locally.
 
----
-
 ## Frontend
 
 Open another terminal
@@ -349,25 +304,22 @@ The frontend will start with hot reloading enabled.
 
 # Current Capabilities
 
-Research workflow:
 - ✅ Biomedical literature search
-- ✅ Paper retrieval from PubMed
+- ✅ Paper retrieval from PubMed, OpenAlex, Europe PMC, bioRxiv
 - ✅ AI-powered paper summarization
 - ✅ Cross-paper evidence comparison (consensus, contradictions, gaps, future directions, side-by-side matrix)
 - ✅ Citation-aware executive reports
-- ✅ Anti-fabrication guard: every citation is checked against the workspace’s paper set
-
-Platform:
+- ✅ Anti-fabrication guard: every citation is checked against the workspace's paper set
 - ✅ Persistent research workspaces
-- ✅ Deterministic finite state machine (FSM) lifecycle: `CREATED → SEARCHING → PAPERS_RETRIEVED → SUMMARIZING → SUMMARIZED → COMPARING → COMPARED → REPORTING → REPORTED → COMPLETED`
+- ✅ Deterministic finite state machine (FSM) lifecycle
 - ✅ Illegal action rejection (HTTP 409) with the list of legal next actions
-- ✅ LangGraph workflow topology (in `app/application/workflows/research_workflow.py`)
+- ✅ LangGraph workflow topology
 - ✅ Lab-bench UI: state, progress, action availability, transition history
 - ✅ Modern React frontend
 - ✅ FastAPI REST API
 - ✅ Modular LLM providers
 - ✅ Clean Architecture implementation
-- ✅ 57 unit + integration tests passing
+- ✅ 441 backend + 200 frontend tests passing
 
 ---
 
@@ -385,7 +337,7 @@ The long-term vision is to build an AI platform capable of supporting the comple
 | ✅ | **Evidence Comparison** — cross-paper consensus, contradictions, gaps, and a side-by-side matrix |
 | ✅ | **LangGraph Workflows** — deterministic FSM topology + `WorkspaceOrchestrator` runtime |
 | ✅ | **Workspace Management** — lab-bench UI with state, allowed actions, progress, and history |
-| 🔜 | Biological Knowledge Integration |
+| 🚧 | Biological Knowledge Integration |
 | 🔜 | Multi-Agent Collaboration |
 | 🔜 | Long-Term Memory |
 | 🔜 | MCP Integration |
@@ -411,7 +363,7 @@ bioresearch-ai/
 │   └── tools/
 │
 ├── frontend/
-│
+
 ├── docs/
 │   ├── images/
 │   ├── gifs/
@@ -428,11 +380,7 @@ bioresearch-ai/
 
 # Design decisions
 
-We capture every non-trivial architectural decision in an
-Architecture Decision Record (ADR). ADRs document the context,
-the chosen approach, the alternatives considered, and the
-consequences — both positive and negative. Future contributors
-read them to understand *why* the system works the way it does.
+We capture every non-trivial architectural decision in an Architecture Decision Record (ADR). ADRs document the context, the chosen approach, the alternatives considered, and the consequences — both positive and negative. Future contributors read them to understand *why* the system works the way it does.
 
 | ADR | Decision | Status |
 |-----|----------|--------|
@@ -443,9 +391,9 @@ read them to understand *why* the system works the way it does.
 | [ADR-005](docs/adr/ADR-005-multi-identity-paper-dedup.md) | Multi-identity paper deduplication (PMID/DOI/title) | Accepted |
 | [ADR-006](docs/adr/ADR-006-parallel-multi-source-search.md) | Parallel multi-source literature search | Accepted |
 | [ADR-007](docs/adr/ADR-007-configurable-pdf-upload-cap.md) | Configurable PDF upload size cap (200 MB default) | Accepted |
+| [ADR-008](docs/adr/ADR-008-one-click-report-from-papers-retrieved.md) | One-click report from PAPERS_RETRIEVED | Accepted |
 
-Three ADRs are particularly worth reading for new
-contributors:
+Three ADRs are particularly worth reading for new contributors:
 
 - **[ADR-003](docs/adr/ADR-003-pluggable-cache-backend.md)** — the
   in-memory vs Redis cache split and the multi-worker
@@ -453,9 +401,10 @@ contributors:
 - **[ADR-005](docs/adr/ADR-005-multi-identity-paper-dedup.md)** —
   why a paper is deduplicated by PMID/DOI/title but title
   is a *weak* signal.
-- **[ADR-006](docs/adr/ADR-006-parallel-multi-source-search.md)** —
-  why literature search uses `ThreadPoolExecutor` instead
-  of rewriting every searcher as async.
+- **[ADR-008](docs/adr/ADR-008-one-click-report-from-papers-retrieved.md)** —
+  why the FSM gate from `PAPERS_RETRIEVED` to `REPORT`
+  exists and how the orchestrator auto-summarises when
+  needed.
 
 ---
 
