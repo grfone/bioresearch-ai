@@ -44,8 +44,10 @@ describe('WorkspaceActionBar', () => {
     render(
       <WorkspaceActionBar
         canReport={true}
+        canAddPapers={true}
         onGenerateReport={() => {}}
         onOpenAdvancedSearch={() => {}}
+        onAddMorePapers={() => {}}
       />
     );
     const reportButton = screen.getByRole('button', {
@@ -62,8 +64,10 @@ describe('WorkspaceActionBar', () => {
     render(
       <WorkspaceActionBar
         canReport={false}
+        canAddPapers={true}
         onGenerateReport={() => {}}
         onOpenAdvancedSearch={() => {}}
+        onAddMorePapers={() => {}}
       />
     );
     const reportButton = screen.getByRole('button', {
@@ -80,8 +84,10 @@ describe('WorkspaceActionBar', () => {
     render(
       <WorkspaceActionBar
         canReport={true}
+        canAddPapers={true}
         onGenerateReport={onGenerateReport}
         onOpenAdvancedSearch={() => {}}
+        onAddMorePapers={() => {}}
       />
     );
     const reportButton = screen.getByRole('button', {
@@ -95,8 +101,10 @@ describe('WorkspaceActionBar', () => {
     render(
       <WorkspaceActionBar
         canReport={false}
+        canAddPapers={true}
         onGenerateReport={() => {}}
         onOpenAdvancedSearch={() => {}}
+        onAddMorePapers={() => {}}
       />
     );
     // The button label is constant — no "Show" or "Hide"
@@ -116,8 +124,10 @@ describe('WorkspaceActionBar', () => {
     render(
       <WorkspaceActionBar
         canReport={true}
+        canAddPapers={true}
         onGenerateReport={() => {}}
         onOpenAdvancedSearch={() => {}}
+        onAddMorePapers={() => {}}
       />
     );
     const button = screen.getByRole('button', {
@@ -142,8 +152,10 @@ describe('WorkspaceActionBar', () => {
     render(
       <WorkspaceActionBar
         canReport={true}
+        canAddPapers={true}
         onGenerateReport={() => {}}
         onOpenAdvancedSearch={() => {}}
+        onAddMorePapers={() => {}}
       />
     );
     const button = screen.getByRole('button', {
@@ -158,8 +170,10 @@ describe('WorkspaceActionBar', () => {
     render(
       <WorkspaceActionBar
         canReport={true}
+        canAddPapers={true}
         onGenerateReport={() => {}}
         onOpenAdvancedSearch={onOpenAdvancedSearch}
+        onAddMorePapers={() => {}}
       />
     );
     const button = screen.getByRole('button', {
@@ -177,13 +191,100 @@ describe('WorkspaceActionBar', () => {
     render(
       <WorkspaceActionBar
         canReport={true}
+        canAddPapers={true}
         onGenerateReport={() => {}}
         onOpenAdvancedSearch={() => {}}
+        onAddMorePapers={() => {}}
       />
     );
     const button = screen.getByRole('button', {
       name: /advanced search options/i,
     });
     expect(button).toHaveAttribute('data-action', 'advanced-search-open');
+  });
+
+  // -------- Add More Papers button (3rd in the bar) --------
+
+  it('renders an "Add More Papers" button alongside Generate Report and Advanced Search Options', () => {
+    // The action bar now has THREE equal-weight primary
+    // buttons. We pin the label here so a future rename
+    // propagates to every test consumer in one place.
+    render(
+      <WorkspaceActionBar
+        canReport={true}
+        canAddPapers={true}
+        onGenerateReport={() => {}}
+        onOpenAdvancedSearch={() => {}}
+        onAddMorePapers={() => {}}
+      />,
+    );
+    expect(
+      screen.getByRole('button', { name: /add more papers/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('puts "Add More Papers" AFTER Advanced Search Options (3rd position)', () => {
+    // The user asked for the Add More Papers button to be
+    // in the box below (i.e. inside the action bar) and
+    // in third position. We assert the relative order
+    // matches what the user wants.
+    render(
+      <WorkspaceActionBar
+        canReport={true}
+        canAddPapers={true}
+        onGenerateReport={() => {}}
+        onOpenAdvancedSearch={() => {}}
+        onAddMorePapers={() => {}}
+      />,
+    );
+    const buttons = screen.getAllByRole('button');
+    // The first three buttons (toolbar order) should be:
+    //   Generate Report, Advanced Search Options, Add More Papers
+    const labels = buttons.map((b) => b.textContent || '');
+    // Find the indices of each named button
+    const generateIdx = labels.findIndex((l) => /generate report/i.test(l));
+    const advancedIdx = labels.findIndex((l) => /advanced search options/i.test(l));
+    const addMoreIdx = labels.findIndex((l) => /add more papers/i.test(l));
+    expect(generateIdx).toBeGreaterThanOrEqual(0);
+    expect(advancedIdx).toBeGreaterThan(generateIdx);
+    expect(addMoreIdx).toBeGreaterThan(advancedIdx);
+  });
+
+  it('calls onAddMorePapers when the Add More Papers button is clicked', async () => {
+    const user = userEvent.setup();
+    const onAddMorePapers = vi.fn();
+    render(
+      <WorkspaceActionBar
+        canReport={true}
+        canAddPapers={true}
+        onGenerateReport={() => {}}
+        onOpenAdvancedSearch={() => {}}
+        onAddMorePapers={onAddMorePapers}
+      />,
+    );
+    const button = screen.getByRole('button', {
+      name: /add more papers/i,
+    });
+    await user.click(button);
+    expect(onAddMorePapers).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses data-action="open-add-papers" so the modal opens via the same selector the standalone button used', () => {
+    // The standalone Add papers button (commit b478851)
+    // used data-action="open-add-papers". When we moved the
+    // button into the action bar, we kept the same
+    // data-action so the parent's onClick contract is
+    // unchanged. Pin the attribute here.
+    render(
+      <WorkspaceActionBar
+        canReport={true}
+        canAddPapers={true}
+        onGenerateReport={() => {}}
+        onOpenAdvancedSearch={() => {}}
+        onAddMorePapers={() => {}}
+      />,
+    );
+    const button = screen.getByRole('button', { name: /add more papers/i });
+    expect(button).toHaveAttribute('data-action', 'open-add-papers');
   });
 });

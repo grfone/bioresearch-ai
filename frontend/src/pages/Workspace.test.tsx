@@ -26,7 +26,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 // Stub the AddPapersPanel: it has its own deep test
@@ -143,6 +143,7 @@ describe('Workspace > handleGenerateReport', () => {
     render(
       <WorkspaceActionBar
         canReport={true}
+        canAddPapers={true}
         onGenerateReport={() => {
           // This is the simplified handler -- no await,
           // no runAction. If a future change re-adds the
@@ -153,6 +154,7 @@ describe('Workspace > handleGenerateReport', () => {
           mockNavigate('/report/ws-1');
         }}
         onOpenAdvancedSearch={() => {}}
+        onAddMorePapers={() => {}}
       />,
     );
 
@@ -204,24 +206,38 @@ describe('Workspace > handleGenerateReport', () => {
 void useWorkspaceStore;
 
 describe('Workspace > Add Papers collapse', () => {
-  it('renders a single "Add papers" button instead of the full panel', async () => {
-    // After commit b8e8a3a the always-visible AddPapersPanel
-    // was replaced with a collapsed-by-default button +
-    // modal pattern. The workspace page now shows a single
-    // primary button on the page surface; the actual
-    // DOI/PDF entry UI lives inside the modal.
+  it('renders the "Add More Papers" button inside the action bar (3rd position)', async () => {
+    // After commit (this PR) the standalone "Add papers"
+    // button was moved INSIDE the WorkspaceActionBar and
+    // renamed to "Add More Papers" to reflect that the
+    // workspace already has papers. The button is in third
+    // position (after Generate Report + Advanced Search
+    // Options) so the workspace page reads as a single
+    // coherent control surface.
     const { Workspace } = await import('./Workspace');
     render(<Workspace />);
 
     // The button is visible.
-    const button = screen.getByRole('button', { name: /add papers/i });
+    const button = screen.getByRole('button', { name: /add more papers/i });
     expect(button).toBeInTheDocument();
     // The button uses the same .btn-primary class as the
-    // other primary CTAs on the page.
+    // other primary CTAs in the action bar.
     expect(button).toHaveClass('btn-primary');
-    // The button has a stable test selector hook for
-    // future integration tests / e2e.
+    // The button has the same data-action selector the
+    // standalone button used (commit b478851), so the
+    // parent's onClick contract is unchanged.
     expect(button).toHaveAttribute('data-action', 'open-add-papers');
+    // The button is INSIDE the action bar (role=toolbar),
+    // not floating on its own row above the action bar.
+    const toolbar = screen.getByRole('toolbar', { name: /workspace actions/i });
+    expect(toolbar).toContainElement(button);
+    // The button is in the third position (after Generate
+    // Report, then Advanced Search Options).
+    const toolbarButtons = within(toolbar).getAllByRole('button');
+    expect(toolbarButtons).toHaveLength(3);
+    expect(toolbarButtons[0]).toHaveTextContent(/generate report/i);
+    expect(toolbarButtons[1]).toHaveTextContent(/advanced search options/i);
+    expect(toolbarButtons[2]).toHaveTextContent(/add more papers/i);
 
     // The AddPapersPanel itself is NOT in the DOM until
     // the modal opens.
@@ -238,7 +254,7 @@ describe('Workspace > Add Papers collapse', () => {
     const { Workspace } = await import('./Workspace');
     render(<Workspace />);
 
-    const button = screen.getByRole('button', { name: /add papers/i });
+    const button = screen.getByRole('button', { name: /add more papers/i });
     await user.click(button);
 
     // After clicking, the modal opens. The dialog is
@@ -258,7 +274,7 @@ describe('Workspace > Add Papers collapse', () => {
 
     // Open
     await user.click(
-      screen.getByRole('button', { name: /add papers/i }),
+      screen.getByRole('button', { name: /add more papers/i }),
     );
     const dialog = await screen.findByRole('dialog', {
       name: /add papers to this workspace/i,
@@ -285,7 +301,7 @@ describe('Workspace > Add Papers collapse', () => {
 
     // Open
     await user.click(
-      screen.getByRole('button', { name: /add papers/i }),
+      screen.getByRole('button', { name: /add more papers/i }),
     );
     await screen.findByRole('dialog', { name: /add papers to this workspace/i });
 
@@ -307,7 +323,7 @@ describe('Workspace > Add Papers collapse', () => {
 
     // Open
     await user.click(
-      screen.getByRole('button', { name: /add papers/i }),
+      screen.getByRole('button', { name: /add more papers/i }),
     );
     await screen.findByRole('dialog', { name: /add papers to this workspace/i });
 
@@ -321,7 +337,7 @@ describe('Workspace > Add Papers collapse', () => {
     });
   });
 
-  it('does NOT show the Add papers button when FSM does not allow add_paper', async () => {
+  it('does NOT show the "Add More Papers" button when FSM does not allow add_paper', async () => {
     // Override the workspaceStore mock for this single test
     // by re-rendering with a workspace whose allowed_actions
     // does NOT include 'add_paper'.
@@ -383,8 +399,17 @@ describe('Workspace > Add Papers collapse', () => {
 
     // The button is NOT in the DOM when the FSM does not
     // allow add_paper. (REPORTED -> no more adds.)
+    // The action bar still renders the other two buttons
+    // (Generate Report, Advanced Search Options), but the
+    // Add More Papers button is gated by can('add_paper').
     expect(
-      screen.queryByRole('button', { name: /add papers/i }),
+      screen.queryByRole('button', { name: /add more papers/i }),
     ).not.toBeInTheDocument();
+    // And the action bar itself only has 2 buttons now.
+    const toolbar = screen.getByRole('toolbar', { name: /workspace actions/i });
+    const toolbarButtons = within(toolbar).getAllByRole('button');
+    expect(toolbarButtons).toHaveLength(2);
+    expect(toolbarButtons[0]).toHaveTextContent(/generate report/i);
+    expect(toolbarButtons[1]).toHaveTextContent(/advanced search options/i);
   });
 });

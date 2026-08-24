@@ -39,7 +39,6 @@ import {
   BookOpen,
   Clock,
   Loader2,
-  Plus,
   Upload,
   X,
 } from 'lucide-react';
@@ -283,31 +282,21 @@ export const Workspace: React.FC = () => {
           compact "Step N of M" pill in the action bar header
           would be a better home than a full-width strip. */}
 
-      {/* Add Papers button — visible when the FSM allows
-          add_paper. Opens the modal containing the actual
-          entry surface (DOI/PMID bulk, single DOI, PDF
-          upload). Mirrors the Advanced Search Options
-          modal pattern: a standard blue button on the
-          page, modal on click. */}
-      {can('add_paper') && (
-        <button
-          type="button"
-          className="btn btn-primary"
-          data-action="open-add-papers"
-          onClick={() => setAddPapersOpen(true)}
-        >
-          <Plus size={16} aria-hidden="true" />
-          Add papers
-        </button>
-      )}
-
-      {/* Action bar — simplified. See
-          ``components/WorkspaceActionBar.tsx`` for the
-          rationale and the callback contract. */}
+      {/* Action bar — three buttons in a single equal-weight row:
+          Generate Report, Advanced Search Options, Add More Papers.
+          All three use the same ``.btn btn-primary`` styling so the
+          workspace page reads as a single coherent control surface.
+          See ``components/WorkspaceActionBar.tsx`` for the
+          callback contract and the rationale. The Add Papers modal
+          itself (DOI/PMID bulk + single DOI + PDF upload) is
+          rendered further down the page; the button just fires the
+          click. */}
       <WorkspaceActionBar
         canReport={can('report')}
+        canAddPapers={can('add_paper')}
         onGenerateReport={handleGenerateReport}
         onOpenAdvancedSearch={() => setAdvancedSearchOpen(true)}
+        onAddMorePapers={() => setAddPapersOpen(true)}
       />
 
       {/* Evidence Summary used to render here, but the

@@ -4,7 +4,7 @@
  * ============================================================================
  *
  * The action bar above the workspace contents. The current
- * incarnation is intentionally minimal — two buttons:
+ * incarnation is intentionally minimal — three buttons:
  *
  *  - **Generate Report**: a prominent primary CTA. Calls
  *    ``onGenerateReport`` and, if the action succeeds,
@@ -25,6 +25,15 @@
  *    cleanly. See ADR-008 for the broader "one-click report"
  *    rationale.
  *
+ *  - **Add More Papers**: a standard blue tertiary button.
+ *    The label is "Add More Papers" (not "Add papers")
+ *    because by the time this button is reachable the
+ *    workspace already has at least one paper — the FSM
+ *    gates ``add_paper`` on the CREATED..REPORTED range.
+ *    Clicking it opens the same Add Papers modal that
+ *    the standalone button used to open; the modal is
+ *    rendered by the parent (``Workspace.tsx``).
+ *
  * Earlier versions of this bar had a two-tier layout
  * (Summarize / Compare / Generate Report / Complete / Retry /
  * Clear All) and a "Hide processing actions" toggle. Both
@@ -43,13 +52,21 @@
  */
 
 import React from 'react';
-import { FileText } from 'lucide-react';
+import { FileText, Plus } from 'lucide-react';
 
 export interface WorkspaceActionBarProps {
   /** Whether the workspace FSM currently allows the report
    * action. The Generate Report button is disabled when
    * false. */
   canReport: boolean;
+  /** Whether the workspace FSM currently allows ``add_paper``.
+   * The Add More Papers button is hidden entirely when
+   * false -- there's no point clicking it if the FSM will
+   * reject the request. (See ``app/core/enums/workspace_state.py``
+   * for the gate table; the FSM gates add_paper on the
+   * CREATED..REPORTED range, so once the user has clicked
+   * Generate Report the button disappears.) */
+  canAddPapers: boolean;
   /** Click handler for the Generate Report button. The
    * parent is responsible for the actual API call and
    * post-success navigation; this component only emits the
@@ -59,12 +76,18 @@ export interface WorkspaceActionBarProps {
    * The parent is responsible for rendering the modal; this
    * component only emits the click. */
   onOpenAdvancedSearch: () => void;
+  /** Click handler for the Add More Papers button. The parent
+   * is responsible for rendering the Add Papers modal; this
+   * component only emits the click. */
+  onAddMorePapers: () => void;
 }
 
 export const WorkspaceActionBar: React.FC<WorkspaceActionBarProps> = ({
   canReport,
+  canAddPapers,
   onGenerateReport,
   onOpenAdvancedSearch,
+  onAddMorePapers,
 }) => {
   return (
     <div
@@ -96,6 +119,18 @@ export const WorkspaceActionBar: React.FC<WorkspaceActionBarProps> = ({
         >
           Advanced Search Options
         </button>
+        {canAddPapers && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onAddMorePapers}
+            data-action="open-add-papers"
+            title="Open the add-papers dialog (DOI/PMID bulk, single DOI, PDF upload)"
+          >
+            <Plus size={18} aria-hidden="true" />
+            Add More Papers
+          </button>
+        )}
       </div>
     </div>
   );
