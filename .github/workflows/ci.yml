@@ -310,25 +310,34 @@ jobs:
       - name: Wait for Redis to be ready
         # The ``services:`` block starts the Redis
         # container in parallel with this job. On
-        # GitHub-hosted runners the service container is
-        # reachable via the **service name** (``redis``)
-        # in the job's network namespace, NOT via
-        # ``localhost`` -- ``localhost`` is the runner
-        # host, not the sidecar. ``redis-cli ping``
-        # returns 0 once the server is ready.
+        # GitHub-hosted runners, service containers are
+        # exposed on the runner host via the ``host.docker.internal``
+        # DNS name (the standard Docker-on-Linux pattern
+        # for "the host running Docker"), with the mapped
+        # ports forwarding through. ``localhost`` is the
+        # runner host -- service container ports are not
+        # directly bound to ``localhost`` on hosted runners.
+        # ``host.docker.internal`` is the only host that
+        # reliably resolves to the runner host from the
+        # runner's own shell.
         #
-        # (Earlier revisions used ``localhost``; this
-        # timed out for 30s on every run because the
-        # service container is on a separate network
-        # namespace. See commit message for diagnosis.)
+        # The reliable wait is therefore:
+        #   1. docker ps to find the Redis container
+        #   2. docker exec into it to call redis-cli
+        # This works regardless of network plumbing.
         run: |
           for i in $(seq 1 30); do
-            if redis-cli -h redis -p 6379 ping 2>/dev/null | grep -q PONG; then
-              echo "redis ready after ${i}s"
-              break
+            CID=$(docker ps --filter "ancestor=redis:7-alpine" -q 2>/dev/null | head -n1)
+            if [ -n "$CID" ]; then
+              pong=$(docker exec "$CID" sh -c 'redis-cli ping' 2>/dev/null || true)
+              if echo "$pong" | grep -q PONG; then
+                echo "redis ready after ${i}s (container $CID)"
+                break
+              fi
             fi
             if [ "$i" -eq 30 ]; then
               echo "redis failed to come up in 30s"
+              docker ps --filter "ancestor=redis:7-alpine" || true
               exit 1
             fi
             sleep 1
@@ -336,13 +345,14 @@ jobs:
 
       - name: Run Redis integration tests
         env:
-          # GitHub-hosted runners expose service
-          # containers by their service name (here:
-          # ``redis``) on the job's network namespace,
-          # not on ``localhost``. The tests check this
-          # env var; if unset, they skip cleanly (see
+          # On GitHub-hosted runners, service containers
+          # are reached via the runner host's
+          # ``host.docker.internal`` DNS name (the
+          # standard Docker-on-Linux pattern). The tests
+          # check this env var; if unset, they skip
+          # cleanly (see
           # tests/integration/test_cache_redis_integration.py).
-          REDIS_URL: "redis://redis:6379/0"
+          REDIS_URL: "redis://host.docker.internal:6379/0"
           # Minimal stub env vars to satisfy
           # ``app.config.pubmed.PubMedSettings`` and
           # friends -- the integration test doesn't talk
