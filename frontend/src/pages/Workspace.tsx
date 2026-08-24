@@ -34,7 +34,6 @@ import { PaperList } from '../components/PaperList';
 import { AddPapersPanel } from '../components/AddPapersPanel';
 import { AdvancedSearchModal } from '../components/AdvancedSearchModal';
 import { WorkspaceEmptyState } from '../components/WorkspaceEmptyState';
-import { WorkspaceStatusBar } from '../components/WorkspaceStatusBar';
 import {
   AlertCircle,
   BookOpen,
@@ -248,13 +247,18 @@ export const Workspace: React.FC = () => {
         </div>
       </div>
 
-      {/* Lifecycle strip */}
-      <WorkspaceStatusBar
-        state={currentWorkspace.state}
-        progress={currentWorkspace.progress}
-        allowedActions={currentWorkspace.allowed_actions}
-        lastError={currentWorkspace.last_error}
-      />
+      {/* Lifecycle strip removed in commit a9b8e1d.
+          The 5-station progress strip (Question -> Papers ->
+          Summary -> Comparison -> Report) sat between the
+          action bar and the AddPapersPanel. The action bar
+          already exposes the FSM state and allowed_actions,
+          and the per-paper list shows progress at the row
+          level; the strip was redundant visual noise. The
+          component is kept in
+          ``frontend/src/components/WorkspaceStatusBar.tsx``
+          in case a future design wants to surface lifecycle
+          progress again (e.g., a compact "Step 2 of 4" pill
+          in the action bar header). */}
 
       {/* AddPapersPanel — always visible when FSM allows add_paper.
           This is the primary paper-entry surface. Researchers
