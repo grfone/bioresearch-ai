@@ -309,13 +309,21 @@ jobs:
 
       - name: Wait for Redis to be ready
         # The ``services:`` block starts the Redis
-        # container in parallel with this job, so we may
-        # need to wait briefly for it to accept
-        # connections. ``redis-cli ping`` returns 0 once
-        # the server is ready.
+        # container in parallel with this job. On
+        # GitHub-hosted runners the service container is
+        # reachable via the **service name** (``redis``)
+        # in the job's network namespace, NOT via
+        # ``localhost`` -- ``localhost`` is the runner
+        # host, not the sidecar. ``redis-cli ping``
+        # returns 0 once the server is ready.
+        #
+        # (Earlier revisions used ``localhost``; this
+        # timed out for 30s on every run because the
+        # service container is on a separate network
+        # namespace. See commit message for diagnosis.)
         run: |
           for i in $(seq 1 30); do
-            if redis-cli -h localhost -p 6379 ping 2>/dev/null               | grep -q PONG; then
+            if redis-cli -h redis -p 6379 ping 2>/dev/null | grep -q PONG; then
               echo "redis ready after ${i}s"
               break
             fi
@@ -328,12 +336,13 @@ jobs:
 
       - name: Run Redis integration tests
         env:
-          # GitHub Actions services expose the linked
-          # container on localhost at the mapped port.
-          # The tests check this env var; if unset, they
-          # skip cleanly (see
+          # GitHub-hosted runners expose service
+          # containers by their service name (here:
+          # ``redis``) on the job's network namespace,
+          # not on ``localhost``. The tests check this
+          # env var; if unset, they skip cleanly (see
           # tests/integration/test_cache_redis_integration.py).
-          REDIS_URL: "redis://localhost:6379/0"
+          REDIS_URL: "redis://redis:6379/0"
           # Minimal stub env vars to satisfy
           # ``app.config.pubmed.PubMedSettings`` and
           # friends -- the integration test doesn't talk
