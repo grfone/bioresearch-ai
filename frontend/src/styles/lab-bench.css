@@ -38,7 +38,11 @@
 }
 
 /* ---------------------------------------------------------------------------
- * Lifecycle strip
+ * Lab-bench panel + pill (used by the action bar and any
+ * future panel that wants the same visual language).
+ * The lifecycle-strip layout that previously used these
+ * styles was removed in commit c0edd56 + the cleanup commit that followed it; the
+ * styles remain for other panel surfaces.
  * --------------------------------------------------------------------------- */
 
 .lab-bench-panel {

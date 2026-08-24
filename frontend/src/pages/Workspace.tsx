@@ -247,18 +247,18 @@ export const Workspace: React.FC = () => {
         </div>
       </div>
 
-      {/* Lifecycle strip removed in commit a9b8e1d.
+      {/* Lifecycle strip removed in commit c0edd56 ("drop the lifecycle strip") and the
+          component file was removed in the immediately
+          following cleanup commit.
           The 5-station progress strip (Question -> Papers ->
           Summary -> Comparison -> Report) sat between the
           action bar and the AddPapersPanel. The action bar
           already exposes the FSM state and allowed_actions,
           and the per-paper list shows progress at the row
-          level; the strip was redundant visual noise. The
-          component is kept in
-          ``frontend/src/components/WorkspaceStatusBar.tsx``
-          in case a future design wants to surface lifecycle
-          progress again (e.g., a compact "Step 2 of 4" pill
-          in the action bar header). */}
+          level; the strip was redundant visual noise. If a
+          future design needs lifecycle progress again, a
+          compact "Step N of M" pill in the action bar header
+          would be a better home than a full-width strip. */}
 
       {/* AddPapersPanel — always visible when FSM allows add_paper.
           This is the primary paper-entry surface. Researchers

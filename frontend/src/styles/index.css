@@ -52,10 +52,11 @@
  *                                     │
  *                                lab-bench.css
  *
- * The lab-bench stylesheet is loaded last so that the lifecycle
- * strip and the action pills can override the default component
- * styles when needed. Without it, ``WorkspaceStatusBar`` renders
- * as raw inline text instead of a horizontal progress strip.
+ * The lab-bench stylesheet is loaded last so that the
+ * lifecycle strip (no longer rendered) and the action
+ * pills can override the default component styles when
+ * needed. Kept here for the action pills; the lifecycle
+ * strip was removed in commit c0edd56 + the cleanup commit that followed it.
  *
  ******************************************************************************/
 
