@@ -88,6 +88,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+import os
+
 
 from app.api.routes import admin
 from app.api.routes import papers
@@ -311,6 +313,50 @@ def create_application() -> FastAPI:
     # When the SPA bundle is present we mount it at "/" so the same
     # port serves both the API and the static assets. Vite's dev
     # server (5173) is unchanged when the bundle is absent.
+
+    # --------------------------------------------------------------
+    # Static-asset cache policy
+    # --------------------------------------------------------------
+    # Without explicit ``Cache-Control`` headers, browsers apply a
+    # heuristic (typically ~10 minutes for JS files). That caches
+    # the wrong bundle whenever a user navigates to ``/`` and the
+    # SPA shell is fresh but the JS bundle inside it isn't.
+    #
+    # We split the cache by file kind:
+    #
+    #   - ``index.html`` (the SPA entry, no content hash)
+    #     -> ``no-cache, must-revalidate``: the browser MUST
+    #     revalidate with the server on every navigation. If the
+    #     server returns the same bytes, the browser reuses its
+    #     cached copy without redownloading. If the bytes differ
+    #     (i.e. a new deploy), the browser fetches the new HTML.
+    #
+    #   - ``assets/*`` (Vite content-hashed bundles and CSS)
+    #     -> ``public, max-age=31536000, immutable``: the
+    #     filename embeds the content hash so it's safe to cache
+    #     for a year. A new deploy produces a new filename and the
+    #     browser downloads the new bundle.
+    #
+    # Operators can disable this via ``DISABLE_STATIC_CACHE_HEADERS=true``
+    # (useful during local dev when the bundle is being rebuilt
+    # every few seconds).
+    if os.environ.get("DISABLE_STATIC_CACHE_HEADERS", "").lower() not in {"1", "true", "yes"}:
+        @application.middleware("http")
+        async def cache_control_for_static_assets(request, call_next):
+            response = await call_next(request)
+            # Only act on requests the StaticFiles mount handles.
+            path = request.url.path
+            if path.endswith("/index.html") or path == "/" or path.endswith("/"):
+                # The SPA entry -- always revalidate.
+                response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            elif path.startswith("/assets/"):
+                # Vite emits content-hashed filenames in ``assets/``
+                # so it's safe to cache forever. ``immutable`` tells
+                # the browser the file will never change at this URL.
+                response.headers["Cache-Control"] = (
+                    "public, max-age=31536000, immutable"
+                )
+            return response
 
     if FRONTEND_DIST.is_dir():
         application.mount(
