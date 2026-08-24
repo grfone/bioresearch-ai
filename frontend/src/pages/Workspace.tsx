@@ -137,6 +137,29 @@ export const Workspace: React.FC = () => {
   // through ``WorkspaceOrchestrator.search_with_filters``.
   const [advancedSearchOpen, setAdvancedSearchOpen] = useState(false);
 
+  // The Add Papers panel is collapsed by default. The user
+  // sees a single "Add papers" button on the workspace page;
+  // clicking opens a modal containing the DOI/PMID/PDF entry
+  // surface. This mirrors the Advanced Search modal pattern
+  // and keeps the workspace page scannable when the user is
+  // reviewing papers rather than adding them.
+  const [addPapersOpen, setAddPapersOpen] = useState(false);
+
+  // Escape key closes the Add Papers modal. We only attach
+  // the listener while the modal is open so the rest of the
+  // page (text inputs, the global Ctrl/Cmd+K shortcut) is
+  // unaffected.
+  useEffect(() => {
+    if (!addPapersOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setAddPapersOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [addPapersOpen]);
+
   // Refs into the entry surfaces so the empty-state cards can
   // scroll the relevant one into view on click.
   const papersSectionRef = React.useRef<HTMLDivElement | null>(null);
@@ -260,16 +283,23 @@ export const Workspace: React.FC = () => {
           compact "Step N of M" pill in the action bar header
           would be a better home than a full-width strip. */}
 
-      {/* AddPapersPanel — always visible when FSM allows add_paper.
-          This is the primary paper-entry surface. Researchers
-          paste DOIs into the bulk input or drop a PDF onto the
-          dropzone; both paths go through the same resolver. */}
-      <AddPapersPanel
-        workspaceId={currentWorkspace.workspace_id}
-        enabled={can('add_paper')}
-        bulkInputRef={doiInputRef}
-        shortcutHint={shortcutLabel({ key: 'k', ctrl: true }, isMacPlatform())}
-      />
+      {/* Add Papers button — visible when the FSM allows
+          add_paper. Opens the modal containing the actual
+          entry surface (DOI/PMID bulk, single DOI, PDF
+          upload). Mirrors the Advanced Search Options
+          modal pattern: a standard blue button on the
+          page, modal on click. */}
+      {can('add_paper') && (
+        <button
+          type="button"
+          className="btn btn-primary"
+          data-action="open-add-papers"
+          onClick={() => setAddPapersOpen(true)}
+        >
+          <Plus size={16} aria-hidden="true" />
+          Add papers
+        </button>
+      )}
 
       {/* Action bar — simplified. See
           ``components/WorkspaceActionBar.tsx`` for the
@@ -375,6 +405,51 @@ export const Workspace: React.FC = () => {
         isOpen={advancedSearchOpen}
         onClose={() => setAdvancedSearchOpen(false)}
       />
+
+      {/* Add Papers modal — opens from the "Add papers"
+          button. The actual entry surface is the existing
+          ``<AddPapersPanel>`` component (DOI tab + PDF
+          tab + bulk input + dropzone); we just wrap it in
+          a backdrop+dialog overlay so the workspace page
+          itself stays scannable. The modal closes when
+          the user clicks the backdrop, presses Escape, or
+          clicks the X in the header. */}
+      {addPapersOpen && (
+        <div
+          id="add-papers-modal"
+          className="overlay"
+          onClick={() => setAddPapersOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Add papers to this workspace"
+        >
+          <div
+            className="dialog"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="dialog-header">
+              <h2 className="dialog-title">Add papers</h2>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setAddPapersOpen(false)}
+                aria-label="Close add papers"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <AddPapersPanel
+              workspaceId={currentWorkspace.workspace_id}
+              enabled={can('add_paper')}
+              bulkInputRef={doiInputRef}
+              shortcutHint={shortcutLabel(
+                { key: 'k', ctrl: true },
+                isMacPlatform(),
+              )}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -26,8 +26,21 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+
+// Stub the AddPapersPanel: it has its own deep test
+// suite. We only need to verify the Workspace page
+// collapses it behind a modal.
+vi.mock('../components/AddPapersPanel', () => ({
+  AddPapersPanel: () => <div data-testid="add-papers-panel-stub" />,
+}));
+
+// Stub the toast store; the modal doesn't trigger toasts
+// in the test paths.
+vi.mock('../state/toastStore', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
 
 // Mock react-router-dom so we can observe the navigate call
 // without a real router. The loader's lifecycle is timed
@@ -71,7 +84,7 @@ vi.mock('../state/workspaceStore', () => ({
         state: 'REPORTED',
         papers: [],
         total_papers: 0,
-        allowed_actions: ['report'],
+        allowed_actions: ['add_paper', 'report'],
       },
       setCurrentWorkspace: vi.fn(),
       removePaper: vi.fn(),
@@ -93,7 +106,7 @@ vi.mock('../hooks/useWorkspace', () => ({
       state: 'REPORTED',
       papers: [],
       total_papers: 0,
-      allowed_actions: ['report'],
+      allowed_actions: ['add_paper', 'report'],
     },
     loading: false,
     error: null,
@@ -189,3 +202,189 @@ describe('Workspace > handleGenerateReport', () => {
 // ``useWorkspaceStore`` above so the mock can reference
 // its selector shape, even though the variable is unused.
 void useWorkspaceStore;
+
+describe('Workspace > Add Papers collapse', () => {
+  it('renders a single "Add papers" button instead of the full panel', async () => {
+    // After commit b8e8a3a the always-visible AddPapersPanel
+    // was replaced with a collapsed-by-default button +
+    // modal pattern. The workspace page now shows a single
+    // primary button on the page surface; the actual
+    // DOI/PDF entry UI lives inside the modal.
+    const { Workspace } = await import('./Workspace');
+    render(<Workspace />);
+
+    // The button is visible.
+    const button = screen.getByRole('button', { name: /add papers/i });
+    expect(button).toBeInTheDocument();
+    // The button uses the same .btn-primary class as the
+    // other primary CTAs on the page.
+    expect(button).toHaveClass('btn-primary');
+    // The button has a stable test selector hook for
+    // future integration tests / e2e.
+    expect(button).toHaveAttribute('data-action', 'open-add-papers');
+
+    // The AddPapersPanel itself is NOT in the DOM until
+    // the modal opens.
+    expect(
+      screen.queryByTestId('add-papers-panel-stub'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('dialog', { name: /add papers to this workspace/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('opens the modal with the AddPapersPanel when the button is clicked', async () => {
+    const user = userEvent.setup();
+    const { Workspace } = await import('./Workspace');
+    render(<Workspace />);
+
+    const button = screen.getByRole('button', { name: /add papers/i });
+    await user.click(button);
+
+    // After clicking, the modal opens. The dialog is
+    // rendered with the right ARIA label and the
+    // AddPapersPanel stub appears inside.
+    const dialog = await screen.findByRole('dialog', {
+      name: /add papers to this workspace/i,
+    });
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByTestId('add-papers-panel-stub')).toBeInTheDocument();
+  });
+
+  it('closes the modal when the backdrop is clicked', async () => {
+    const user = userEvent.setup();
+    const { Workspace } = await import('./Workspace');
+    render(<Workspace />);
+
+    // Open
+    await user.click(
+      screen.getByRole('button', { name: /add papers/i }),
+    );
+    const dialog = await screen.findByRole('dialog', {
+      name: /add papers to this workspace/i,
+    });
+    expect(dialog).toBeInTheDocument();
+
+    // Click the backdrop. The dialog wrapper has the
+    // onClick handler; clicking it directly dispatches a
+    // user click that fires the close path.
+    await user.click(dialog);
+
+    // Modal closes; the dialog role element is gone.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('dialog', { name: /add papers to this workspace/i }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it('closes the modal when the X close button is clicked', async () => {
+    const user = userEvent.setup();
+    const { Workspace } = await import('./Workspace');
+    render(<Workspace />);
+
+    // Open
+    await user.click(
+      screen.getByRole('button', { name: /add papers/i }),
+    );
+    await screen.findByRole('dialog', { name: /add papers to this workspace/i });
+
+    // Click the close (X) button in the dialog header
+    const closeButton = screen.getByRole('button', { name: /close add papers/i });
+    await user.click(closeButton);
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('dialog', { name: /add papers to this workspace/i }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it('closes the modal when Escape is pressed', async () => {
+    const user = userEvent.setup();
+    const { Workspace } = await import('./Workspace');
+    render(<Workspace />);
+
+    // Open
+    await user.click(
+      screen.getByRole('button', { name: /add papers/i }),
+    );
+    await screen.findByRole('dialog', { name: /add papers to this workspace/i });
+
+    // Escape key
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('dialog', { name: /add papers to this workspace/i }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it('does NOT show the Add papers button when FSM does not allow add_paper', async () => {
+    // Override the workspaceStore mock for this single test
+    // by re-rendering with a workspace whose allowed_actions
+    // does NOT include 'add_paper'.
+    //
+    // We use vi.doMock so the import resolves against the
+    // alternative mock for this test only.
+    vi.doMock('../state/workspaceStore', () => ({
+      useWorkspaceStore: (
+        selector: (state: {
+          currentWorkspace: unknown;
+          setCurrentWorkspace: (...args: unknown[]) => void;
+          removePaper: (...args: unknown[]) => void;
+          clearPapers: (...args: unknown[]) => void;
+        }) => unknown,
+      ) => {
+        return selector({
+          currentWorkspace: {
+            workspace_id: 'ws-1',
+            question: 'biomarkers',
+            state: 'REPORTED',
+            papers: [],
+            total_papers: 0,
+            // 'add_paper' is NOT in this list.
+            allowed_actions: ['report'],
+          },
+          setCurrentWorkspace: vi.fn(),
+          removePaper: vi.fn(),
+          clearPapers: vi.fn(),
+        });
+      },
+    }));
+    vi.doMock('../hooks/useWorkspace', () => ({
+      useWorkspace: () => ({
+        workspace: {
+          workspace_id: 'ws-1',
+          question: 'biomarkers',
+          state: 'REPORTED',
+          papers: [],
+          total_papers: 0,
+          allowed_actions: ['report'],
+        },
+        loading: false,
+        error: null,
+        fetchWorkspace: vi.fn(),
+        runAction: vi.fn(),
+        updateWorkspace: vi.fn(),
+        searchAndAddPapers: vi.fn(),
+        fetchTransitions: vi.fn(),
+        fetchEvidenceComparison: vi.fn(),
+        generateReport: vi.fn(),
+        removePaper: vi.fn(),
+      }),
+    }));
+
+    // Reset module registry so the new mocks take effect.
+    vi.resetModules();
+    const { Workspace } = await import('./Workspace');
+    render(<Workspace />);
+
+    // The button is NOT in the DOM when the FSM does not
+    // allow add_paper. (REPORTED -> no more adds.)
+    expect(
+      screen.queryByRole('button', { name: /add papers/i }),
+    ).not.toBeInTheDocument();
+  });
+});
