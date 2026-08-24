@@ -40,6 +40,5 @@ export interface EvidenceComparisonResponse {
   future_directions: string[];
   used_paper_ids: string[];
   matrix: EvidenceMatrixResponse | null;
-  confidence: number | null;
   metadata: Record<string, string>;
 }

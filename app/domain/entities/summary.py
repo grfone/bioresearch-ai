@@ -45,18 +45,6 @@ class Summary:
     text : str
         The generated summary presented to the researcher.
 
-    confidence : float | None
-        Optional confidence score assigned by the summarization
-        pipeline.
-
-        The interpretation of this value depends on the implementation.
-        For example, it may represent:
-            - LLM self-evaluation
-            - Consensus between multiple models
-            - Custom confidence heuristic
-
-        Expected range is [0.0, 1.0].
-
     papers_used : list[Paper]
         Scientific publications used to generate the summary.
 
@@ -65,8 +53,6 @@ class Summary:
     """
 
     text: str
-
-    confidence: float | None = None
 
     papers_used: list[Paper] = field(default_factory=list)
 
@@ -95,18 +81,6 @@ class Summary:
         """
         return self.paper_count > 0
 
-    @property
-    def has_confidence_score(self) -> bool:
-        """
-        Indicate whether a confidence value has been assigned.
-
-        Returns
-        -------
-        bool
-            True if confidence is available.
-        """
-        return self.confidence is not None
-
     def __str__(self) -> str:
         """
         Return a concise human-readable representation.
@@ -116,8 +90,4 @@ class Summary:
         str
             Short description of the summary.
         """
-        return (
-            f"Summary("
-            f"papers={self.paper_count}, "
-            f"confidence={self.confidence})"
-        )
+        return f"Summary(papers={self.paper_count})"

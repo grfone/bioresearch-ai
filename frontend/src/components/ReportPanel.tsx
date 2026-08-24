@@ -4,7 +4,7 @@
  * ---------------
  * Panel displaying a complete generated research report.
  *
- * Includes summary, citations, limitations, future work, and confidence.
+ * Includes summary, citations, limitations, and future work.
  * Designed for the Report page but reusable elsewhere.
  *
  * Uses CSS classes: .glass-panel, .citation-card, .evidence-card etc.
@@ -15,7 +15,7 @@
 import React from 'react';
 import type { ReportResponse } from '../models/report';
 import { hasLimitations, hasFutureWork } from '../models/report';
-import { AlertCircle, Lightbulb, CheckCircle, FileText } from 'lucide-react';
+import { AlertCircle, Lightbulb, FileText } from 'lucide-react';
 
 interface ReportPanelProps {
   /** The report to display */
@@ -86,14 +86,8 @@ export const ReportPanel: React.FC<ReportPanelProps> = ({ report, className = ''
         </section>
       )}
 
-      {/* Confidence & metadata */}
+      {/* Metadata footer */}
       <div className="flex flex-wrap items-center gap-6 text-xs text-muted pt-4 border-t border-border-subtle">
-        {report.confidence !== null && (
-          <div className="flex items-center gap-2">
-            <CheckCircle size={14} className="text-success" />
-            <span>Confidence: {Math.round(report.confidence * 100)}%</span>
-          </div>
-        )}
         <span>Generated: {new Date(report.generated_at).toLocaleString()}</span>
         <span>Citations: {report.citations.length}</span>
       </div>

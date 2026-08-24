@@ -71,7 +71,6 @@ class EvidenceComparisonResponse(BaseModel):
     future_directions: list[str] = Field(default_factory=list)
     used_paper_ids: list[str] = Field(default_factory=list)
     matrix: EvidenceMatrixResponse | None = None
-    confidence: float | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
 
     @classmethod
@@ -126,6 +125,5 @@ class EvidenceComparisonResponse(BaseModel):
             future_directions=list(comparison.future_directions),
             used_paper_ids=list(comparison.used_paper_ids),
             matrix=matrix_resp,
-            confidence=comparison.confidence,
             metadata=dict(comparison.metadata),
         )

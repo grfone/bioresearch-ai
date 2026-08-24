@@ -60,7 +60,7 @@ class ReportResponse(BaseModel):
     Serialized representation of a biomedical research report.
 
     A ReportResponse contains the synthesized scientific evidence,
-    supporting references, confidence assessment, and metadata describing
+    supporting references and metadata describing
     the generated report.
 
     Attributes
@@ -79,9 +79,6 @@ class ReportResponse(BaseModel):
 
     future_work : list[str]
         Suggested future research directions.
-
-    confidence : float | None
-        Overall confidence assigned to the report.
 
     generated_at : datetime
         UTC timestamp indicating when the report was generated.
@@ -110,13 +107,6 @@ class ReportResponse(BaseModel):
     future_work: list[str] = Field(
         default_factory=list,
         description="Suggested future research directions."
-    )
-
-    confidence: float | None = Field(
-        default=None,
-        ge=0.0,
-        le=1.0,
-        description="Overall confidence assigned to the report."
     )
 
     generated_at: datetime = Field(
@@ -192,5 +182,4 @@ class ReportResponse(BaseModel):
             ],
             limitations=report.limitations,
             future_work=report.future_work,
-            confidence=report.confidence,
         )

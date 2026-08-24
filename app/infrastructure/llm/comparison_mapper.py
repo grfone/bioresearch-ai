@@ -66,7 +66,6 @@ class _ComparisonJSON:
     research_gaps: list[str]
     future_directions: list[str]
     matrix: dict[str, Any] | None
-    confidence: float | None
 
 
 @dataclass
@@ -145,7 +144,6 @@ class EvidenceComparisonMapper:
             future_directions=future_directions,
             used_paper_ids=used_paper_ids,
             matrix=matrix,
-            confidence=parsed.confidence,
             metadata={
                 "model": response.model,
                 "finish_reason": response.finish_reason,
@@ -195,7 +193,6 @@ class EvidenceComparisonMapper:
             research_gaps=list(obj.get("research_gaps") or []),
             future_directions=list(obj.get("future_directions") or []),
             matrix=obj.get("matrix") if isinstance(obj.get("matrix"), dict) else None,
-            confidence=self._safe_float(obj.get("confidence")),
         )
 
     def _from_markdown(self, content: str) -> _ComparisonJSON:
@@ -204,7 +201,6 @@ class EvidenceComparisonMapper:
         contradictions_raw = sections.get("contradictions", [])
         gaps_raw = sections.get("research gaps", [])
         future_raw = sections.get("future directions", [])
-        confidence = self._try_extract_confidence(content)
 
         return _ComparisonJSON(
             consensus=[
@@ -218,7 +214,6 @@ class EvidenceComparisonMapper:
             research_gaps=gaps_raw,
             future_directions=future_raw,
             matrix=None,
-            confidence=confidence,
         )
 
     # ------------------------------------------------------------------
@@ -382,23 +377,4 @@ class EvidenceComparisonMapper:
                     sections.setdefault(current, []).append(value)
         return sections
 
-    @staticmethod
-    def _try_extract_confidence(content: str) -> float | None:
-        for line in content.splitlines():
-            if "confidence" not in line.lower():
-                continue
-            tokens = (
-                line.replace("%", "")
-                .replace(":", " ")
-                .split()
-            )
-            for item in tokens:
-                try:
-                    f = float(item)
-                except ValueError:
-                    continue
-                if f > 1:
-                    f /= 100.0
-                if 0.0 <= f <= 1.0:
-                    return f
-        return None
+

@@ -316,7 +316,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         return json.dumps(
             {
                 "text": summary.text,
-                "confidence": summary.confidence,
                 "papers_used": [self._paper_to_dict(p) for p in summary.papers_used],
             }
         )
@@ -336,7 +335,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                 ],
                 "limitations": report.limitations,
                 "future_work": report.future_work,
-                "confidence": report.confidence,
                 "metadata": report.metadata,
             }
         )
@@ -384,7 +382,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                 "future_directions": comparison.future_directions,
                 "used_paper_ids": comparison.used_paper_ids,
                 "matrix": self._matrix_to_dict(comparison.matrix),
-                "confidence": comparison.confidence,
                 "metadata": comparison.metadata,
             }
         )
@@ -543,7 +540,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         )
         return Summary(
             text=data["text"],
-            confidence=data.get("confidence"),
             papers_used=papers_used,
         )
 
@@ -591,7 +587,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             citations=citations,
             limitations=data.get("limitations", []),
             future_work=data.get("future_work", []),
-            confidence=data.get("confidence"),
             metadata=data.get("metadata", {}),
         )
 
@@ -682,7 +677,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             future_directions=data.get("future_directions", []),
             used_paper_ids=data.get("used_paper_ids", []),
             matrix=matrix,
-            confidence=data.get("confidence"),
             metadata=data.get("metadata", {}),
         )
 

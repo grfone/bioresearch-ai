@@ -138,6 +138,5 @@ class SummarizePapersUseCase:
 
         return Summary(
             text=response.content,
-            confidence=None,
             papers_used=papers,
         )

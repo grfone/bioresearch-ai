@@ -29,7 +29,6 @@ A ResearchReport is responsible for representing:
 - Supporting evidence
 - Known limitations
 - Suggested future work
-- Confidence assessment
 - Report metadata
 
 It is **not** responsible for:
@@ -82,17 +81,6 @@ class ResearchReport:
     future_work : list[str]
         Suggested follow-up experiments, analyses, or research directions.
 
-    confidence : float | None
-        Overall confidence assigned to the report.
-
-        Expected range
-        --------------
-        0.0
-            Very low confidence.
-
-        1.0
-            Very high confidence.
-
     metadata : dict[str, str]
         Optional metadata describing report generation, such as:
 
@@ -127,8 +115,6 @@ class ResearchReport:
     limitations: list[str] = field(default_factory=list)
 
     future_work: list[str] = field(default_factory=list)
-
-    confidence: float | None = None
 
     metadata: dict[str, str] = field(default_factory=dict)
 
@@ -203,23 +189,3 @@ class ResearchReport:
         if recommendation.strip():
             self.future_work.append(recommendation)
 
-    def set_confidence(self, confidence: float) -> None:
-        """
-        Assign an overall confidence score to the report.
-
-        Parameters
-        ----------
-        confidence : float
-            Confidence score between 0.0 and 1.0.
-
-        Raises
-        ------
-        ValueError
-            If the confidence score falls outside the valid range.
-        """
-        if not 0.0 <= confidence <= 1.0:
-            raise ValueError(
-                "Confidence must be between 0.0 and 1.0."
-            )
-
-        self.confidence = confidence

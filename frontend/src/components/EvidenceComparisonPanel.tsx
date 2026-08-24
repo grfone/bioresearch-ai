@@ -219,12 +219,6 @@ export const EvidenceComparisonPanel: React.FC<EvidenceComparisonPanelProps> = (
           </div>
         </section>
       )}
-
-      {comparison.confidence !== null && (
-        <p className="evidence-comparison-confidence">
-          Confidence: {Math.round(comparison.confidence * 100)}%
-        </p>
-      )}
     </div>
   );
 };

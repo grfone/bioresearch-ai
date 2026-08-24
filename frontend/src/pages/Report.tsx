@@ -45,7 +45,6 @@
  * • Display the executive summary.
  * • List supporting citations.
  * • Show limitations and future work sections if included.
- * • Display confidence score.
  * • Provide a button to regenerate the report.
  *
  * The page uses the `useWorkspace` hook to generate the report and
@@ -277,12 +276,6 @@ export const Report: React.FC = () => {
           <span>
             Generated {new Date(report.generated_at).toLocaleDateString()}
           </span>
-
-              {report.confidence !== null && (
-                  <span>
-              {Math.round(report.confidence * 100)}% Confidence
-            </span>
-              )}
 
               <span>
             {report.citations.length} Citation

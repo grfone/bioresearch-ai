@@ -202,18 +202,59 @@ class LLMReportGenerator(ReportGenerator):
         Future versions may extract prompts into dedicated prompt builders.
         """
 
+        # The summary text contains ``[paper:N]`` markers (one per
+        # cited paper; index ``N`` is the position in
+        # ``summary.papers_used``). We mirror that convention
+        # in the report -- the LLM should use the same markers
+        # when it cites a paper, so the citation pipeline can
+        # match the LLM's mentions back to the bibliography
+        # we build in ``ReportMapper``.
+        #
+        # We ask for four sections the report UI already renders:
+        # Title, Executive Summary, Limitations, Future Work.
+        # We deliberately do NOT ask for a confidence score: the LLM
+        # is generating the report FROM the papers the user supplied,
+        # so any self-evaluation ("I'm 85% confident") would be
+        # tautological. We surface the supporting papers and their
+        # bibliography instead -- that's the real evidence of
+        # credibility. See ADR-009 (planned) for the rationale.
+        summary_text = str(summary)
+        user_prompt = (
+            "Create a structured biomedical research report "
+            "for this research question:\n\n"
+            f"{question.question}\n\n"
+            "Use the following evidence summary as the report's "
+            "foundation. Every paper cited in the summary is "
+            "marked with ``[paper:N]`` -- preserve those markers "
+            "in your output so downstream tools can build the "
+            "bibliography. The summary text itself is:\n\n"
+            f"{summary_text}\n\n"
+            "Output structure (use exactly these section headings):\n\n"
+            "# <report title>\n\n"
+            "## Executive Summary\n"
+            "<2-4 paragraphs synthesising the evidence; reference "
+            "papers by their ``[paper:N]`` markers>\n\n"
+            "## Limitations\n"
+            "- <limitation 1>\n"
+            "- <limitation 2>\n\n"
+            "## Future Work\n"
+            "- <future research direction 1>\n"
+            "- <future research direction 2>"
+        )
+
         return Prompt(
             system=(
                 "You are a biomedical research assistant. "
                 "Generate a rigorous scientific report based on "
-                "available scientific evidence."
+                "available scientific evidence. Every factual "
+                "claim must reference the source paper using its "
+                "``[paper:N]`` marker (e.g. ``[paper:1]`` for the "
+                "first cited paper). Do NOT include any confidence "
+                "or uncertainty score -- the supporting papers and "
+                "the bibliography are the evidence of credibility."
             ),
-            user=(
-                "Create a structured biomedical research report "
-                "for this research question:\n\n"
-                f"{question.question}"
-            ),
-            context=str(summary),
+            user=user_prompt,
+            context=summary_text,
             temperature=0.2,
             max_tokens=4096,
             metadata={

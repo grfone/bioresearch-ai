@@ -287,7 +287,6 @@ describe('Report > loader phases', () => {
       summary: '# A Test Report\n\nSome content here.',
       sections: [{ title: 'Introduction', content: 'Some content.' }],
       citations: [],
-      confidence: 0.9,
       limitations: [],
       future_work: [],
     });

@@ -74,10 +74,6 @@ class EvidenceComparison:
         Optional side-by-side comparison table. Generated when the
         LLM is asked to also produce a structured matrix.
 
-    confidence : float | None
-        Optional overall confidence score in the comparison
-        (range [0.0, 1.0]).
-
     metadata : dict[str, str]
         Generator metadata (model, temperature, etc.).
     """
@@ -88,7 +84,6 @@ class EvidenceComparison:
     future_directions: list[str] = field(default_factory=list)
     used_paper_ids: list[str] = field(default_factory=list)
     matrix: EvidenceMatrix | None = None
-    confidence: float | None = None
     metadata: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -107,12 +102,6 @@ class EvidenceComparison:
         return self.matrix is not None and bool(self.matrix.rows)
 
     def __post_init__(self) -> None:
-        if self.confidence is not None:
-            if not 0.0 <= self.confidence <= 1.0:
-                raise ValueError(
-                    "EvidenceComparison.confidence must be in [0.0, 1.0]."
-                )
-
         # Dedupe and freeze used_paper_ids
         seen: set[str] = set()
         normalised: list[str] = []

@@ -98,7 +98,6 @@ def test_parses_full_json_response() -> None:
     assert result.matrix is not None
     assert result.matrix.columns == ["Methods", "Outcome"]
     assert len(result.matrix.rows) == 2
-    assert result.confidence == 0.85
     assert result.used_paper_ids == ["111", "222"]
 
 
@@ -148,7 +147,6 @@ Confidence: 0.7
     assert len(result.contradictions) == 1
     assert result.research_gaps == ["Long-term follow-up is missing."]
     assert result.future_directions == ["Run a multi-centre RCT."]
-    assert result.confidence == 0.7
 
 
 def test_empty_response_raises() -> None:
@@ -159,19 +157,3 @@ def test_empty_response_raises() -> None:
     except ValueError:
         return
     raise AssertionError("expected ValueError for empty response")
-
-
-def test_confidence_in_valid_range() -> None:
-    papers = [_paper("111")]
-    payload = json.dumps(
-        {
-            "consensus": [],
-            "research_gaps": [],
-            "future_directions": [],
-            "matrix": None,
-            "confidence": 1.5,  # out of range, should be ignored
-        }
-    )
-    mapper = EvidenceComparisonMapper()
-    result = mapper.map(_resp(payload), papers)
-    assert result.confidence is None

@@ -52,8 +52,6 @@ export interface ReportResponse {
   limitations: string[];
   /** Suggested future research directions (if requested) */
   future_work: string[];
-  /** Confidence score (0.0 to 1.0) assigned to the report, if available */
-  confidence: number | null;
   /** UTC timestamp when the report was generated */
   generated_at: string; // ISO 8601 date string
 }
