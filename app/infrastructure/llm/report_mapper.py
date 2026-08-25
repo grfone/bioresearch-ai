@@ -215,6 +215,32 @@ class ReportMapper:
         list[Citation]
             Citations ordered by appearance, deduplicated, capped.
         """
+        # ----------------------------------------------------------------
+        # Citation matching strategy
+        # ----------------------------------------------------------------
+        # We use a two-signal approach: marker-based matching (the
+        # primary signal) and title/DOI substring matching (the
+        # fallback).
+        #
+        # Why marker-based is primary:
+        #   Real LLM summaries paraphrase paper titles. The previous
+        #   title-substring matcher found zero citations in production
+        #   even with 20 papers loaded, because the LLM rewrote every
+        #   title in the synthesis. ``[paper:N]`` markers in the
+        #   summary text bypass the paraphrasing problem: the LLM
+        #   references the paper by its 1-indexed position in the
+        #   papers list, which is independent of the title text.
+        #
+        # Why we keep substring matching as a fallback:
+        #   Markers require a summary prompt that emits them. If the
+        #   LLM ignores the marker instruction (older prompts, model
+        #   regressions), the substring matcher still works for papers
+        #   that are mentioned by their literal title or DOI.
+        #
+        # The full chain (markers -> fallback -> dedup -> cap) is
+        # exercised in tests/unit/test_report_mapper.py and the
+        # integration suite.
+
         # ``summary.papers_used`` may be a tuple or list; convert
         # defensively.
         papers = list(summary.papers_used)
@@ -222,21 +248,47 @@ class ReportMapper:
             return []
 
         text = summary.text or ""
-        # Lowercase for case-insensitive substring matching.
-        haystack = text.lower()
 
-        def first_index(paper) -> int:
-            # Match on title (most reliable signal). Fall back to
-            # DOI if the title is missing or absent from the text.
+        import re as _re
+
+        # Extract every ``[paper:N]`` marker position from the text.
+        # ``re.finditer`` returns matches in left-to-right order so
+        # we can rely on iteration order for "first appearance" tracking.
+        marker_positions: dict[int, int] = {}
+        for match in _re.finditer(r"\[paper:(\d+)\]", text):
+            index = int(match.group(1))
+            # First occurrence of each marker index wins (a paper can
+            # be cited multiple times; we only care about the first).
+            if index not in marker_positions:
+                marker_positions[index] = match.start()
+
+        # ``papers`` is 0-indexed but the LLM sees 1-indexed
+        # positions. Build the marker-driven order: sort by the
+        # FIRST occurrence of each marker in the text, so the
+        # citation list mirrors the order the LLM chose to mention
+        # them in the synthesis.
+        marker_order: list[int] = []
+        for marker_index_1based in sorted(
+            marker_positions, key=lambda k: marker_positions[k]
+        ):
+            paper_index_0based = marker_index_1based - 1
+            if 0 <= paper_index_0based < len(papers):
+                marker_order.append(paper_index_0based)
+
+        # Substring fallback for any papers not picked up by
+        # markers. ``fallback_positions[i]`` is the first char
+        # index in the text where paper i's title/DOI appears, or
+        # -1 if the paper never appeared.
+        haystack = text.lower()
+        fallback_positions: list[int] = [-1] * len(papers)
+        for paper_index, paper in enumerate(papers):
+            if paper_index in marker_order:
+                # Already cited via marker; no need to substring-match.
+                continue
             needle_title = (paper.title or "").lower()
             needle_doi = (paper.doi or "").lower()
-            candidates = []
+            candidates: list[int] = []
             if needle_title and len(needle_title) >= 4:
-                # Long-enough title to avoid false matches on
-                # common short phrases ("a study", "the", "and").
-                # 4 chars is the smallest threshold that still
-                # rejects trivial matches; papers with shorter
-                # titles are extremely rare in biomedical research.
                 idx = haystack.find(needle_title)
                 if idx >= 0:
                     candidates.append(idx)
@@ -244,32 +296,40 @@ class ReportMapper:
                 idx = haystack.find(needle_doi)
                 if idx >= 0:
                     candidates.append(idx)
-            if not candidates:
-                # The paper didn't appear in the summary text at
-                # all -- the LLM saw it but didn't cite it. Skip.
-                return -1
-            return min(candidates)
+            fallback_positions[paper_index] = (
+                min(candidates) if candidates else -1
+            )
 
+        # Build the citation list.
         seen_dois: set[str] = set()
         ordered: list = []
-        # Sort by first appearance; ties broken by stable order in
-        # ``papers_used``. Papers with first_index == -1 (not
-        # mentioned in the summary) sort to the end of the list and
-        # get dropped below.
-        indexed = sorted(
-            enumerate(papers),
-            key=lambda pair: (first_index(pair[1]), pair[0]),
-        )
-        for _, paper in indexed:
-            # Drop papers that never appeared in the summary text.
-            # They may have influenced the LLM's synthesis at a
-            # high level (e.g. as background reading) but citing
-            # them in the bibliography would be misleading -- the
-            # report makes no claim that came from them.
-            if first_index(paper) < 0:
-                continue
+
+        # Phase 1: marker-driven citations, in marker appearance order.
+        for paper_index in marker_order:
+            paper = papers[paper_index]
             if paper.doi and paper.doi in seen_dois:
-                # Deduplicate by DOI.
+                continue
+            if paper.doi:
+                seen_dois.add(paper.doi)
+            ordered.append(
+                Citation(paper=paper, style=CitationStyleEnum.APA)
+            )
+            if len(ordered) >= max_count:
+                return ordered
+
+        # Phase 2: substring-driven citations, in first-appearance order.
+        # Papers with no match at all (fallback_positions == -1) are
+        # dropped -- they didn't influence the synthesis, so citing
+        # them in the bibliography would be misleading.
+        substring_candidates = [
+            (pos, idx)
+            for idx, pos in enumerate(fallback_positions)
+            if pos >= 0
+        ]
+        substring_candidates.sort(key=lambda pair: pair[0])
+        for _, paper_index in substring_candidates:
+            paper = papers[paper_index]
+            if paper.doi and paper.doi in seen_dois:
                 continue
             if paper.doi:
                 seen_dois.add(paper.doi)
@@ -278,6 +338,7 @@ class ReportMapper:
             )
             if len(ordered) >= max_count:
                 break
+
         return ordered
     @staticmethod
     def _extract_section(

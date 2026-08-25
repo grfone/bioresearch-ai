@@ -116,18 +116,37 @@ class SummarizePapersUseCase:
                 "Cannot summarize an empty collection of papers."
             )
 
-        context = "\n\n".join(
-            f"Title: {paper.title}\n"
-            f"Abstract: {paper.abstract}"
-            for paper in papers
-        )
+        # Number each paper 1..N so the LLM can reference them by
+        # ``[paper:N]`` markers in its synthesis. This is the
+        # same numbering the report prompt uses, so the report
+        # mapper can extract these markers from the summary text
+        # and use them to build a reliable citation list -- no
+        # string-matching on paraphrased titles required.
+        #
+        # We number from the ``papers`` list order, which is
+        # already the order they were added to the workspace
+        # (most relevant first). The LLM sees the indices and
+        # preserves them in the summary text.
+        context_lines: list[str] = []
+        for index, paper in enumerate(papers, start=1):
+            context_lines.append(
+                f"[paper:{index}]\n"
+                f"Title: {paper.title}\n"
+                f"Abstract: {paper.abstract}"
+            )
+        context = "\n\n".join(context_lines)
 
         prompt = Prompt(
             system=(
                 "You are an expert biomedical research assistant. "
                 "Summarize the scientific evidence objectively, "
                 "highlight consensus and disagreements when present, "
-                "and avoid unsupported conclusions."
+                "and avoid unsupported conclusions.\n\n"
+                "Whenever you cite a paper, preserve its ``[paper:N]`` "
+                "marker verbatim in your summary text -- this is how "
+                "downstream tools build the bibliography. Do NOT "
+                "paraphrase the markers or omit them when referencing "
+                "evidence from a paper."
             ),
             user=question.question,
             context=context,

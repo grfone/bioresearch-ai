@@ -579,7 +579,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                 keywords=paper_dict.get("keywords", []),
                 url=paper_dict.get("url"),
             )
-            style = CitationStyleEnum(cit.get("style", "apa").lower())
+            style = CitationStyleEnum(cit.get("style", "APA"))
             citations.append(Citation(paper=paper, style=style))
 
         return ResearchReport(
