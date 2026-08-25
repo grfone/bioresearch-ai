@@ -122,10 +122,39 @@ class OpenAICompatibleProvider(LLMProvider):
             self.model_env or "",
             self.default_model,
         )
+        # Resolution order for ``self._base_url``:
+        #
+        #   1. Explicit ``base_url`` constructor arg (overrides everything).
+        #   2. ``<API_KEY_ENV_PREFIX>_BASE_URL`` environment variable
+        #      (e.g. ``OPENAI_BASE_URL`` for an ``OPENAI_API_KEY``
+        #      provider). This is what lets users point an
+        #      OpenAI-compatible provider at MiniMax / Azure / vLLM
+        #      without subclassing.
+        #   3. Class-level ``self.base_url`` (the production default,
+        #      e.g. ``https://api.openai.com/v1`` for ``OpenAIProvider``).
+        #
+        # Two bugs in the previous implementation:
+        #
+        #   a) The resolution order was constructor-arg -> class-attr
+        #      -> env, which made the env variable unreachable for any
+        #      provider that ships with a non-empty ``base_url`` class
+        #      attribute (which is every provider in the catalog).
+        #
+        #   b) The env var name was computed as
+        #      ``f"{api_key_env}_BASE_URL".replace("_API_KEY", "_BASE_URL")``
+        #      which for ``api_key_env="OPENAI_API_KEY"`` produces
+        #      ``"OPENAI_BASE_URL_BASE_URL"`` -- the ``replace`` fires
+        #      on the ``_API_KEY`` substring *inside* the f-string
+        #      result, leaving a duplicated ``_BASE_URL`` suffix. The
+        #      correct derivation is: strip the ``_API_KEY`` suffix
+        #      from the key env name, then append ``_BASE_URL``.
+        self._base_url_env = (
+            self.api_key_env.removesuffix("_API_KEY") + "_BASE_URL"
+        )
         self._base_url = (
             base_url
+            or os.getenv(self._base_url_env, "")
             or self.base_url
-            or os.getenv(f"{self.api_key_env}_BASE_URL".replace("_API_KEY", "_BASE_URL"), "")
         )
         self._extra_headers = dict(extra_headers or {})
         self._timeout = timeout
