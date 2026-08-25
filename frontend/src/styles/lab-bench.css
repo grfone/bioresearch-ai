@@ -385,13 +385,6 @@
   color: var(--pill-text);
 }
 
-.evidence-comparison-confidence {
-  margin-top: 1rem;
-  font-size: 0.8rem;
-  color: var(--bench-text-muted);
-  font-style: italic;
-}
-
 /* ---------------------------------------------------------------------------
  * Responsive
  * --------------------------------------------------------------------------- */

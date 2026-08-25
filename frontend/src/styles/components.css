@@ -1861,59 +1861,6 @@ Examples
 }
 
 
-/*=============================================================================
-    Confidence Bar
-=============================================================================*/
-
-/*
-    Represents AI confidence.
-
-    Example
-
-    Confidence
-
-    █████████░ 91%
-*/
-
-.confidence-bar {
-
-    width: 100%;
-
-    height: 8px;
-
-    overflow: hidden;
-
-    border-radius:
-
-        999px;
-
-    background:
-
-        rgba(255,255,255,.06);
-
-}
-
-
-.confidence-bar-fill {
-
-    height: 100%;
-
-    border-radius: inherit;
-
-    background:
-
-        linear-gradient(
-
-            90deg,
-
-            var(--color-primary),
-
-            var(--color-gradient-purple)
-
-        );
-
-}
-
 
 /*=============================================================================
     Progress Bar
@@ -2607,28 +2554,6 @@ application.
 
 }
 
-
-/*=============================================================================
-    Confidence Indicator
-=============================================================================*/
-
-.evidence-confidence {
-
-    display: flex;
-
-    align-items: center;
-
-    gap: var(--space-3);
-
-}
-
-.evidence-score {
-
-    color: var(--color-success);
-
-    font-weight: var(--font-weight-bold);
-
-}
 
 
 /*=============================================================================
