@@ -81,14 +81,14 @@ from __future__ import annotations
 
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-
-import os
 
 
 from app.api.routes import admin
@@ -307,9 +307,53 @@ def create_application() -> FastAPI:
         admin.router,
     )
 
-    # --------------------------------------------------------------
+    # ---------------------------------------------------------------
+    # SPA fallback for client-side routes
+    # ---------------------------------------------------------------
+    # The React app uses react-router-dom for client-side
+    # routing (e.g. ``/report/{workspace_id}``, ``/workspace/{id}``).
+    # When the user lands on such a path directly (browser refresh,
+    # shared link, deep-link from an email), the request hits
+    # FastAPI -- but no API route matches it, so FastAPI returns
+    # 404. The fix is a catch-all GET route that serves
+    # ``index.html`` for any non-API path; the SPA's
+    # react-router-dom then takes over and renders the right page.
+    #
+    # We register this AFTER the API routers and BEFORE the
+    # StaticFiles mount below so that:
+    #   1. API routes still get first dibs on their prefixes
+    #      (``/workspaces/*``, ``/reports/*``, ``/papers/*``, etc.)
+    #   2. The catch-all runs for everything that didn't match an
+    #      API route (including ``/report/{id}`` and any future
+    #      client-side route).
+    #   3. The StaticFiles mount is the last-resort fallback for
+    #      root-level assets (``/``, ``/favicon.ico``,
+    #      ``/assets/*``).
+    if FRONTEND_DIST.is_dir():
+        @application.get("/{full_path:path}", include_in_schema=False)
+        async def spa_fallback(full_path: str) -> FileResponse:
+            # The path matches a real file in the bundle
+            # (e.g. ``/favicon.ico``, ``/manifest.webmanifest``).
+            # Serve it directly. ``StaticFiles`` would have caught
+            # these -- but we run BEFORE the StaticFiles mount
+            # because Starlette resolves regular routes first.
+            candidate = (FRONTEND_DIST / full_path).resolve()
+            if (
+                candidate.is_file()
+                # ``resolve()`` will follow the symlink inside
+                # FRONTEND_DIST, so guard against path traversal
+                # out of the bundle.
+                and FRONTEND_DIST.resolve() in candidate.parents
+            ):
+                return FileResponse(candidate)
+            # Otherwise: a client-side route. Serve the SPA
+            # entry -- react-router-dom will pick up the path
+            # and render the right page.
+            return FileResponse(FRONTEND_DIST / "index.html")
+
+    # ---------------------------------------------------------------
     # Static frontend (production-only)
-    # --------------------------------------------------------------
+    # ---------------------------------------------------------------
     # When the SPA bundle is present we mount it at "/" so the same
     # port serves both the API and the static assets. Vite's dev
     # server (5173) is unchanged when the bundle is absent.
