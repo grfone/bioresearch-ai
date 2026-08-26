@@ -58,6 +58,7 @@ Limitations
 from __future__ import annotations
 
 import html
+import html.parser
 import logging
 import re
 from collections import OrderedDict
@@ -657,6 +658,120 @@ class AbstractEnricher:
         return None
 
 
+# HTML tags whose entire wrapped content is dropped. The
+# publisher's structured-abstract convention wraps a single
+# label word in a heading tag (``<h4>Introduction</h4>``,
+# ``<h4>Methods</h4>``, etc.). The label is the publisher's
+# navigation aid, not part of the abstract's content --
+# dropping it leaves a clean prose abstract and matches the
+# user's preferred rendering. ``<h1>``-``<h6>`` cover all
+# levels. We deliberately don't include ``<section>``,
+# ``<div>``, ``<p>``, etc. here: those tend to wrap real
+# content rather than labels, and the rule "drop tag, keep
+# text" handles them correctly.
+_DROP_TAG_AND_CONTENT = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
+
+
+class _HTMLTagStripper(html.parser.HTMLParser):
+    """Walk the text as a stream of (raw text, open tag,
+    close tag, drop flag) and emit a cleaned string.
+
+    Rules
+    -----
+    - For tags in ``_DROP_TAG_AND_CONTENT`` (``<h1>``-``<h6>``):
+      the entire wrapped content is dropped along with the
+      tags. ``<h4>Introduction</h4>Tau species...`` becomes
+      ``Tau species...``.
+    - For every other tag (``<i>``, ``<b>``, ``<strong>``,
+      ``<em>``, ``<u>``, ``<sup>``, ``<sub>``, ``<span>``,
+      ``<a>``, etc.): the tags are dropped but the wrapped
+      text is preserved. ``<i>tau</i> pathology`` becomes
+      ``tau pathology``.
+    - HTML entities are already unescaped upstream
+      (``html.unescape`` in ``_clean_abstract``), so
+      ``handle_data`` sees plain text. We use the stdlib
+      default ``convert_charrefs=True`` so any surviving
+      entity (mostly malformed ``&CG``-style fragments)
+      passes through ``handle_data`` unchanged -- preserving
+      the byte-for-byte contract for already-unscaped text.
+    - Malformed input is tolerated: ``HTMLParser`` is lenient
+      and won't raise on partial / unclosed tags. The output
+      may include extra spaces where tags were dropped; the
+      downstream whitespace collapse folds those into
+      single spaces.
+    """
+
+    def __init__(self) -> None:
+        # ``convert_charrefs=True`` (the stdlib default) means
+        # ``HTMLParser`` decodes entity refs (``&amp;``, ``&micro;``)
+        # and numeric char refs (``&#NNN;``) into plain text and
+        # delivers them via ``handle_data``. That's exactly what
+        # we want: entities that survived upstream ``html.unescape``
+        # are rare (mostly malformed ``&CG``-style fragments from
+        # publishers who forgot the ``;``); with auto-conversion
+        # they pass through as literal ``&CG`` text in
+        # ``handle_data``, which is the correct preservation
+        # behaviour. With ``convert_charrefs=False`` we'd have to
+        # handle ``handle_entityref`` / ``handle_charref``
+        # ourselves and reconstruct the original ``&name;`` text,
+        # which is exactly the failure mode the
+        # ``test_strips_html_entities`` regression caught.
+        super().__init__()
+        self._pieces: list[str] = []
+        # Stack of "are we currently inside a drop-tag
+        # region?". ``True`` means drop everything (text +
+        # nested tags) until the matching close. Nesting
+        # matters because a ``<h4>`` could in theory wrap a
+        # ``<b>`` -- both should be dropped.
+        self._drop_depth: int = 0
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if tag in _DROP_TAG_AND_CONTENT:
+            self._drop_depth += 1
+        # Other open tags are simply consumed (no output).
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _DROP_TAG_AND_CONTENT and self._drop_depth > 0:
+            self._drop_depth -= 1
+        # Other close tags are simply consumed (no output).
+
+    def handle_startendtag(self, tag: str, attrs: list) -> None:
+        # Self-closing tags like ``<br/>``, ``<img .../>``:
+        # no content to preserve, no impact on drop state.
+        return
+
+    def handle_data(self, data: str) -> None:
+        if self._drop_depth == 0:
+            self._pieces.append(data)
+
+
+def _strip_html_tags(text: str) -> str:
+    """Strip HTML tags from a raw abstract string.
+
+    See :class:`_HTMLTagStripper` for the rules. This is the
+    public-facing entry point; the class is an implementation
+    detail.
+
+    No external deps: ``html.parser`` is in the Python
+    standard library. We deliberately avoid
+    ``BeautifulSoup`` / ``lxml`` because the abstract
+    pipeline is a single chokepoint and a 30-line
+    ``HTMLParser`` subclass is enough.
+
+    Note: ``HTMLParser`` is intentionally lenient -- it does
+    NOT raise on malformed / unclosed / unrecognised tags.
+    Real-world abstracts sometimes contain stray fragments
+    (broken nested tags, half-encoded entities) and the
+    parser silently accepts them. The downstream whitespace
+    collapse in ``_clean_abstract`` folds any leftover
+    spacing.
+    """
+    stripper = _HTMLTagStripper()
+    stripper.feed(text)
+    stripper.close()
+    return "".join(stripper._pieces)
+
+
 def _clean_abstract(text: str) -> str:
     """Normalize an abstract extracted from HTML.
 
@@ -692,6 +807,12 @@ def _clean_abstract(text: str) -> str:
     # ``_extract_abstract``, so that the pure-function
     # behavior of ``_clean_abstract`` is self-contained.
     decoded = html.unescape(text)
+    # Strip HTML tags some publishers leave behind in the
+    # raw abstract text. We do this BEFORE the whitespace
+    # collapse so any space gaps left behind by the strip
+    # are folded into the normal ``\s+`` -> ``" "`` pass.
+    # See ``_strip_html_tags`` for the rules.
+    decoded = _strip_html_tags(decoded)
     # Collapse all whitespace (including newlines and
     # non-breaking spaces) to single spaces.
     normalized = re.sub(r"\s+", " ", decoded).strip()

@@ -53,6 +53,7 @@ from app.domain.value_objects.search_filters import (
     SortBy,
 )
 from app.domain.value_objects.search_result import SearchResult
+from app.infrastructure.pubmed.abstract_normalizer import normalize_abstract
 
 logger = logging.getLogger(__name__)
 
@@ -351,7 +352,9 @@ def _record_to_paper(record: dict[str, Any]) -> Paper:
     authors = _extract_authors(record.get("authorList") or {})
 
     # Abstract: only present when ``resultType=core``.
-    abstract = (record.get("abstractText") or "").strip()
+    abstract = normalize_abstract(
+        (record.get("abstractText") or "").strip()
+    )
 
     keywords = _extract_keywords(record)
 

@@ -59,6 +59,9 @@ from app.domain.entities.journal import Journal
 from app.domain.entities.paper import Paper
 
 
+from app.infrastructure.pubmed.abstract_normalizer import normalize_abstract
+
+
 class PubMedMapper:
     """
     Utility class responsible for translating PubMed records into domain
@@ -86,7 +89,7 @@ class PubMedMapper:
 
         return Paper(
             title=cls._extract_title(record),
-            abstract=cls._extract_abstract(record),
+            abstract=normalize_abstract(cls._extract_abstract(record)),
             authors=cls.to_authors(record),
             journal=cls.to_journal(record),
             year=cls._extract_year(record),

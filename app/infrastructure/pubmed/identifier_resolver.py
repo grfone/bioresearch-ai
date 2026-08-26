@@ -36,6 +36,7 @@ from app.domain.entities.paper import Paper
 from app.infrastructure.pubmed.abstract_enricher import (
     AbstractEnricher,
 )
+from app.infrastructure.pubmed.abstract_normalizer import normalize_abstract
 from app.infrastructure.pubmed.mapper import PubMedMapper
 from app.infrastructure.pubmed.provider import PubMedProvider
 
@@ -330,10 +331,16 @@ class IdentifierResolver:
         if not paper.abstract or not paper.abstract.strip():
             openalex_abstract = self._fetch_openalex_abstract(doi)
             if openalex_abstract:
-                # Paper is a frozen dataclass; we use
-                # ``dataclasses.replace`` to build a new
-                # instance with the OpenAlex abstract.
-                paper = replace(paper, abstract=openalex_abstract)
+                # OpenAlex's inverted-index reconstruction
+                # produces plain text (no HTML), but we run
+                # the result through ``normalize_abstract``
+                # anyway as a forward-compat hedge: if a
+                # future OpenAlex response includes stray
+                # tags, the stripper catches them before
+                # storage.
+                paper = replace(
+                    paper, abstract=normalize_abstract(openalex_abstract)
+                )
 
         # Third fallback: HTML meta-tag scraping. Open
         # publishers (Nature, PLOS, Frontiers, etc.) ship
@@ -349,13 +356,16 @@ class IdentifierResolver:
                     # ``html_abstract`` is an ExtractionResult
                     # carrying the abstract text AND the
                     # provenance flag (inferred=True if the
-                    # LLM produced it). We stamp BOTH onto
-                    # the Paper so the frontend can render
-                    # an "AI-extracted" badge for
-                    # transparency.
+                    # LLM produced it). The enricher's
+                    # ``_clean_abstract`` runs the stripper
+                    # internally, but ``normalize_abstract``
+                    # here is belt-and-braces -- a future
+                    # enricher that bypasses ``_clean_abstract``
+                    # for any reason won't reintroduce the
+                    # ``<h4>Introduction</h4>`` leak.
                     paper = replace(
                         paper,
-                        abstract=html_abstract.abstract,
+                        abstract=normalize_abstract(html_abstract.abstract),
                         inferred_abstract=html_abstract.inferred,
                     )
 

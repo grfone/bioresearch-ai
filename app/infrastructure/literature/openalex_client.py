@@ -67,6 +67,7 @@ from app.domain.value_objects.search_filters import (
     SortBy,
 )
 from app.domain.value_objects.search_result import SearchResult
+from app.infrastructure.pubmed.abstract_normalizer import normalize_abstract
 
 logger = logging.getLogger(__name__)
 
@@ -380,8 +381,8 @@ def _record_to_paper(record: dict[str, Any]) -> Paper:
     authors = _extract_authors(record.get("authorships") or [])
 
     # Abstract: reconstruct from the inverted index.
-    abstract = _reconstruct_abstract(
-        record.get("abstract_inverted_index")
+    abstract = normalize_abstract(
+        _reconstruct_abstract(record.get("abstract_inverted_index"))
     )
 
     # Keywords: prefer ``keywords[*].display_name`` (top N).

@@ -29,6 +29,7 @@ from app.infrastructure.pubmed.abstract_enricher import (
     DEFAULT_USER_AGENT,
     AbstractEnricher,
     _clean_abstract,
+    _strip_html_tags,
 )
 
 
@@ -690,6 +691,219 @@ class TestCleanAbstract:
             "(1 nM) in hepatocytes. The fold-change was 2.3+/-0.5."
         )
         assert _clean_abstract(text) == text
+
+
+# -----------------------------------------------------------------
+# HTML tag stripping (pure-function tests)
+# -----------------------------------------------------------------
+#
+# The ``_strip_html_tags`` helper removes raw HTML that some
+# publishers (notably Elsevier / Springer Nature) leave behind
+# in the abstract field. The rule is asymmetric: heading tags
+# ``<h1>``-``<h6>`` drop the wrapped text (the publisher's
+# structured-abstract label like "Introduction"), but every
+# other tag (``<i>``, ``<b>``, ``<strong>``, ``<em>``, ``<u>``,
+# ``<sup>``, ``<sub>``, ``<span>``, ``<a>``, etc.) drops the
+# tags but keeps the wrapped text. These tests pin the rule.
+
+
+class TestStripHTMLTags:
+    """Direct unit tests for ``_strip_html_tags``."""
+
+    def test_drops_h4_label_and_its_inner_text(self):
+        """The bug from the user's PDF: ``<h4>Introduction</h4>``
+        should be removed entirely so "Introduction" doesn't leak
+        into the rendered abstract. ``<h4>Tau species...`` then
+        just becomes ``Tau species...``.
+        """
+        text = (
+            "<h4>Introduction</h4>Tau species lacking truncation of "
+            "the N-terminal region"
+        )
+        assert _strip_html_tags(text) == (
+            "Tau species lacking truncation of the N-terminal region"
+        )
+
+    def test_drops_all_h_levels(self):
+        """``<h1>`` through ``<h6>`` all drop the wrapped content.
+
+        Pinning each level individually so a future contributor
+        can't accidentally exclude one (``h4`` is the one that
+        actually leaks today, but the other levels appear in
+        the same Elsevier-style structured abstracts).
+        """
+        for level in range(1, 7):
+            tag = f"h{level}"
+            text = f"<{tag}>Label</{tag}>Body content follows"
+            assert _strip_html_tags(text) == "Body content follows", (
+                f"tag <{tag}> should drop its inner text"
+            )
+
+    def test_keeps_inner_text_for_inline_emphatic_tags(self):
+        """``<i>``, ``<b>``, ``<strong>``, ``<em>``, ``<u>``,
+        ``<sup>``, ``<sub>`` -- the tags drop, the inner text
+        stays. This is the asymmetric part of the rule.
+        """
+        assert _strip_html_tags("<i>tau</i> pathology") == "tau pathology"
+        assert _strip_html_tags("<b>bold</b> claim") == "bold claim"
+        assert (
+            _strip_html_tags("<strong>strong</strong> evidence")
+            == "strong evidence"
+        )
+        assert _strip_html_tags("<em>emphasis</em> here") == "emphasis here"
+        assert _strip_html_tags("<u>underlined</u> word") == "underlined word"
+        assert _strip_html_tags("E = mc<sup>2</sup>") == "E = mc2"
+        assert _strip_html_tags("H<sub>2</sub>O") == "H2O"
+
+    def test_handles_nested_h_with_inline_tags_inside(self):
+        """A ``<h4>`` wrapping ``<i>Introduction</i>`` should drop
+        the whole thing (the outer h4 is in the drop set, so the
+        inner content -- including any nested ``<i>`` tags --
+        is consumed). The trailing non-tag text is preserved.
+        """
+        assert (
+            _strip_html_tags("<h4><i>Introduction</i></h4>Tau species")
+            == "Tau species"
+        )
+
+    def test_handles_real_pubmed_abstract_chunks(self):
+        """A realistic Elsevier/Springer abstract chunk as it
+        appears in the live data. All five structured-abstract
+        section headings drop their labels; the body prose
+        survives untouched. Pinning this against a literal
+        fixture taken from production so a refactor of the
+        stripper's rules is forced through test updates.
+        """
+        text = (
+            "<h4>Highlights</h4>Map gains into accountable, "
+            "interpretable tools for ADRD care."
+            "<h4>Introduction</h4>Tau species lacking truncation "
+            "of the N-terminal region, including plasma N-terminal "
+            "tau fragment 1 (NT1), have been previously associated "
+            "with cognitive decline, neurodegeneration, and tau "
+            "pathology in late-onset sporadic Alzheimer's disease "
+            "(AD)."
+            "<h4>Methods</h4>Here, we examined crosssectional and "
+            "longitudinal plasma NT1 as a possible predictor of "
+            "cognitive, clinical, and core AD biomarker trajectories "
+            "in autosomal dominant AD (ADAD)."
+            "<h4>Results</h4>NT1 levels in ADAD mutation carriers "
+            "(MC; n = 132) increased across the disease continuum."
+            "<h4>Discussion</h4>Together, our results suggest that "
+            "plasma NT1-alone or combined with other tau "
+            "measures-may be useful in studying AD-related "
+            "clinical, cognitive, and biomarker outcomes."
+        )
+        result = _strip_html_tags(text)
+        assert "Highlights" not in result
+        assert "Introduction" not in result
+        assert "Methods" not in result
+        assert "Results" not in result
+        assert "Discussion" not in result
+        # The body prose survives.
+        assert "Tau species lacking truncation" in result
+        assert "ADAD mutation carriers" in result
+        assert "plasma NT1-alone or combined" in result
+        # No raw tags leak through.
+        assert "<" not in result
+        assert ">" not in result
+
+    def test_handles_malformed_unclosed_tags_gracefully(self):
+        """Real-world abstracts sometimes contain half-encoded
+        fragments (``<h4`` without the closing ``>``, missing
+        closing tags). The stripper must NOT raise; it returns
+        the best-effort cleaned string.
+
+        ``HTMLParser`` is intentionally lenient -- unclosed
+        tags are silently accepted and their content is
+        treated as text. We verify the stripper doesn't raise
+        and produces something usable.
+        """
+        # Unclosed <h4> opener -- HTMLParser will treat the
+        # rest of the string as text inside the (unclosed)
+        # heading. The drop rule still applies, so the entire
+        # rest of the input is consumed.
+        try:
+            result = _strip_html_tags(
+                "<h4>IntroductionTau species lacking truncation"
+            )
+        except Exception as exc:
+            raise AssertionError(
+                f"_strip_html_tags raised on malformed input: {exc}"
+            )
+        # The result is something (whatever the lenient parser
+        # produces) -- the contract is "don't raise", not a
+        # specific output. Real-world malformed inputs are
+        # rare; the production path catches the rare failure
+        # via the downstream length check in ``_clean_abstract``.
+        assert isinstance(result, str)
+
+    def test_returns_empty_for_empty_input(self):
+        """Idempotent on empty string -- matches the contract
+        of the rest of ``_clean_abstract``.
+        """
+        assert _strip_html_tags("") == ""
+
+    def test_returns_input_unchanged_when_no_tags(self):
+        """No HTML -> input passes through unchanged.
+        Defensive against over-stripping.
+        """
+        text = (
+            "Tau species lacking truncation of the N-terminal "
+            "region, including plasma N-terminal tau fragment 1."
+        )
+        assert _strip_html_tags(text) == text
+
+
+class TestCleanAbstractStripsHTML:
+    """End-to-end pin: the ``_clean_abstract`` chokepoint
+    applies the tag strip before the whitespace collapse, so
+    the user's bug never reaches the LLM summariser, the React
+    UI, the SQLite DB, or the API response.
+
+    These tests don't re-pin the whitespace/ellipsis behaviour
+    (already covered by ``TestCleanAbstract``); they just
+    confirm the new HTML-strip step is wired in.
+    """
+
+    def test_drops_h4_introduction_label_in_cleaned_abstract(self):
+        """A real-shape Elsevier abstract with ``<h4>Introduction</h4>``
+        comes out of ``_clean_abstract`` with the label
+        dropped. Below the 40-char rejection floor so we
+        just confirm the label is gone -- not the full
+        length validation.
+        """
+        text = (
+            "<h4>Introduction</h4>Tau species lacking truncation of "
+            "the N-terminal region, including plasma N-terminal "
+            "tau fragment 1 (NT1), have been previously associated "
+            "with cognitive decline, neurodegeneration, and tau "
+            "pathology in late-onset sporadic Alzheimer's disease (AD)."
+        )
+        result = _clean_abstract(text)
+        assert "Introduction" not in result
+        assert "<h4>" not in result
+        # The body prose is preserved (whitespace collapsed).
+        assert "Tau species lacking truncation" in result
+        assert "tau pathology in late-onset sporadic" in result
+
+    def test_keeps_inner_text_for_inline_tags_in_cleaned_abstract(self):
+        """``<i>tau</i> pathology`` becomes ``tau pathology``
+        in the final cleaned abstract -- the asymmetric rule
+        is honoured end-to-end.
+        """
+        text = (
+            "Plasma <i>tau</i> levels in mutation carriers were "
+            "elevated about a decade prior to estimated symptom "
+            "onset. Cross-sectional and longitudinal <b>NT1</b> "
+            "levels in mutation carriers were associated with "
+            "clinical and biomarker changes."
+        )
+        result = _clean_abstract(text)
+        assert "tau levels" in result  # <i>tau</i> preserved
+        assert "NT1" in result  # <b>NT1</b> preserved (the surrounding "levels" too)
+        assert "<i>" not in result
+        assert "<b>" not in result
 
 
 # -----------------------------------------------------------------

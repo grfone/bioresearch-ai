@@ -59,6 +59,7 @@ from app.domain.interfaces.literature_searcher import (
 )
 from app.domain.value_objects.search_filters import SearchFilters
 from app.domain.value_objects.search_result import SearchResult
+from app.infrastructure.pubmed.abstract_normalizer import normalize_abstract
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +289,9 @@ def _record_to_paper(record: dict[str, Any]) -> Paper:
 
     authors = _parse_authors(record.get("preprint_authors") or "")
 
-    abstract = (record.get("preprint_abstract") or "").strip()
+    abstract = normalize_abstract(
+        (record.get("preprint_abstract") or "").strip()
+    )
 
     keywords: list[str] = []
     category = (record.get("preprint_category") or "").strip()

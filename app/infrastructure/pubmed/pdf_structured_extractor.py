@@ -58,6 +58,7 @@ from app.domain.entities.paper import Paper
 from app.infrastructure.pubmed.pdf_extractor import (
     extract_identifiers_from_pdf,
 )
+from app.infrastructure.pubmed.abstract_normalizer import normalize_abstract
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +205,7 @@ def _parse_paper_from_text(pdf_text: str) -> Paper | None:
 
     # 5. Abstract — between "Abstract" header and the next
     # section break.
-    abstract = _extract_abstract(text)
+    abstract = normalize_abstract(_extract_abstract(text))
 
     # 6. Keywords — after the literal "Keywords:" line.
     keywords = _extract_keywords(text)
