@@ -2546,14 +2546,7 @@ application.
 
 }
 
-.evidence-source {
-
-    color: var(--color-primary-light);
-
-    font-size: var(--font-size-sm);
-
-}
-
+/* .evidence-source -- removed: dead class (the Evidence Summary panel it served was removed in 1b77a29) */
 
 
 /*=============================================================================
