@@ -78,7 +78,7 @@ from app.core.enums.workspace_state import WorkspaceAction
 # Schema constants
 # ---------------------------------------------------------------------------
 
-LATEST_SCHEMA_VERSION = 3
+LATEST_SCHEMA_VERSION = 4
 
 
 # Columns that were added in each schema version. The repository
@@ -97,6 +97,32 @@ _V2_COLUMNS = (
 # ``_serialize_published_report`` / ``_deserialize_published_report``.
 _V3_COLUMNS = (
     ("published_report", "TEXT"),
+)
+# v4: ``last_error`` persistence.
+#
+# Before this migration, the orchestrator's ``_fail()`` set
+# ``session.last_error`` on the in-memory ``ResearchSession`` and
+# the API surface (``WorkspaceResponse.last_error``) read it back
+# via ``getattr`` -- but the field was NEVER written to SQLite.
+# After a container restart, the value was gone even though the
+# ``state_history`` JSON still had the reason in
+# ``transition.reason``. Users landing on an ERROR-state
+# workspace after a restart had no actionable information.
+#
+# v4 closes that gap: we add a nullable ``last_error TEXT``
+# column, write the entity field on every ``_save()``, and
+# restore it on ``_dict_to_workspace()``. The key invariant is
+# that ``session.last_error`` is preserved across process
+# restarts -- so a user who wakes up to an ERROR-state
+# workspace still sees the actionable error message.
+#
+# Plain ``TEXT`` is sufficient -- no JSON encoding, no base64.
+# The string is bounded (~500 chars max in practice -- an
+# exception message and its embedded traceback frames if the
+# orchestrator chose to include them) and SQLite stores
+# arbitrary-length TEXT natively.
+_V4_COLUMNS = (
+    ("last_error", "TEXT"),
 )
 
 
@@ -151,7 +177,8 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     state TEXT NOT NULL DEFAULT 'CREATED',
                     state_history TEXT,
                     evidence_comparison TEXT,
-                    published_report TEXT
+                    published_report TEXT,
+                    last_error TEXT
                 )
                 """
             )
@@ -185,6 +212,16 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
 
         # v3: PUBLISH action support (see ADR-009).
         for column_name, column_def in _V3_COLUMNS:
+            if column_name not in existing:
+                cursor.execute(
+                    f"ALTER TABLE workspaces ADD COLUMN {column_name} {column_def}"
+                )
+
+        # v4: ``last_error`` persistence so ERROR-state
+        # workspaces remain debuggable across container
+        # restarts. See ``_V4_COLUMNS`` docstring above for
+        # the full rationale.
+        for column_name, column_def in _V4_COLUMNS:
             if column_name not in existing:
                 cursor.execute(
                     f"ALTER TABLE workspaces ADD COLUMN {column_name} {column_def}"
@@ -283,8 +320,8 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     id, question, papers, summary, report, notes,
                     metadata, created_at, updated_at,
                     state, state_history, evidence_comparison,
-                    published_report
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    published_report, last_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(workspace.id),
@@ -302,6 +339,15 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     self._serialize_published_report(
                         workspace.published_report
                     ),
+                    # v4: persist the in-memory ``last_error``
+                    # so ERROR-state workspaces remain
+                    # debuggable after a restart. We store
+                    # ``None`` for non-error workspaces (the
+                    # column is nullable; using the literal
+                    # ``None`` maps to SQL NULL, which is what
+                    # we want -- the field is meaningless
+                    # outside of ERROR state).
+                    workspace.last_error,
                 ),
             )
             conn.commit()
@@ -526,13 +572,33 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
     def _row_to_dict(self, row: tuple) -> Dict[str, Any]:
         # Some columns may be missing in older database files; pad
         # the row defensively so the deserialiser is forward
-        # compatible. The actual schema has 13 columns; we pad
-        # to 14 so the legacy ``padded[12] = evidence_matrix``
-        # slot stays ``None`` without raising IndexError. The
-        # new ``published_report`` slot is at ``padded[12]``
-        # in current databases (replaces the phantom
-        # ``evidence_matrix``).
-        padded: list[Any] = list(row) + [None] * (14 - len(row))
+        # compatible. The actual schema has 14 columns (after
+        # the v4 ``last_error`` migration); we pad to 15 so the
+        # legacy ``padded[12] = evidence_matrix`` placeholder
+        # slot stays ``None`` without raising IndexError.
+        #
+        # Index map (after v4 migration):
+        #   0  id
+        #   1  question
+        #   2  papers
+        #   3  summary
+        #   4  report
+        #   5  notes
+        #   6  metadata
+        #   7  created_at
+        #   8  updated_at
+        #   9  state
+        #   10 state_history
+        #   11 evidence_comparison
+        #   12 published_report       (v3 column; the legacy
+        #                             evidence_matrix placeholder
+        #                             never had a real column)
+        #   13 last_error             (v4 column)
+        #
+        # Pre-v4 databases have 13 columns (no last_error) so
+        # ``padded[13]`` resolves to the padding ``None`` --
+        # the deserialiser treats that as "no error".
+        padded: list[Any] = list(row) + [None] * (15 - len(row))
         return {
             "id": padded[0],
             "question": padded[1],
@@ -560,6 +626,11 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             # which the deserialiser turns into
             # ``PublishedReport | None`` on the session.
             "published_report": padded[12],
+            # v4: ``last_error`` persistence. Index 13, so
+            # pre-v4 databases (no column here) read as
+            # ``None`` -- the existing behaviour (no
+            # ``last_error`` exposed in the API response).
+            "last_error": padded[13],
         }
 
     def _dict_to_workspace(self, row_dict: Dict[str, Any]) -> ResearchSession:
@@ -604,6 +675,16 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             else None
         )
 
+        # v4: ``last_error``. The entity has ``last_error`` as a
+        # regular field so we restore it directly in the
+        # constructor below. ``row_dict["last_error"]`` may
+        # be ``None`` for pre-v4 databases (the padding fills
+        # the missing column with ``None``) or for workspaces
+        # whose state isn't ERROR -- both are the right
+        # default value because ``last_error`` is only
+        # meaningful on ERROR-state workspaces.
+        last_error = row_dict.get("last_error")
+
         workspace = ResearchSession(
             id=UUID(row_dict["id"]),
             question=question,
@@ -614,6 +695,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             report=report,
             notes=notes,
             state_history=state_history,
+            last_error=last_error,
             created_at=created_at,
             updated_at=updated_at,
             metadata=metadata,
