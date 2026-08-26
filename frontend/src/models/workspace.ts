@@ -61,6 +61,7 @@ export type WorkspaceAction =
   | 'compare'
   | 'report'
   | 'complete'
+  | 'publish'
   | 'retry'
   | 'add_paper'
   | 'remove_paper';
@@ -110,6 +111,12 @@ export interface WorkspaceResponse {
   has_evidence_comparison: boolean;
   /** Whether a final research report has been generated */
   report_available: boolean;
+  /** Whether a PDF has been rendered for download by the PUBLISH
+   * action. Independent of ``report_available``: a workspace may
+   * have a generated report but not yet a PDF, or vice versa
+   * after a previous PUBLISH. The "Download PDF" button is
+   * enabled only when this is true. */
+  published_report_available: boolean;
   /** UTC timestamp of workspace creation */
   created_at: string;
   /** UTC timestamp of last update */

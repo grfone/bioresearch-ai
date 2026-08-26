@@ -226,6 +226,17 @@ export function useWorkspace(
           case 'complete':
             data = await api.runCompleteAction(workspaceId);
             break;
+          case 'publish':
+            // FSM-aware PUBLISH: renders the PDF on the
+            // server, persists it on the session, advances
+            // REPORTED -> PUBLISHING -> COMPLETED, and returns
+            // the updated workspace. The frontend then
+            // downloads the bytes via the GET endpoint. See
+            // ADR-009 for the audit pattern that drove this
+            // (FSM table + orchestrator + entity + frontend
+            // call-site are all wired).
+            data = await api.runPublishAction(workspaceId);
+            break;
           case 'retry':
             data = await api.runRetryAction(workspaceId);
             break;

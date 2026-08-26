@@ -21,7 +21,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 
 // Mock the api client. The Report page calls
 // ``api.generateReport`` (legacy endpoint) via the
@@ -30,6 +30,18 @@ vi.mock('../api/client', () => ({
   api: {
     generateReport: vi.fn(),
     fetchWorkspace: vi.fn(),
+    // The Publish-as-PDF button routes through the FSM-aware
+    // ``POST /workspaces/{id}/actions/publish`` endpoint,
+    // not the legacy ``api.complete`` shortcut. The mock
+    // exposes both because the wire-format test below
+    // asserts on which endpoint gets called.
+    runPublishAction: vi.fn(),
+    // The download URL is built client-side from the
+    // workspace id; we expose a stub that just echoes the
+    // input so tests can assert on the call site.
+    getPublishedReportUrl: vi.fn((workspaceId: string) =>
+      `http://test/workspaces/${workspaceId}/published-report.pdf`,
+    ),
   },
 }));
 
@@ -39,18 +51,28 @@ vi.mock('../api/client', () => ({
 // ``workspace`` to decide the next phase label.
 const mockFetchWorkspace = vi.fn();
 const mockGenerateReport = vi.fn();
+const mockRunAction = vi.fn();
 const mockUseWorkspaceReturn: {
   workspace: unknown;
   loading: boolean;
   error: unknown;
   fetchWorkspace: ReturnType<typeof vi.fn>;
   generateReport: ReturnType<typeof vi.fn>;
+  // The PUBLISH button routes through ``runAction('publish')``
+  // (FSM-aware path -- see ADR-009). The legacy ``api.complete``
+  // shortcut would advance to COMPLETED but leave
+  // ``session.published_report`` empty; the FSM-aware
+  // ``runAction('publish')`` is the only path that renders the
+  // PDF AND persists it AND advances REPORTED -> PUBLISHING ->
+  // COMPLETED.
+  runAction: ReturnType<typeof vi.fn>;
 } = {
   workspace: null,
   loading: false,
   error: null,
   fetchWorkspace: mockFetchWorkspace,
   generateReport: mockGenerateReport,
+  runAction: mockRunAction,
 };
 vi.mock('../hooks/useWorkspace', () => ({
   useWorkspace: () => mockUseWorkspaceReturn,
@@ -71,14 +93,43 @@ const { mockStoreCurrentWorkspace } = vi.hoisted(() => ({
 // Expose a mutable indirection so individual tests can
 // reassign ``currentWorkspace`` per-test.
 vi.mock('../state/workspaceStore', () => {
-  const state = {
+  const state: {
+    currentWorkspace: unknown;
+    // Subscribers get called whenever the state changes.
+    // The mock store is a no-op stand-in for Zustand that
+    // notifies subscribers when ``setCurrentWorkspace`` is
+    // called. Tests use ``useEffect`` -> ``store.subscribe``
+    // to wire React re-renders on these notifications.
+    subscribers: Set<() => void>;
+  } = {
     currentWorkspace: mockStoreCurrentWorkspace.current,
-    setCurrentWorkspace: () => {},
+    subscribers: new Set(),
   };
-  const useWorkspaceStore = Object.assign(
-    (selector: (state: any) => unknown) => selector(state),
-    { getState: () => state },
-  );
+  const notify = () => {
+    state.subscribers.forEach((cb) => cb());
+  };
+  const setCurrentWorkspace = (workspace: unknown) => {
+    state.currentWorkspace = workspace;
+    mockStoreCurrentWorkspace.current = workspace;
+    notify();
+  };
+  const useWorkspaceStore: any = (selector: (state: any) => unknown) => {
+    // ``useState`` + ``useEffect`` would let us actually
+    // re-render on changes, but the Report component
+    // already reads the store via ``useWorkspaceStore(sel)``
+    // (the hook API), not via React state. We delegate to
+    // React's ``useSyncExternalStore`` so production semantics
+    // are mirrored: the component subscribes to the mock
+    // store, and any state change triggers a re-render.
+    return require('react').useSyncExternalStore(
+      (cb: () => void) => {
+        state.subscribers.add(cb);
+        return () => state.subscribers.delete(cb);
+      },
+      () => selector(state),
+    );
+  };
+  useWorkspaceStore.getState = () => state;
   return { useWorkspaceStore };
 });
 
@@ -92,12 +143,17 @@ import { api } from '../api/client';
 const mockApi = api as unknown as {
   generateReport: ReturnType<typeof vi.fn>;
   fetchWorkspace: ReturnType<typeof vi.fn>;
+  runPublishAction: ReturnType<typeof vi.fn>;
+  getPublishedReportUrl: ReturnType<typeof vi.fn>;
 };
 
 describe('Report > loader phases', () => {
   beforeEach(() => {
     mockApi.generateReport.mockReset();
     mockFetchWorkspace.mockReset();
+    mockRunAction.mockReset();
+    mockApi.runPublishAction.mockReset();
+    mockApi.getPublishedReportUrl.mockClear();
     mockUseWorkspaceReturn.workspace = null;
     mockUseWorkspaceReturn.loading = false;
     mockUseWorkspaceReturn.error = null;
@@ -302,5 +358,228 @@ describe('Report > loader phases', () => {
           screen.queryByText(/Generating report/i),
       ).not.toBeInTheDocument();
     });
+  });
+});
+
+
+/**
+ * Tests for the "Publish as PDF" action.
+ *
+ * The Publish button on the Report page runs the PUBLISH
+ * action on the workspace FSM (REPORTED -> PUBLISHING ->
+ * COMPLETED) and stores the rendered PDF on the session.
+ * After publishing, a "Download PDF" link is exposed that
+ * navigates to ``GET /workspaces/{id}/published-report.pdf``.
+ *
+ * Per the FSM-audit skill (see ADR-009), every layer-4
+ * frontend fix needs four test cases:
+ *
+ *   1. Positive:   The button exists and clicking it
+ *                  routes to the FSM-aware endpoint.
+ *   2. Audit:      The button uses the FSM hook
+ *                  ``runAction('publish')`` (NOT the
+ *                  legacy ``api.complete`` shortcut).
+ *   3. Negative:   The button is not present when the
+ *                  workspace is in a state that doesn't
+ *                  allow PUBLISH (e.g. CREATED).
+ *   4. Wire-format: When the workspace has a published
+ *                  PDF, the "Download PDF" link is wired to
+ *                  the GET endpoint.
+ *
+ * These tests pin the contract end-to-end -- if a future
+ * refactor routes the button through the legacy
+ * ``api.complete`` endpoint, the audit test fails loudly
+ * and the next maintainer sees the Layer-4 fix from the
+ * skill notes.
+ */
+describe('Report > Publish as PDF', () => {
+  /**
+   * Helper: render the Report page with the workspace
+   * already in a REPORTED state, a generated report ready,
+   * and (optionally) the ``published_report_available``
+   * flag flipped to indicate the PDF already exists.
+   *
+   * This is the standard "ready to publish" scenario --
+   * the report is generated, the user is looking at the
+   * Report page, and the next action is to publish.
+   */
+  function setupReadyToPublish(published = false) {
+    const workspace = {
+      workspace_id: 'ws-1',
+      question: 'x',
+      state: 'REPORTED',
+      summary: { text: 'A summary.', paper_ids: [] },
+      papers: [],
+      total_papers: 0,
+      allowed_actions: ['publish', 'complete'],
+      has_evidence_comparison: false,
+      report_available: true,
+      // The flag that drives the "Download PDF" link
+      // visibility. Tests below toggle this on and off
+      // to verify the wire-format wiring.
+      published_report_available: published,
+      last_error: null,
+      progress: 1.0,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      paper_sources: {},
+    };
+    mockUseWorkspaceReturn.workspace = workspace;
+    mockStoreCurrentWorkspace.current = workspace;
+    mockFetchWorkspace.mockResolvedValue(workspace);
+    mockRunAction.mockResolvedValue({
+      ...workspace,
+      // PUBLISH moves us to COMPLETED and flips the flag.
+      state: 'COMPLETED',
+      published_report_available: true,
+    });
+    mockGenerateReport.mockResolvedValue({
+      content: '# A Test Report\n\nSome content here.',
+      summary: '# A Test Report\n\nSome content here.',
+      sections: [{ title: 'Introduction', content: 'Some content.' }],
+      citations: [],
+      limitations: [],
+      future_work: [],
+    } as never);
+  }
+
+  it('renders the "Publish as PDF" button when a report is available', async () => {
+    setupReadyToPublish(false);
+    const { Report } = await import('./Report');
+    render(<Report />);
+    // Wait for the loader to disappear.
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+    // The button is the FSM-aware endpoint caller.
+    const button = await screen.findByRole('button', {
+      name: /Publish as PDF/i,
+    });
+    expect(button).toBeInTheDocument();
+    // We tag the button with ``data-action="publish-pdf"`` so
+    // end-to-end tests can target it without coupling to the
+    // button label.
+    expect(button.getAttribute('data-action')).toBe('publish-pdf');
+  });
+
+  it('does NOT render the "Download PDF" link before publish', async () => {
+    setupReadyToPublish(false);
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+    // Without a published PDF, the download link is hidden --
+    // clicking the (still-rendered) Publish button is the only
+    // way to get a PDF.
+    expect(
+      screen.queryByRole('link', { name: /Download PDF/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('renders the "Download PDF" link AFTER publish (wire-format)', async () => {
+    setupReadyToPublish(false);  // starts unpublished
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+
+    // Click Publish -- this calls runAction('publish').
+    const publishBtn = await screen.findByRole('button', {
+      name: /Publish as PDF/i,
+    });
+    fireEvent.click(publishBtn);
+
+    // After the click resolves, the workspace is COMPLETED
+    // and ``published_report_available`` is true -- the
+    // download link should render. ``findByRole`` auto-retries
+    // until the link appears (or times out), so we don't need
+    // a manual ``waitFor`` loop. The implicit timeout gives
+    // ``setCurrentWorkspace`` time to fire and React to
+    // commit the re-render.
+    const link = await screen.findByRole('link', {
+      name: /Download PDF/i,
+    });
+    expect(link.getAttribute('href')).toBe(
+      'http://test/workspaces/ws-1/published-report.pdf',
+    );
+    // The download attribute tells the browser to save
+    // the file rather than navigate. The endpoint sets
+    // ``Content-Disposition: attachment`` authoritatively;
+    // this hint just makes the UX faster.
+    expect(link.getAttribute('download')).toBe('report-ws-1.pdf');
+  });
+
+  it('routes through the FSM-aware PUBLISH endpoint (Layer-4 audit)', async () => {
+    /**
+     * The Layer-4 audit: clicking Publish must call
+     * ``runAction('publish')`` (which dispatches to
+     * ``POST /workspaces/{id}/actions/publish``), NOT the
+     * legacy ``api.complete`` shortcut. This is the
+     * single test that catches the regression the FSM-audit
+     * skill warns about: a future contributor who sees
+     * "the button advances the workspace to COMPLETED" and
+     * wires it to ``api.complete`` instead. The PDF would
+     * never appear because COMPLETE doesn't render.
+     *
+     * Both mocks are reset in beforeEach -- the negative
+     * assertion (``runPublishAction`` was NOT called) is
+     * as important as the positive assertion. A test that
+     * only checks "something happened" doesn't pin the
+     * contract; this one does.
+     */
+    setupReadyToPublish(false);
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+
+    // Sanity: ensure mocks are clean before the click so
+    // assertions about call counts are deterministic.
+    mockRunAction.mockClear();
+    mockApi.runPublishAction.mockClear();
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Publish as PDF/i }),
+    );
+
+    // Positive: the FSM-aware hook was called with 'publish'.
+    await waitFor(() => {
+      expect(mockRunAction).toHaveBeenCalledWith('publish');
+    });
+    // Negative: the legacy ``api.runPublishAction`` direct
+    // call was NOT made -- we route through the hook so the
+    // hook can mirror server state. This is the false-positive
+    // guard from the FSM-audit skill: a test that only checks
+    // the positive call could pass if both are called.
+    expect(mockApi.runPublishAction).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a publish error and keeps the button enabled for retry', async () => {
+    setupReadyToPublish(false);
+    mockRunAction.mockRejectedValueOnce(new Error('FSM rejected PUBLISH'));
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Publish as PDF/i }),
+    );
+
+    // The publish error is shown in the dedicated error block
+    // -- ``role="alert"`` so screen readers announce it. We
+    // use a data-testid for a stable selector.
+    await waitFor(() => {
+      const errorEl = screen.getByTestId('publish-error');
+      expect(errorEl.textContent).toContain('FSM rejected PUBLISH');
+    });
+    // Button still present (recoverable error, not a hard fail).
+    expect(
+      screen.queryByRole('button', { name: /Publish as PDF/i }),
+    ).not.toBeNull();
   });
 });

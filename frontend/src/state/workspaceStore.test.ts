@@ -21,6 +21,7 @@ const SAMPLE_WORKSPACE: WorkspaceResponse = {
   summary: null,
   has_evidence_comparison: false,
   report_available: false,
+  published_report_available: false,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
   paper_sources: {},

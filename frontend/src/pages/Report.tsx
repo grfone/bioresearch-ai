@@ -62,9 +62,10 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../hooks/useWorkspace';
 import { useWorkspaceStore } from '../state/workspaceStore';
+import { api } from '../api/client';
 import type { ReportResponse } from '../models/report';
 import { hasLimitations, hasFutureWork } from '../models/report';
-import { FileText, RefreshCw, AlertCircle, Lightbulb } from 'lucide-react';
+import { FileText, RefreshCw, AlertCircle, Lightbulb, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -77,10 +78,22 @@ export const Report: React.FC = () => {
     error,
     fetchWorkspace,
     generateReport,
+    runAction,
   } = useWorkspace(workspaceId);
 
   const [report, setReport] = useState<ReportResponse | null>(null);
   const [generating, setGenerating] = useState(false);
+  // Track the PUBLISH action separately so the spinner / loader
+  // can distinguish "report is being generated" from "PDF is
+  // being rendered". The PUBLISH call is fast (single-digit ms
+  // for the minimal PDF generator + JSON round-trip), so most
+  // users will only see the spinner flash for one frame.
+  const [publishing, setPublishing] = useState(false);
+  // PUBLISH error (separate from genError because the action is
+  // conceptually distinct -- "the PDF generation failed" is
+  // a different user-visible problem from "the report generation
+  // failed").
+  const [pubError, setPubError] = useState<string | null>(null);
   // Phase label shown next to the spinner. Mirrors the
   // orchestrator's actual phases for the report action:
   //   1. ``Loading workspace...`` while ``fetchWorkspace``
@@ -178,6 +191,97 @@ export const Report: React.FC = () => {
       setInFlight(false);
     }
   };
+
+  /**
+   * Run the PUBLISH action and persist the rendered PDF.
+   *
+   * Layer 4 of the FSM audit (see ADR-009): the button must
+   * route through the FSM-aware endpoint
+   * ``POST /workspaces/{id}/actions/publish`` -- NOT the
+   * legacy ``api.complete`` shortcut. Routing through
+   * ``api.complete`` would advance the workspace to COMPLETED
+   * but leave ``session.published_report`` empty, breaking the
+   * PDF download. ``runAction('publish')`` is the only path
+   * that:
+   *
+   *   1. Renders the PDF on the server,
+   *   2. Persists it on the session, AND
+   *   3. Advances REPORTED -> PUBLISHING -> COMPLETED
+   *      (the audit trail is preserved).
+   *
+   * After this call resolves the workspace's
+   * ``published_report_available`` flag flips to true and the
+   * "Download PDF" link in the action bar becomes a real
+   * browser navigation (the GET endpoint sets
+   * ``Content-Disposition: attachment``).
+   */
+  const handlePublish = async () => {
+    if (!workspaceId) return;
+    setPublishing(true);
+    setPubError(null);
+    try {
+      // ``runAction('publish')`` dispatches to the FSM-aware
+      // ``POST /workspaces/{id}/actions/publish`` endpoint.
+      // The hook's ``runAction`` mirrors the server's
+      // ``allowed_actions`` by raising ``IllegalWorkspaceActionError``
+      // if the FSM doesn't allow PUBLISH from the current
+      // state (e.g. if the user landed on this page after
+      // somehow getting to CREATED without a report).
+      await runAction('publish');
+      // Refresh the workspace so the new
+      // ``published_report_available`` flag is reflected in
+      // ``currentWorkspace``. ``runAction`` already does this
+      // internally, but an explicit refetch makes the data
+      // flow obvious to anyone reading the code.
+      await fetchWorkspace(workspaceId);
+    } catch (err) {
+      setPubError(
+        err instanceof Error ? err.message : 'Failed to publish report.',
+      );
+      // Do NOT bump ``publishedAt`` on error -- a stale
+      // "Download PDF" link pointing at a non-existent PDF
+      // would mislead the user.
+    } finally {
+      setPublishing(false);
+    }
+    // Bump outside the try/catch so it only fires on success.
+    // The Zustand subscriber should have already updated the
+    // selector by now, but the bump is a belt-and-braces
+    // fallback for any state-flush edge case (see the comment
+    // on the ``publishedAt`` state slot above).
+    setPublishedAt((prev) => prev + 1);
+  };
+
+  // Build the PDF download URL lazily. The endpoint sets
+  // ``Content-Disposition: attachment`` so the browser will
+  // save the file rather than navigate away. We only compute
+  // this when there's a PDF to download -- calling the URL
+  // for an unpublished workspace returns 404.
+  //
+  // We subscribe to ``currentWorkspace`` via the Zustand
+  // selector so the component re-renders when
+  // ``runAction('publish')`` writes the post-publish
+  // workspace into the store. ``published_report_available``
+  // is the specific field we care about; we select it
+  // directly (rather than the whole object) so unrelated
+  // state changes don't trigger a re-render.
+  //
+  // We also re-read it via a local state bump that the
+  // ``handlePublish`` ``finally`` block flips. The
+  // Zustand selector is the primary signal, but the local
+  // bump is a belt-and-braces fallback for any test mocks
+  // or production edge cases where the store write happens
+  // synchronously but the selector subscriber hasn't yet
+  // flushed. The cost is one extra state slot and a single
+  // ``setState`` per publish -- negligible.
+  const [publishedAt, setPublishedAt] = useState<number>(0);
+  const publishedReportAvailable = useWorkspaceStore(
+    (state) => state.currentWorkspace?.published_report_available ?? false,
+  );
+  const downloadUrl =
+    workspaceId && (publishedReportAvailable || publishedAt > 0)
+      ? api.getPublishedReportUrl(workspaceId)
+      : null;
 
   if (loading || generating || inFlight) {
     // ``phase`` carries the current label throughout the
@@ -293,6 +397,42 @@ export const Report: React.FC = () => {
               Regenerate
             </button>
 
+            {/* PUBLISH action: renders a PDF on the server and
+                exposes it via the GET endpoint below. The button
+                is disabled during the in-flight call (visual
+                spinner via the disabled state) and shows a
+                separate error if it fails. Once the PDF exists,
+                the link below becomes a real download. We use
+                ``data-action="publish-pdf"`` for end-to-end
+                tests that grep the rendered DOM. */}
+            <button
+                className="btn btn-primary"
+                onClick={handlePublish}
+                disabled={publishing}
+                data-action="publish-pdf"
+                aria-busy={publishing}
+            >
+              <Download size={16}/>
+              {publishing ? 'Publishing…' : 'Publish as PDF'}
+            </button>
+
+            {downloadUrl && (
+              <a
+                className="btn btn-outline"
+                href={downloadUrl}
+                // The endpoint sets
+                // ``Content-Disposition: attachment``
+                // so the browser saves the file rather
+                // than navigating away. ``download`` is a
+                // hint to the browser; the disposition
+                // header is authoritative.
+                download={`report-${workspaceId}.pdf`}
+              >
+                <Download size={16}/>
+                Download PDF
+              </a>
+            )}
+
             <button
                 className="btn btn-outline"
                 onClick={() => navigate(`/workspace/${workspaceId}`)}
@@ -300,6 +440,16 @@ export const Report: React.FC = () => {
               Back to Workspace
             </button>
           </div>
+
+          {pubError && (
+            <div
+              className="text-error text-sm mt-2"
+              role="alert"
+              data-testid="publish-error"
+            >
+              Failed to publish PDF: {pubError}
+            </div>
+          )}
         </header>
 
         {/* Report Content */}

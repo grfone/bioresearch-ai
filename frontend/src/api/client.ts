@@ -389,6 +389,43 @@ export const api = {
     );
   },
 
+  /**
+   * Run the PUBLISH action on a workspace.
+   *
+   * Renders the workspace's final report as a PDF and advances
+   * the FSM through PUBLISHING to COMPLETED. After this call
+   * returns, the PDF is downloadable via
+   * ``getPublishedReportUrl(workspaceId)``.
+   *
+   * Legal only from REPORTED. Any other starting state returns
+   * 409 -- the action is FSM-gated, just like ``runReportAction``
+   * and friends.
+   *
+   * The returned ``WorkspaceResponse`` reflects the post-PUBLISH
+   * state. The workspace's ``state`` is now COMPLETED, and the
+   * ``published_report`` field is populated (downloading the
+   * PDF doesn't require any further action).
+   */
+  runPublishAction: (workspaceId: string): Promise<WorkspaceResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/actions/publish`),
+      { method: 'POST' },
+    );
+  },
+
+  /**
+   * URL the browser hits to download the published PDF.
+   *
+   * Not a fetchJson wrapper -- the browser handles the
+   * ``application/pdf`` response natively via ``<a download>``
+   * or a window navigation. The endpoint sets a
+   * ``Content-Disposition: attachment`` header so the browser
+   * saves the file instead of trying to render it.
+   */
+  getPublishedReportUrl: (workspaceId: string): string => {
+    return buildUrl(`/workspaces/${workspaceId}/published-report.pdf`);
+  },
+
   /** Run the RETRY action on a workspace. */
   runRetryAction: (workspaceId: string): Promise<WorkspaceResponse> => {
     return fetchJson(
