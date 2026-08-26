@@ -29,6 +29,7 @@ from app.domain.interfaces.report_generator import ReportGenerator
 from app.domain.interfaces.comparison_generator import (
     ComparisonGenerator,
 )
+from app.domain.interfaces.pdf_generator import PDFGenerator
 from app.domain.value_objects.search_filters import SearchFilters
 from app.domain.value_objects.search_result import SearchResult
 from app.infrastructure.literature.multi_source import MultiSourceSearcher
@@ -104,6 +105,31 @@ class _StubComparisonGenerator(ComparisonGenerator):
         raise NotImplementedError
 
 
+class _StubPDFGenerator(PDFGenerator):
+    """Stub PDF generator for orchestrator construction.
+
+    The search-with-filters test path doesn't exercise the
+    PUBLISH action -- we only need this stub to satisfy the
+    orchestrator's constructor. Returns a minimal valid PDF
+    (so any test that does reach ``.generate()`` won't trip
+    PublishedReport's magic-header check).
+    """
+
+    _CANNED_BYTES: bytes = (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R "
+        b"/MediaBox [0 0 612 792] >>\nendobj\n"
+        b"xref\n0 4\n0000000000 65535 f \n"
+        b"0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n"
+        b"trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n190\n%%EOF\n"
+    )
+
+    def generate(self, report) -> bytes:
+        return self._CANNED_BYTES
+
+
 @pytest.fixture
 def fake_repo():
     """Tiny in-memory repository to back the orchestrator."""
@@ -138,6 +164,7 @@ def _orchestrator(
         llm_provider=_StubLLM(),
         report_generator=_StubReportGenerator(),
         comparison_generator=_StubComparisonGenerator(),
+        pdf_generator=_StubPDFGenerator(),
     )
 
 

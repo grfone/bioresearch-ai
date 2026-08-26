@@ -95,6 +95,9 @@ from app.infrastructure.llm.report_generator import (
 from app.infrastructure.llm.report_mapper import (
     ReportMapper,
 )
+from app.infrastructure.pdf.minimal_generator import (
+    MinimalPDFGenerator,
+)
 from app.infrastructure.pubmed.client import PubMedClient
 from app.infrastructure.pubmed.abstract_enricher import (
     AbstractEnricher,
@@ -262,6 +265,12 @@ class Container:
             comparison_mapper=comparison_mapper,
         )
 
+        # PDF generator for the PUBLISH action. No LLM, no
+        # network -- the minimal hand-rolled generator is
+        # deterministic and fast (a 20-paper report renders in
+        # single-digit milliseconds).
+        pdf_generator = MinimalPDFGenerator()
+
         workspace_repository = cls.get_workspace_repository()
 
         return WorkspaceOrchestrator(
@@ -270,6 +279,7 @@ class Container:
             llm_provider=llm_provider,
             report_generator=report_generator,
             comparison_generator=comparison_generator,
+            pdf_generator=pdf_generator,
         )
 
     @classmethod

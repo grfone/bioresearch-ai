@@ -57,10 +57,12 @@ from app.domain.entities.journal import Journal
 from app.domain.entities.paper import Paper
 from app.domain.entities.research_question import ResearchQuestion
 from app.domain.entities.research_session import ResearchSession
+from app.domain.entities.research_report import ResearchReport
 from app.domain.entities.summary import Summary
 from app.domain.interfaces.comparison_generator import ComparisonGenerator
 from app.domain.interfaces.llm_provider import LLMProvider
 from app.domain.interfaces.literature_searcher import LiteratureSearcher
+from app.domain.interfaces.pdf_generator import PDFGenerator
 from app.domain.interfaces.report_generator import ReportGenerator
 from app.domain.interfaces.workspace_repository import WorkspaceRepository
 from app.domain.models.llm_response import LLMResponse
@@ -162,7 +164,6 @@ class StubReportGenerator(ReportGenerator):
         summary: Summary,
     ):
         self.papers_seen.append(summary)
-        from app.domain.entities.research_report import ResearchReport
         return ResearchReport(
             summary=summary,
             citations=[],
@@ -184,6 +185,34 @@ class StubComparisonGenerator(ComparisonGenerator):
             research_gaps=[],
             future_directions=[],
         )
+
+
+class StubPDFGenerator(PDFGenerator):
+    """Minimal stub: returns canned PDF bytes so PublishedReport
+    validation passes. The orchestrator needs the ``pdf_generator``
+    dependency to construct (post-ADR-009) but the resolve-and-
+    add-by-title test path doesn't exercise the PUBLISH action,
+    so we never call ``.generate()`` here.
+
+    If a future test in this module does exercise PUBLISH, swap
+    this stub for the one in ``test_workspace_orchestrator.py``
+    (which records calls + returns deterministic bytes) -- or
+    import it from there.
+    """
+
+    _CANNED_BYTES: bytes = (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R "
+        b"/MediaBox [0 0 612 792] >>\nendobj\n"
+        b"xref\n0 4\n0000000000 65535 f \n"
+        b"0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n"
+        b"trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n190\n%%EOF\n"
+    )
+
+    def generate(self, report: ResearchReport) -> bytes:
+        return self._CANNED_BYTES
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +280,7 @@ def _make_orchestrator(
         llm_provider=llm,
         report_generator=StubReportGenerator(),
         comparison_generator=StubComparisonGenerator(),
+        pdf_generator=StubPDFGenerator(),
     )
 
 

@@ -204,6 +204,8 @@ class ResearchSession:
 
     report: ResearchReport | None = None
 
+    published_report: "PublishedReport | None" = None
+
     notes: list[str] = field(default_factory=list)
 
     state_history: list[StateTransition] = field(default_factory=list)
@@ -667,6 +669,22 @@ class ResearchSession:
             Structured biomedical research report.
         """
         self.report = report
+        self.touch()
+
+    def set_published_report(self, published_report: "PublishedReport") -> None:
+        """
+        Store the rendered PDF for this workspace.
+
+        Called by the orchestrator's ``publish_report()`` after the
+        PDF has been generated. Replacing an existing publication
+        is allowed -- a re-publish overwrites the previous artefact.
+
+        Parameters
+        ----------
+        published_report : PublishedReport
+            The PDF bytes plus the metadata needed to serve them.
+        """
+        self.published_report = published_report
         self.touch()
 
     def add_note(self, note: str) -> None:

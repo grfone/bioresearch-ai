@@ -38,10 +38,11 @@ research workflow:
     REPORTING    (transient)
         │
         ▼
-    REPORTED ─────► COMPLETED
-                              ▲
-                              │
-                              │  archive / mark done
+    REPORTED ─┬─► PUBLISHING (transient) ─► COMPLETED
+             │                               ▲
+             │                               │
+             │  archive / mark done          │
+             └─────────────────────────────►┘
 
 ERROR is reachable from any non-terminal state and can be returned
 from ERROR to the previous state on retry.
@@ -94,6 +95,12 @@ class WorkspaceState(str, Enum):
         Final report exists. Workspace still mutable (more papers
         can be added and intermediate steps can be re-run).
 
+    PUBLISHING
+        PDF export of the final report is in flight. Transient.
+        Like ``REPORTING``, this is short-lived; the next durable
+        state is ``COMPLETED`` once the PDF bytes have been
+        generated and stored on the workspace.
+
     COMPLETED
         Terminal success state. The workspace is finished and ready for
         export / sharing.
@@ -113,6 +120,7 @@ class WorkspaceState(str, Enum):
     COMPARED = "COMPARED"
     REPORTING = "REPORTING"
     REPORTED = "REPORTED"
+    PUBLISHING = "PUBLISHING"
     COMPLETED = "COMPLETED"
     ERROR = "ERROR"
 
@@ -151,6 +159,7 @@ _TRANSIENT_STATES: frozenset[WorkspaceState] = frozenset(
         WorkspaceState.SUMMARIZING,
         WorkspaceState.COMPARING,
         WorkspaceState.REPORTING,
+        WorkspaceState.PUBLISHING,
     }
 )
 
@@ -190,6 +199,14 @@ class WorkspaceAction(str, Enum):
     COMPLETE
         Manually mark the workspace as finished.
 
+    PUBLISH
+        Render the workspace's final report as a PDF and mark
+        the workspace as COMPLETED. This is the document-export
+        action -- it produces a downloadable PDF and advances
+        the FSM through PUBLISHING to COMPLETED. Legal only
+        from REPORTED because the report must exist before we
+        can render it. See ADR-009.
+
     RETRY
         Recover from an ERROR state by returning to the previous state.
 
@@ -208,6 +225,7 @@ class WorkspaceAction(str, Enum):
     COMPARE = "compare"
     REPORT = "report"
     COMPLETE = "complete"
+    PUBLISH = "publish"
     RETRY = "retry"
     ADD_PAPER = "add_paper"
     REMOVE_PAPER = "remove_paper"
@@ -280,8 +298,12 @@ TRANSITIONS: dict[WorkspaceState, dict[WorkspaceAction, WorkspaceState]] = {
         WorkspaceAction.SEARCH: WorkspaceState.SEARCHING,
         WorkspaceAction.REPORT: WorkspaceState.REPORTING,
         WorkspaceAction.COMPLETE: WorkspaceState.COMPLETED,
+        WorkspaceAction.PUBLISH: WorkspaceState.PUBLISHING,
         WorkspaceAction.ADD_PAPER: WorkspaceState.REPORTED,
         WorkspaceAction.REMOVE_PAPER: WorkspaceState.REPORTED,
+    },
+    WorkspaceState.PUBLISHING: {
+        WorkspaceAction.RETRY: WorkspaceState.REPORTED,
     },
     WorkspaceState.COMPLETED: {
         WorkspaceAction.ADD_PAPER: WorkspaceState.REPORTED,

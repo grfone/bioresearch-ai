@@ -78,7 +78,7 @@ from app.core.enums.workspace_state import WorkspaceAction
 # Schema constants
 # ---------------------------------------------------------------------------
 
-LATEST_SCHEMA_VERSION = 2
+LATEST_SCHEMA_VERSION = 3
 
 
 # Columns that were added in each schema version. The repository
@@ -88,6 +88,15 @@ _V2_COLUMNS = (
     ("state", "TEXT NOT NULL DEFAULT 'CREATED'"),
     ("state_history", "TEXT"),
     ("evidence_comparison", "TEXT"),
+)
+# v3: PUBLISH action support. We persist the rendered PDF bytes
+# on the workspace so the ``GET /workspaces/{id}/published-report.pdf``
+# endpoint can serve them after a process restart. The bytes are
+# stored as a JSON-serialised blob (base64-encoded so the JSON
+# layer doesn't choke on raw PDF binary). See
+# ``_serialize_published_report`` / ``_deserialize_published_report``.
+_V3_COLUMNS = (
+    ("published_report", "TEXT"),
 )
 
 
@@ -138,7 +147,11 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     notes TEXT,
                     metadata TEXT,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'CREATED',
+                    state_history TEXT,
+                    evidence_comparison TEXT,
+                    published_report TEXT
                 )
                 """
             )
@@ -155,12 +168,23 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         if current >= LATEST_SCHEMA_VERSION:
             return
 
-        # v2: FSM additions.
+        # ``table_info`` is queried once -- used by both the v2
+        # and v3 column loops to skip already-present columns
+        # (idempotent migration).
         existing = {
             row[1]
             for row in cursor.execute("PRAGMA table_info(workspaces)").fetchall()
         }
+
+        # v2: FSM additions.
         for column_name, column_def in _V2_COLUMNS:
+            if column_name not in existing:
+                cursor.execute(
+                    f"ALTER TABLE workspaces ADD COLUMN {column_name} {column_def}"
+                )
+
+        # v3: PUBLISH action support (see ADR-009).
+        for column_name, column_def in _V3_COLUMNS:
             if column_name not in existing:
                 cursor.execute(
                     f"ALTER TABLE workspaces ADD COLUMN {column_name} {column_def}"
@@ -258,8 +282,9 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                 INSERT OR REPLACE INTO workspaces (
                     id, question, papers, summary, report, notes,
                     metadata, created_at, updated_at,
-                    state, state_history, evidence_comparison
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    state, state_history, evidence_comparison,
+                    published_report
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(workspace.id),
@@ -274,6 +299,9 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     workspace.state.value,
                     self._serialize_state_history(workspace.state_history),
                     self._serialize_evidence_comparison(workspace.evidence_comparison),
+                    self._serialize_published_report(
+                        workspace.published_report
+                    ),
                 ),
             )
             conn.commit()
@@ -337,6 +365,74 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                 "future_work": report.future_work,
                 "metadata": report.metadata,
             }
+        )
+
+    def _serialize_published_report(
+        self,
+        published_report: Optional["PublishedReport"],
+    ) -> str:
+        """Serialise a PublishedReport to a JSON blob.
+
+        The PDF bytes are base64-encoded so the JSON layer
+        doesn't choke on raw binary. ``PublishedReport`` is
+        typed as ``Optional[...]`` because the workspace may
+        not have been published yet.
+
+        Returns ``"null"`` (not the empty string) when the
+        workspace has no published report -- matches the
+        ``_serialize_report`` convention so the deserialiser
+        can distinguish "no value" from "empty value".
+        """
+        if published_report is None:
+            return "null"
+        import base64 as _base64
+        return json.dumps(
+            {
+                # ``base64`` gives us ASCII-safe bytes for the
+                # JSON wrapper. The deserialiser decodes the
+                # same way.
+                "pdf_bytes": _base64.b64encode(
+                    published_report.pdf_bytes
+                ).decode("ascii"),
+                "byte_size": published_report.byte_size,
+                "workspace_id": published_report.workspace_id,
+                # The entity field is named ``created_at`` (per
+                # the dataclass). We serialise it under the
+                # same key to keep the round-trip trivial.
+                "created_at": published_report.created_at.isoformat(),
+            }
+        )
+
+    def _deserialize_published_report(
+        self,
+        published_report_json: Optional[str],
+    ) -> Optional["PublishedReport"]:
+        """Deserialise a JSON blob back into a ``PublishedReport``.
+
+        Returns ``None`` for ``"null"`` or empty input -- the
+        column is nullable so a workspace that hasn't been
+        published yet has ``published_report IS NULL``.
+
+        Imports ``PublishedReport`` and ``base64`` lazily to
+        avoid a circular dependency with the entity module
+        (sqlite_workspace_repository.py is imported by the
+        container at startup, before the entity is necessarily
+        loaded).
+        """
+        if not published_report_json or published_report_json == "null":
+            return None
+        import base64 as _base64
+        from app.domain.entities.published_report import (
+            PublishedReport,
+        )
+        from datetime import datetime as _datetime
+
+        data = json.loads(published_report_json)
+        return PublishedReport(
+            pdf_bytes=_base64.b64decode(data["pdf_bytes"]),
+            byte_size=data["byte_size"],
+            workspace_id=data["workspace_id"],
+            created_at=_datetime.fromisoformat(data["created_at"]),
         )
 
     def _serialize_state_history(self, history: List[StateTransition]) -> str:
@@ -415,18 +511,28 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
     # ------------------------------------------------------------------
 
     def _row_to_workspace(self, row: tuple) -> ResearchSession:
-        # Row column order:
-        # 0 id, 1 question, 2 papers, 3 summary, 4 report, 5 notes,
-        # 6 metadata, 7 created_at, 8 updated_at,
-        # 9 state, 10 state_history, 11 evidence_comparison, 12 evidence_matrix
+        # Row column order (after v3 migration):
+        #   0 id, 1 question, 2 papers, 3 summary, 4 report, 5 notes,
+        #   6 metadata, 7 created_at, 8 updated_at,
+        #   9 state, 10 state_history, 11 evidence_comparison,
+        #   12 published_report
+        # (The schema does NOT have an evidence_matrix column --
+        # it's a deserialiser-only concept the legacy code
+        # sometimes pretended was a column. The padding in
+        # ``_row_to_dict`` is what kept that illusion alive.)
         row_dict = self._row_to_dict(row)
         return self._dict_to_workspace(row_dict)
 
     def _row_to_dict(self, row: tuple) -> Dict[str, Any]:
         # Some columns may be missing in older database files; pad
         # the row defensively so the deserialiser is forward
-        # compatible.
-        padded: list[Any] = list(row) + [None] * (13 - len(row))
+        # compatible. The actual schema has 13 columns; we pad
+        # to 14 so the legacy ``padded[12] = evidence_matrix``
+        # slot stays ``None`` without raising IndexError. The
+        # new ``published_report`` slot is at ``padded[12]``
+        # in current databases (replaces the phantom
+        # ``evidence_matrix``).
+        padded: list[Any] = list(row) + [None] * (14 - len(row))
         return {
             "id": padded[0],
             "question": padded[1],
@@ -440,7 +546,20 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             "state": padded[9],
             "state_history": padded[10],
             "evidence_comparison": padded[11],
-            "evidence_matrix": padded[12],
+            # ``evidence_matrix`` was historically referenced
+            # as ``padded[12]`` even though no schema column
+            # existed; the legacy padding kept that index
+            # valid. We keep the field as ``None`` here so any
+            # downstream code that still reads it doesn't
+            # crash on a missing key.
+            "evidence_matrix": None,
+            # v3: PUBLISH action support. The PDF blob is
+            # at index 12 (the slot the legacy code imagined
+            # was evidence_matrix). For databases that never
+            # ran the v3 migration this will be ``None``,
+            # which the deserialiser turns into
+            # ``PublishedReport | None`` on the session.
+            "published_report": padded[12],
         }
 
     def _dict_to_workspace(self, row_dict: Dict[str, Any]) -> ResearchSession:
@@ -475,6 +594,16 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             row_dict.get("evidence_matrix"),
         )
 
+        # v3: PublishedReport. The column is nullable so we
+        # only call the deserialiser when there's a value.
+        published_report = (
+            self._deserialize_published_report(
+                row_dict.get("published_report")
+            )
+            if row_dict.get("published_report")
+            else None
+        )
+
         workspace = ResearchSession(
             id=UUID(row_dict["id"]),
             question=question,
@@ -489,6 +618,12 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             updated_at=updated_at,
             metadata=metadata,
         )
+        # ``published_report`` is set after construction
+        # because it's an optional slot that bypasses the
+        # constructor (matches the pattern used by
+        # ``set_report`` for the analogous ``report`` field).
+        if published_report is not None:
+            workspace.set_published_report(published_report)
         return workspace
 
     # ------------------------------------------------------------------

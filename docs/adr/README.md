@@ -24,6 +24,10 @@ These documents serve as long-term project documentation and help future contrib
   `PDF_UPLOAD_MAX_BYTES` env var, 50 MB default, 200 MB hard cap.
 - [ADR-008: One-click report from PAPERS_RETRIEVED](ADR-008-one-click-report-from-papers-retrieved.md) —
   drop the "Summarize first" gate; orchestrator auto-summarises when needed.
+- [ADR-009: PUBLISHING FSM state for PDF export](ADR-009-publishing-state.md) —
+  twelve-state FSM with the new transient `PUBLISHING` state, a hand-rolled
+  PDF 1.4 generator, and the four-layer audit pattern (FSM table →
+  orchestrator → structural → frontend wire-format).
 
 ## Every ADR follows the same format:
 

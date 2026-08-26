@@ -56,12 +56,14 @@ from app.core.enums.workspace_state import (
 from app.core.exceptions import IllegalWorkspaceActionError
 from app.domain.entities.evidence_comparison import EvidenceComparison
 from app.domain.entities.paper import Paper
+from app.domain.entities.published_report import PublishedReport
 from app.domain.entities.research_question import ResearchQuestion
 from app.domain.entities.research_report import ResearchReport
 from app.domain.entities.research_session import ResearchSession
 from app.domain.entities.summary import Summary
 from app.domain.interfaces.llm_provider import LLMProvider
 from app.domain.interfaces.literature_searcher import LiteratureSearcher
+from app.domain.interfaces.pdf_generator import PDFGenerator
 from app.domain.interfaces.report_generator import ReportGenerator
 from app.domain.interfaces.workspace_repository import WorkspaceRepository
 from app.domain.value_objects.search_filters import SearchFilters
@@ -143,6 +145,13 @@ class WorkspaceOrchestrator:
 
     comparison_generator : ComparisonGenerator
         Generator used by the COMPARE action.
+
+    pdf_generator : PDFGenerator
+        Generator used by the PUBLISH action. Renders a
+        :class:`ResearchReport` to PDF bytes. Required -- the
+        container's composition root always supplies the
+        production implementation; tests can supply a stub
+        that returns canned bytes.
     """
 
     def __init__(
@@ -152,11 +161,13 @@ class WorkspaceOrchestrator:
         llm_provider: LLMProvider,
         report_generator: ReportGenerator,
         comparison_generator: "ComparisonGenerator",
+        pdf_generator: PDFGenerator,
     ) -> None:
         self._repository = workspace_repository
         self._literature_searcher = literature_searcher
         self._report_generator = report_generator
         self._comparison_generator = comparison_generator
+        self._pdf_generator = pdf_generator
 
         # Use cases are constructed here (composition root concern
         # delegated to the orchestrator for ergonomics) so callers
@@ -749,6 +760,123 @@ class WorkspaceOrchestrator:
         """
         session = self._repository.get(workspace_id)
         session.transition_to(WorkspaceAction.COMPLETE)
+        return self._repository.update(session)
+
+    def publish(self, workspace_id: UUID) -> ResearchSession:
+        """
+        Run the PUBLISH action.
+
+        This is the document-export step: render the workspace's
+        final report as a PDF, store the bytes on the session, and
+        advance the FSM to the terminal ``COMPLETED`` state via the
+        transient ``PUBLISHING`` state.
+
+        FSM flow
+        ---------
+        The user sees a single button ("Publish as PDF"). Internally
+        we walk through two FSM states::
+
+            REPORTED ── PUBLISH ──> PUBLISHING ── pdf bytes ──> COMPLETED
+
+        - ``REPORTED`` is the only legal starting state. Any other
+          starting state is rejected at the FSM table (Layer 1)
+          with an ``IllegalWorkspaceActionError``. We do **not**
+          auto-run REPORT here -- the user is expected to have
+          generated a report first. If a workspace is in
+          PAPERS_RETRIEVED, SUMMARIZED, etc., we reject.
+        - ``PUBLISHING`` is transient. The PDF bytes have not yet
+          been written. If the generator raises, we move to ERROR
+          via ``_fail()`` (same pattern as ``report()``).
+        - ``COMPLETED`` is terminal. A re-publish is allowed but
+          overwrites the previous PDF artefact.
+
+        Structural preconditions (Layer 3 audit)
+        ------------------------------------------
+        The orchestrator assumes:
+          1. ``session.report`` is not None (the FSM table already
+             guarantees this -- PUBLISH is only legal from
+             REPORTED, and REPORTED implies report exists).
+          2. ``session.report.summary.text`` is non-empty (otherwise
+             the generator raises ``ValueError``).
+
+        Audit trail
+        ------------
+        The state_history records every transition with its reason.
+        The PUBLISHING step records ``reason="PDF export in flight"``
+        and the COMPLETED step records ``reason="PDF published"``
+        so the audit log captures the action chain end-to-end.
+
+        Parameters
+        ----------
+        workspace_id : UUID
+            Workspace identifier.
+
+        Returns
+        -------
+        ResearchSession
+            The updated workspace, with ``session.published_report``
+            populated and ``state`` == ``COMPLETED``.
+
+        Raises
+        ------
+        IllegalWorkspaceActionError
+            If PUBLISH is not legal from the current state.
+        """
+        session = self._repository.get(workspace_id)
+
+        # Layer 1 gate: PUBLISH is only legal from REPORTED.
+        # We call ``transition_to`` directly (not ``_enter_action``)
+        # because we want to record a ``reason`` in the audit trail.
+        # ``transition_to`` raises ``IllegalWorkspaceActionError``
+        # with the current state + allowed actions list if not.
+        session.transition_to(
+            WorkspaceAction.PUBLISH, reason="PDF export in flight"
+        )
+
+        # Structural assumption guard (Layer 3): the FSM table
+        # guarantees ``session.report`` is not None at REPORTED,
+        # but a misconfigured session (e.g. a stub in a test) could
+        # violate that. Pin the assumption explicitly so the
+        # downstream code never crashes on a ``None``.
+        if session.report is None:
+            exc = ValueError(
+                f"Cannot publish workspace {workspace_id}: report is None. "
+                "PUBLISH is only legal from REPORTED, which implies "
+                "a report has been generated."
+            )
+            logger.exception("PUBLISH failed for workspace %s", workspace_id)
+            self._fail(session, exc)
+            raise exc
+
+        try:
+            pdf_bytes = self._pdf_generator.generate(session.report)
+        except Exception as exc:
+            logger.exception(
+                "PUBLISH failed for workspace %s", workspace_id
+            )
+            self._fail(session, exc)
+            raise
+
+        # Layer 3 structural: persist the rendered PDF on the
+        # session. ``PublishedReport.create`` stamps the timestamp
+        # and byte_size; ``__post_init__`` validates the magic header
+        # so a corrupted render fails loudly at this layer rather
+        # than at download time.
+        published_report = PublishedReport.create(
+            pdf_bytes=pdf_bytes,
+            workspace_id=str(workspace_id),
+        )
+        session.set_published_report(published_report)
+
+        # Layer 1: advance PUBLISHING -> COMPLETED. ``force_state``
+        # is the right call here because the FSM transition from
+        # PUBLISHING to COMPLETED is "auto" (driven by the
+        # orchestrator, not by a user-initiated action). The
+        # ``reason`` field goes into the audit trail.
+        session.force_state(
+            WorkspaceState.COMPLETED,
+            reason="PDF published",
+        )
         return self._repository.update(session)
 
     def retry(self, workspace_id: UUID) -> ResearchSession:

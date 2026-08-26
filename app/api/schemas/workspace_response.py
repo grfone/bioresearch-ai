@@ -91,6 +91,14 @@ class WorkspaceResponse(BaseModel):
     report_available : bool
         Indicates whether a final research report has been generated.
 
+    published_report_available : bool
+        Indicates whether a PDF has been rendered for download
+        by the PUBLISH action. Independent of ``report_available``:
+        a workspace may have a generated report but not yet a PDF
+        (the user can publish at any time after REPORT), and
+        conversely a workspace published once will keep its PDF
+        even if the underlying report is regenerated.
+
     created_at : datetime
         Workspace creation timestamp (UTC).
 
@@ -189,6 +197,15 @@ class WorkspaceResponse(BaseModel):
     report_available: bool = Field(
         default=False,
         description="Whether a final report has been generated."
+    )
+
+    published_report_available: bool = Field(
+        default=False,
+        description=(
+            "Whether a PDF has been rendered and persisted via the "
+            "PUBLISH action. Independent of ``report_available``: "
+            "see the field docs on the pydantic class."
+        ),
     )
 
     created_at: datetime = Field(
@@ -359,6 +376,18 @@ class WorkspaceResponse(BaseModel):
         report = getattr(session, "report", None)
         report_available = report is not None
 
+        # Published-report availability (PDF downloaded via the
+        # GET /workspaces/{id}/published-report.pdf endpoint).
+        # Set by the PUBLISH action. Independent of
+        # ``report_available`` -- a workspace can be in REPORTED
+        # state with a generated report but not yet published
+        # (no PDF on the session), or vice versa after a
+        # workspace has been COMPLETED via the legacy COMPLETE
+        # action (report but no PDF). The UI uses this flag to
+        # decide whether the "Download PDF" button is enabled.
+        published_report = getattr(session, "published_report", None)
+        published_report_available = published_report is not None
+
         # Last error
         last_error = getattr(session, "last_error", None)
 
@@ -384,6 +413,7 @@ class WorkspaceResponse(BaseModel):
             summary=summary_text,
             has_evidence_comparison=has_evidence_comparison,
             report_available=report_available,
+            published_report_available=published_report_available,
             created_at=created_at,
             updated_at=updated_at,
         )
