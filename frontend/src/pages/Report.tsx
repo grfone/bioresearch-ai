@@ -114,7 +114,7 @@ export const Report: React.FC = () => {
   // compare is data-side still set on the workspace model
   // but doesn't block report generation).
   const [phase, setPhase] = useState<string>('Loading workspace…');
-  const [genError, setGenError] = useState<string | null>(null);
+  const [genError, setGenError] = useState<Error | string | null>(null);
   // True while the page is in any loading phase (initial
   // ``fetchWorkspace``, optional ``Summarizing``, and
   // ``Generating report``). We track this separately from
@@ -185,7 +185,15 @@ export const Report: React.FC = () => {
       // Optionally refetch workspace to update report_available flag.
       await fetchWorkspace(workspaceId);
     } catch (err) {
-      setGenError(err instanceof Error ? err.message : 'Failed to generate report.');
+      // Store the Error object (not just ``err.message``)
+      // so the error UI's structured-envelope reader can see
+      // the FastAPI detail -- including ``last_error`` and
+      // ``current_state`` from the legacy ``/reports/generate``
+      // endpoint's 409 response. Without keeping the original
+      // Error, the user sees the verbose "API error 409: ..."
+      // message instead of the actionable ``last_error`` from
+      // the orchestrator.
+      setGenError(err instanceof Error ? err : new Error(String(err)));
     } finally {
       setGenerating(false);
       setInFlight(false);
@@ -305,23 +313,130 @@ export const Report: React.FC = () => {
     );
   }
 
+  // The legacy ``/reports/generate`` endpoint (which the frontend
+  // still uses) returns a structured 409 envelope when the
+  // workspace is in ERROR. We surface both the user-visible
+  // ``last_error`` string from the envelope AND the
+  // ``current_state`` so the user knows whether a Retry will
+  // work or whether they need to recover first.
+  //
+  // The frontend's `Retry` button now also handles the
+  // recover-from-ERROR path: if the workspace is in ERROR,
+  // we run the FSM RETRY action first to move it back to
+  // CREATED, then re-attempt generation. This matches what
+  // the FSM contract expects and prevents the user from
+  // getting stuck in a 409 loop clicking "Retry".
+  const errorEnvelope: {
+    error?: string;
+    message?: string;
+    current_state?: string;
+    last_error?: string | null;
+    allowed_actions?: string[];
+  } | null = (() => {
+    const candidate = (error ?? genError) as
+      { detail?: unknown } | null;
+    if (
+      candidate &&
+      typeof candidate === 'object' &&
+      'detail' in candidate &&
+      candidate.detail &&
+      typeof candidate.detail === 'object'
+    ) {
+      return candidate.detail as {
+        error?: string;
+        message?: string;
+        current_state?: string;
+        last_error?: string | null;
+        allowed_actions?: string[];
+      };
+    }
+    return null;
+  })();
+
+  // Distinguish the three failure shapes:
+  //   - "report_generation_failed": the LLM/provider call
+  //     crashed; the workspace is in ERROR.
+  //   - "illegal_workspace_action": the FSM rejected the
+  //     action before it ran; the workspace is still in a
+  //     normal state and a plain Retry can succeed.
+  //   - anything else: a generic network/transport error;
+  //     same Retry path as before.
+  const isRecoverable =
+    errorEnvelope?.error === 'report_generation_failed' &&
+    errorEnvelope?.current_state === 'ERROR';
+
   if (error || genError) {
+    const headerMessage = isRecoverable
+      ? 'Report generation hit an error.'
+      : 'Error generating report.';
+    // Prefer ``last_error`` (the orchestrator's reason for the
+    // failure) over the raw ``message`` (which can include the
+    // exception type and the wrapped ``from exc`` detail). Both
+    // are user-visible; ``last_error`` is the action that
+    // actually failed.
+    const detailMessage =
+      errorEnvelope?.last_error ??
+      errorEnvelope?.message ??
+      error?.message ??
+      (typeof genError === 'string' ? genError : null);
+    const recoverHint = isRecoverable
+      ? 'The workspace is in an error state. Click "Recover & Retry" to reset it and try again.'
+      : null;
+
     return (
         <div className="page section flex items-center justify-center min-h-screen">
           <div className="text-center text-error">
-            <p>Error generating report.</p>
-            <p className="text-sm text-secondary mt-2">{error?.message || genError}</p>
+            <p>{headerMessage}</p>
+            {detailMessage && (
+              <p
+                className="text-sm text-secondary mt-2"
+                data-testid="report-error-detail"
+              >
+                {detailMessage}
+              </p>
+            )}
+            {recoverHint && (
+              <p
+                className="text-sm text-secondary mt-2"
+                data-testid="report-error-recover-hint"
+              >
+                {recoverHint}
+              </p>
+            )}
             <button
               className="btn btn-outline mt-4"
+              data-action="report-retry"
               onClick={async () => {
-                // Retry: refresh first (so we know the
-                // current workspace state and pick the
-                // correct phase), then re-run generation.
+                // Two paths:
+                //
+                //   1. ``isRecoverable`` is true: the
+                //      workspace is in ERROR. Run the FSM
+                //      RETRY action first to reset to
+                //      CREATED, then re-attempt generation.
+                //   2. Otherwise: just refresh the
+                //      workspace and re-attempt generation
+                //      (handles transient network blips,
+                //      FSM-rejected illegal actions, etc).
                 if (!workspaceId) return;
                 setInFlight(true);
                 setPhase('Loading workspace…');
                 try {
-                  await fetchWorkspace(workspaceId);
+                  if (isRecoverable) {
+                    // ``runAction('retry')`` is the
+                    // FSM-aware path (POST .../actions/retry).
+                    // The legacy /reports/generate endpoint
+                    // does NOT have a corresponding retry --
+                    // only the FSM action moves ERROR -> CREATED.
+                    await runAction('retry');
+                    // ``runAction`` already refetches via
+                    // ``setCurrentWorkspace`` internally; we
+                    // call ``fetchWorkspace`` again so the
+                    // local React state mirrors what the
+                    // server actually has after the retry.
+                    await fetchWorkspace(workspaceId);
+                  } else {
+                    await fetchWorkspace(workspaceId);
+                  }
                   await handleGenerateReport();
                 } catch (err) {
                   setGenError(err instanceof Error ? err.message : 'Failed to retry.');
@@ -329,7 +444,7 @@ export const Report: React.FC = () => {
               }}
             >
               <RefreshCw size={16}/>
-              Retry
+              {isRecoverable ? 'Recover & Retry' : 'Retry'}
             </button>
           </div>
         </div>

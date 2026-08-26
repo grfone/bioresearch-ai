@@ -582,4 +582,216 @@ describe('Report > Publish as PDF', () => {
       screen.queryByRole('button', { name: /Publish as PDF/i }),
     ).not.toBeNull();
   });
+});/**
+ * Tests for the Report page error UI.
+ *
+ * These pin the bug fix for the "500 -> 409" failure mode the
+ * live verify surfaced: the legacy ``/reports/generate``
+ * endpoint now returns 409 with a structured envelope
+ * (``error="report_generation_failed"``, ``last_error``,
+ * ``current_state="ERROR"``) when the LLM call crashes,
+ * instead of bubbling up to a bare 500. The frontend
+ * surfaces that envelope as a clear error message and
+ * offers a "Recover & Retry" CTA that runs the FSM
+ * RETRY action first so the user isn't stuck in a 409
+ * loop clicking "Retry" against an ERROR-state workspace.
+ *
+ * Four cases are covered (the four-state discipline from
+ * the FSM-audit skill):
+ *   1. Positive -- the envelope shape is recognised, the
+ *      ``last_error`` is shown, the recover hint is shown.
+ *   2. Negative -- a non-recoverable error (illegal action)
+ *      keeps the original "Retry" label and does NOT show
+ *      the recover hint.
+ *   3. Audit-trail -- the "Recover & Retry" CTA actually
+ *      calls ``runAction('retry')`` AND then
+ *      ``generateReport()``. Pins the FSM-aware path so a
+ *      future contributor can't accidentally wire the
+ *      button back to the legacy ``/reports/generate``
+ *      shortcut.
+ *   4. Network-blip -- a plain network error falls through
+ *      to the original "Retry" path (no FSM RETRY; just
+ *      re-attempt generation).
+ */
+describe('Report > error UI', () => {
+  function setupError() {
+    // The fixture workspace in ERROR state.
+    const workspace = {
+      workspace_id: 'ws-1',
+      question: 'x',
+      state: 'ERROR',
+      summary: null,
+      papers: [],
+      total_papers: 0,
+      allowed_actions: ['retry'],
+      has_evidence_comparison: false,
+      report_available: false,
+      published_report_available: false,
+      last_error: null,
+      progress: 1.0,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      paper_sources: {},
+    };
+    mockUseWorkspaceReturn.workspace = workspace;
+    mockStoreCurrentWorkspace.current = workspace;
+    mockFetchWorkspace.mockResolvedValue(workspace);
+    mockRunAction.mockResolvedValue({
+      ...workspace,
+      state: 'CREATED',
+      allowed_actions: ['add_paper', 'search'],
+    });
+    return { workspace };
+  }
+
+  // The test mocks ``../api/client`` wholesale so the live
+  // ``APIError`` class isn't available. We reconstruct an
+  // object with the same shape: Error + ``status`` + ``detail``.
+  function makeApiError(
+    status: number,
+    detail: unknown,
+    message?: string,
+  ) {
+    const err = new Error(
+      message ?? `API error ${status}`,
+    ) as Error & { status?: number; detail?: unknown };
+    err.status = status;
+    err.detail = detail;
+    return err;
+  }
+
+  it('surfaces the last_error message in a recoverable failure', async () => {
+    const { workspace } = setupError();
+    mockGenerateReport.mockRejectedValueOnce(
+      makeApiError(409, {
+        error: 'report_generation_failed',
+        message:
+          'RemoteProtocolError: peer closed connection without response',
+        current_state: 'ERROR',
+        last_error: 'RemoteProtocolError: peer closed connection',
+        allowed_actions: ['retry'],
+      }),
+    );
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+    // The detail block shows the orchestrator's last_error
+    // (not the verbose ``message``).
+    await waitFor(() => {
+      const detail = screen.getByTestId('report-error-detail');
+      expect(detail.textContent).toBe(
+        'RemoteProtocolError: peer closed connection',
+      );
+    });
+    // The recover hint shows because current_state === ERROR.
+    expect(
+      screen.getByTestId('report-error-recover-hint'),
+    ).toBeInTheDocument();
+    // The CTA is relabelled to "Recover & Retry".
+    expect(
+      screen.queryByRole('button', { name: /Recover.*Retry/i }),
+    ).not.toBeNull();
+    // The plain "Retry" label is gone (replaced).
+    expect(
+      screen.queryByRole('button', { name: /^Retry$/i }),
+    ).toBeNull();
+    // sanity: workspace fixture is in ERROR.
+    expect(workspace.state).toBe('ERROR');
+  });
+
+  it('keeps the "Retry" label for non-recoverable failures', async () => {
+    setupError();
+    mockGenerateReport.mockRejectedValueOnce(
+      makeApiError(409, {
+        error: 'illegal_workspace_action',
+        message: 'Action report is not allowed from state SUMMARIZED',
+        current_state: 'SUMMARIZED',
+        action: 'report',
+        allowed_actions: ['search', 'compare', 'report'],
+      }),
+    );
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+    // The recover hint is NOT shown (workspace isn't in ERROR).
+    expect(
+      screen.queryByTestId('report-error-recover-hint'),
+    ).not.toBeInTheDocument();
+    // The CTA stays as plain "Retry" (no recover step needed).
+    expect(
+      screen.queryByRole('button', { name: /Recover.*Retry/i }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: /^Retry$/i }),
+    ).not.toBeNull();
+  });
+
+  it('"Recover & Retry" CTA calls the FSM RETRY action THEN re-generates', async () => {
+    setupError();
+    mockGenerateReport.mockRejectedValueOnce(
+      makeApiError(409, {
+        error: 'report_generation_failed',
+        current_state: 'ERROR',
+        last_error: 'Some failure',
+        allowed_actions: ['retry'],
+      }),
+    );
+    // Second call (after RETRY) succeeds.
+    mockGenerateReport.mockResolvedValueOnce({
+      content: '# A Test Report\n\nSome content.',
+      summary: '# A Test Report\n\nSome content.',
+      sections: [{ title: 'Introduction', content: 'Some content.' }],
+      citations: [],
+      limitations: [],
+      future_work: [],
+    } as never);
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+
+    // Clear mocks so the click-time call sequence is clean.
+    mockRunAction.mockClear();
+    mockFetchWorkspace.mockClear();
+    mockGenerateReport.mockClear();
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Recover.*Retry/i }),
+    );
+
+    // First the FSM RETRY action runs.
+    await waitFor(() => {
+      expect(mockRunAction).toHaveBeenCalledWith('retry');
+    });
+    // Then fetchWorkspace refetches the (now-CREATED) session.
+    expect(mockFetchWorkspace).toHaveBeenCalled();
+    // Then generateReport() re-attempts.
+    expect(mockGenerateReport).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls through to plain Retry for network/transport errors', async () => {
+    setupError();
+    mockGenerateReport.mockRejectedValueOnce(
+      // No structured envelope -- plain network error from
+      // fetchJson's catch path.
+      makeApiError(0, 'fetch failed', 'TypeError: fetch failed'),
+    );
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+    // No envelope means no recover hint and no relabel.
+    expect(
+      screen.queryByTestId('report-error-recover-hint'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /^Retry$/i }),
+    ).not.toBeNull();
+  });
 });
