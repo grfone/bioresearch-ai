@@ -78,7 +78,7 @@ from app.core.enums.workspace_state import WorkspaceAction
 # Schema constants
 # ---------------------------------------------------------------------------
 
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 5
 
 
 # Columns that were added in each schema version. The repository
@@ -123,6 +123,18 @@ _V3_COLUMNS = (
 # arbitrary-length TEXT natively.
 _V4_COLUMNS = (
     ("last_error", "TEXT"),
+)
+# v5: ``last_error_at`` -- the UTC timestamp of when ``last_error``
+# was set. Pairs with v4's ``last_error`` to give the UI a
+# "fresh vs stale" signal for the diagnostic. Stored as ISO-8601
+# text (the same format ``created_at`` / ``updated_at`` use --
+# ``datetime.fromisoformat()`` round-trips cleanly for any
+# value that ``datetime.isoformat()`` produces).
+#
+# Plain ``TEXT`` is sufficient. The column is nullable so
+# non-ERROR workspaces (and pre-v5 rows) get ``NULL``.
+_V5_COLUMNS = (
+    ("last_error_at", "TEXT"),
 )
 
 
@@ -178,7 +190,8 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     state_history TEXT,
                     evidence_comparison TEXT,
                     published_report TEXT,
-                    last_error TEXT
+                    last_error TEXT,
+                    last_error_at TEXT
                 )
                 """
             )
@@ -222,6 +235,21 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         # restarts. See ``_V4_COLUMNS`` docstring above for
         # the full rationale.
         for column_name, column_def in _V4_COLUMNS:
+            if column_name not in existing:
+                cursor.execute(
+                    f"ALTER TABLE workspaces ADD COLUMN {column_name} {column_def}"
+                )
+
+        # v5: ``last_error_at`` -- the UTC timestamp paired with
+        # ``last_error`` so the UI can distinguish fresh vs
+        # stale errors. ``ALTER TABLE`` is idempotent here
+        # because the ``existing`` set was captured once at
+        # the top of this method (so a v4 -> v5 -> v4 -> v5
+        # migration sequence still leaves a single column).
+        # ``existing`` doesn't get re-checked because the
+        # earlier loops may have just added columns to it;
+        # capturing before the loop is the right pattern.
+        for column_name, column_def in _V5_COLUMNS:
             if column_name not in existing:
                 cursor.execute(
                     f"ALTER TABLE workspaces ADD COLUMN {column_name} {column_def}"
@@ -320,8 +348,8 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     id, question, papers, summary, report, notes,
                     metadata, created_at, updated_at,
                     state, state_history, evidence_comparison,
-                    published_report, last_error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    published_report, last_error, last_error_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(workspace.id),
@@ -348,6 +376,17 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     # we want -- the field is meaningless
                     # outside of ERROR state).
                     workspace.last_error,
+                    # v5: ``last_error_at`` -- the UTC
+                    # timestamp paired with ``last_error``.
+                    # Stored as ISO-8601 text (the same
+                    # format ``created_at`` / ``updated_at``
+                    # use). ``None`` for non-error workspaces
+                    # matches the ``last_error`` semantics --
+                    # the timestamp is meaningless outside
+                    # of ERROR state.
+                    workspace.last_error_at.isoformat()
+                    if workspace.last_error_at is not None
+                    else None,
                 ),
             )
             conn.commit()
@@ -572,12 +611,12 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
     def _row_to_dict(self, row: tuple) -> Dict[str, Any]:
         # Some columns may be missing in older database files; pad
         # the row defensively so the deserialiser is forward
-        # compatible. The actual schema has 14 columns (after
-        # the v4 ``last_error`` migration); we pad to 15 so the
+        # compatible. The actual schema has 15 columns (after
+        # the v5 ``last_error_at`` migration); we pad to 16 so the
         # legacy ``padded[12] = evidence_matrix`` placeholder
         # slot stays ``None`` without raising IndexError.
         #
-        # Index map (after v4 migration):
+        # Index map (after v5 migration):
         #   0  id
         #   1  question
         #   2  papers
@@ -594,11 +633,14 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         #                             evidence_matrix placeholder
         #                             never had a real column)
         #   13 last_error             (v4 column)
+        #   14 last_error_at          (v5 column)
         #
         # Pre-v4 databases have 13 columns (no last_error) so
-        # ``padded[13]`` resolves to the padding ``None`` --
-        # the deserialiser treats that as "no error".
-        padded: list[Any] = list(row) + [None] * (15 - len(row))
+        # ``padded[13]`` and ``padded[14]`` both resolve to the
+        # padding ``None`` -- the deserialiser treats both as
+        # "no error". Pre-v5 databases have 14 columns so only
+        # ``padded[14]`` resolves to the padding ``None``.
+        padded: list[Any] = list(row) + [None] * (16 - len(row))
         return {
             "id": padded[0],
             "question": padded[1],
@@ -631,6 +673,11 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             # ``None`` -- the existing behaviour (no
             # ``last_error`` exposed in the API response).
             "last_error": padded[13],
+            # v5: ``last_error_at`` (ISO-8601 text or None).
+            # Index 14, so pre-v5 databases (no column here)
+            # read as ``None`` -- matching the v4 padding
+            # behaviour for the error string itself.
+            "last_error_at": padded[14],
         }
 
     def _dict_to_workspace(self, row_dict: Dict[str, Any]) -> ResearchSession:
@@ -685,6 +732,21 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         # meaningful on ERROR-state workspaces.
         last_error = row_dict.get("last_error")
 
+        # v5: ``last_error_at``. Parsed from the ISO-8601
+        # text the column stores (``datetime.isoformat()``
+        # round-trips cleanly with ``datetime.fromisoformat()``).
+        # ``None`` for pre-v5 databases (the padding fills the
+        # missing column with ``None``) or for non-ERROR
+        # workspaces (the field is cleared alongside
+        # ``last_error`` whenever the state machine leaves
+        # ERROR).
+        last_error_at_raw = row_dict.get("last_error_at")
+        last_error_at = (
+            datetime.fromisoformat(last_error_at_raw)
+            if last_error_at_raw is not None
+            else None
+        )
+
         workspace = ResearchSession(
             id=UUID(row_dict["id"]),
             question=question,
@@ -696,6 +758,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             notes=notes,
             state_history=state_history,
             last_error=last_error,
+            last_error_at=last_error_at,
             created_at=created_at,
             updated_at=updated_at,
             metadata=metadata,

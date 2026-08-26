@@ -87,6 +87,14 @@ export interface WorkspaceResponse {
   progress: number;
   /** Last error message if the workspace is in ERROR. */
   last_error: string | null;
+  /**
+   * UTC timestamp of when ``last_error`` was set.
+   *
+   * Pairs with ``last_error`` (both are set/cleared together).
+   * ``null`` when ``last_error`` is ``null``. ISO-8601 string
+   * (e.g. ``"2026-08-26T15:30:00+00:00"``).
+   */
+  last_error_at: string | null;
   /** List of scientific papers loaded into the workspace */
   papers: Paper[];
   /**

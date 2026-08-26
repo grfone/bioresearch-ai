@@ -162,6 +162,17 @@ class WorkspaceResponse(BaseModel):
         description="Last error message if the workspace is in ERROR.",
     )
 
+    last_error_at: datetime | None = Field(
+        default=None,
+        description=(
+            "UTC timestamp of when the workspace entered ERROR and "
+            "``last_error`` was set. ``None`` when ``last_error`` is "
+            "``None``. Pairs with ``last_error`` so the UI can show "
+            "\"X seconds ago\" / \"at HH:MM:SS\" for diagnostic clarity, "
+            "especially after a container restart."
+        ),
+    )
+
     papers: list[PaperResponse] = Field(
         default_factory=list,
         description="Scientific publications loaded into the workspace."
@@ -390,6 +401,13 @@ class WorkspaceResponse(BaseModel):
 
         # Last error
         last_error = getattr(session, "last_error", None)
+        # ``last_error_at`` is set alongside ``last_error`` on
+        # every state transition that enters ERROR -- so when
+        # ``last_error`` is None, ``last_error_at`` is also
+        # None. Reading via ``getattr`` keeps backward compat
+        # with pre-v5 in-memory sessions (the field defaults
+        # to None on the dataclass anyway).
+        last_error_at = getattr(session, "last_error_at", None)
 
         # Timestamps
         created_at = getattr(session, "created_at", None)
@@ -408,6 +426,7 @@ class WorkspaceResponse(BaseModel):
             allowed_actions=allowed_actions,
             progress=progress,
             last_error=last_error,
+            last_error_at=last_error_at,
             papers=paper_responses,
             total_papers=total_papers,
             summary=summary_text,

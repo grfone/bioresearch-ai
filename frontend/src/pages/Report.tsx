@@ -344,6 +344,13 @@ export const Report: React.FC = () => {
     message?: string;
     current_state?: string;
     last_error?: string | null;
+    /**
+     * v5 schema: UTC timestamp paired with ``last_error``.
+     * ``null`` for non-ERROR workspaces. Used by the error
+     * UI to render an "at HH:MM:SS" stamp next to the
+     * detail -- the user can tell fresh vs stale failures.
+     */
+    last_error_at?: string | null;
     allowed_actions?: string[];
   } | null = (() => {
     const candidate = (error ?? genError) as
@@ -392,6 +399,24 @@ export const Report: React.FC = () => {
       errorEnvelope?.message ??
       error?.message ??
       (typeof genError === 'string' ? genError : null);
+    // ``last_error_at`` -- the UTC timestamp paired with
+    // ``last_error`` (v5 schema). When present we render a
+    // small "at HH:MM:SS" stamp next to the error detail so
+    // the user can tell whether the failure is fresh or
+    // stale. Particularly useful after a container restart,
+    // where the timestamp is the only signal of when the
+    // error actually happened.
+    const errorAt = errorEnvelope?.last_error_at ?? null;
+    const errorAtLabel =
+      errorAt != null
+        ? new Date(errorAt).toLocaleString(undefined, {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            month: 'short',
+            day: 'numeric',
+          })
+        : null;
     const recoverHint = isRecoverable
       ? 'The workspace is in an error state. Click "Recover & Retry" to reset it and try again.'
       : null;
@@ -406,6 +431,17 @@ export const Report: React.FC = () => {
                 data-testid="report-error-detail"
               >
                 {detailMessage}
+                {errorAtLabel && (
+                  <>
+                    {' '}
+                    <span
+                      className="text-xs opacity-75"
+                      data-testid="report-error-detail-at"
+                    >
+                      (at {errorAtLabel})
+                    </span>
+                  </>
+                )}
               </p>
             )}
             {recoverHint && (

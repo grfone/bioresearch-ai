@@ -16,6 +16,7 @@ const SAMPLE_WORKSPACE: WorkspaceResponse = {
   allowed_actions: ['add_paper', 'search'],
   progress: 0,
   last_error: null,
+  last_error_at: null,
   papers: [],
   total_papers: 0,
   summary: null,

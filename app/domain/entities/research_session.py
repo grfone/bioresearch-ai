@@ -161,6 +161,15 @@ class ResearchSession:
         Last error message if the state is ERROR. Cleared on a
         successful retry.
 
+    last_error_at : datetime | None
+        UTC timestamp of when the workspace entered its current
+        ERROR state and ``last_error`` was set. Cleared alongside
+        ``last_error`` whenever the workspace leaves ERROR.
+        Persisted in the v5 schema so the UI can show "X seconds
+        ago" / "at HH:MM:SS" for diagnostic clarity -- especially
+        valuable after a container restart, when the only signal
+        of an old error is the timestamp.
+
     created_at : datetime
         Session creation timestamp (UTC).
 
@@ -211,6 +220,8 @@ class ResearchSession:
     state_history: list[StateTransition] = field(default_factory=list)
 
     last_error: str | None = None
+
+    last_error_at: datetime | None = None
 
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -375,8 +386,10 @@ class ResearchSession:
 
         if new_state is WorkspaceState.ERROR:
             self.last_error = reason or "Unknown FSM error."
+            self.last_error_at = self.updated_at
         else:
             self.last_error = None
+            self.last_error_at = None
 
         return new_state
 
@@ -458,8 +471,10 @@ class ResearchSession:
         self.updated_at = datetime.now(UTC)
         if new_state is WorkspaceState.ERROR:
             self.last_error = reason
+            self.last_error_at = self.updated_at
         else:
             self.last_error = None
+            self.last_error_at = None
 
     def touch(self) -> None:
         """Update the session modification timestamp."""
@@ -593,6 +608,7 @@ class ResearchSession:
         self.state = new_state
         self.updated_at = datetime.now(UTC)
         self.last_error = None
+        self.last_error_at = None
 
     def remove_paper(self, paper_id: str) -> bool:
         """

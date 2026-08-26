@@ -885,4 +885,71 @@ describe('Report > error UI', () => {
       screen.queryByRole('button', { name: /^Retry$/i }),
     ).not.toBeNull();
   });
+
+  it('renders the last_error_at timestamp next to the detail', async () => {
+    // Pin the v5 wire format: the error envelope carries a
+    // ``last_error_at`` ISO-8601 timestamp and the page
+    // renders a small "(at HH:MM:SS)" stamp next to the
+    // detail block. This is the user-visible payoff of the
+    // v5 schema -- a fresh-vs-stale signal that survives
+    // container restarts.
+    setupError();
+    mockRunAction.mockRejectedValueOnce(
+      makeApiError(409, {
+        error: 'report_generation_failed',
+        current_state: 'ERROR',
+        last_error: 'RemoteProtocolError: peer closed connection',
+        last_error_at: '2026-08-26T15:30:00+00:00',
+        allowed_actions: ['retry'],
+      }),
+    );
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+    // The detail block now contains the timestamp stamp.
+    await waitFor(() => {
+      const at = screen.getByTestId('report-error-detail-at');
+      // ``toLocaleString`` format is locale-dependent: on
+      // the Linux jsdom environment the output is
+      // ``(at Aug 26, 05:30:00 PM)`` but on other platforms
+      // it might be ``(at 26/08/2026 15:30:00)`` etc.
+      // We pin the structural contract -- starts with
+      // ``(at`` and ends with ``)`` -- and leave the
+      // exact date string to the browser's Intl. The
+      // underlying round-trip behaviour is pinned by
+      // ``tests/unit/test_sqlite_last_error_roundtrip.py``.
+      expect(at.textContent).toMatch(/^\(at .+\)$/);
+    });
+    // And the existing detail assertion still holds.
+    const detail = screen.getByTestId('report-error-detail');
+    expect(detail.textContent).toContain(
+      'RemoteProtocolError: peer closed connection',
+    );
+  });
+
+  it('omits the timestamp when last_error_at is missing', async () => {
+    // Backward compat: pre-v5 envelopes don't carry
+    // ``last_error_at`` (the field is ``undefined``). The
+    // UI must NOT render a timestamp in that case. This
+    // test pins that the optional field is genuinely
+    // optional and the UI degrades gracefully.
+    setupError();
+    mockRunAction.mockRejectedValueOnce(
+      makeApiError(409, {
+        error: 'report_generation_failed',
+        current_state: 'ERROR',
+        last_error: 'Some legacy error without timestamp',
+        allowed_actions: ['retry'],
+        // NB: no last_error_at field.
+      }),
+    );
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('report-error-detail-at')).toBeNull();
+  });
 });
