@@ -454,8 +454,21 @@ def _advance_to_reported(app_with_stubs) -> str:
     r1 = client.post(f"/workspaces/{wid}/actions/summarize")
     assert r1.status_code == 200
     r2 = client.post(f"/workspaces/{wid}/actions/report")
-    assert r2.status_code == 200
-    assert r2.json()["state"] == "REPORTED"
+    # The FSM-aware report endpoint now returns ReportResponse
+    # (201 Created). The workspace has been advanced to
+    # REPORTED -- verified separately by refetching the
+    # workspace via GET.
+    assert r2.status_code == 201
+    body = r2.json()
+    # ReportResponse shape: workspace_id, summary, citations,
+    # limitations, future_work, generated_at.
+    assert "summary" in body
+    assert "workspace_id" in body
+    assert isinstance(body["citations"], list)
+    # Refetch to confirm the FSM walk landed at REPORTED.
+    r3 = client.get(f"/workspaces/{wid}")
+    assert r3.status_code == 200
+    assert r3.json()["state"] == "REPORTED"
     return wid
 
 
@@ -592,6 +605,100 @@ def test_published_report_pdf_endpoint_returns_404_before_publish(
     assert "publish" in response.text.lower()
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# FSM-aware /actions/report returns ReportResponse
+# ---------------------------------------------------------------------------
+#
+# Per the Layer-4 audit (the b900965 / 1faf32e saga), the
+# legacy ``/reports/generate`` endpoint is functional but
+# deprecated. The FSM-aware ``POST /workspaces/{id}/actions/report``
+# is the canonical action surface. To make the swap seamless
+# (the React ``Report.tsx`` page imports ``ReportResponse``
+# and stores it via ``setReport(result)``), the FSM-aware
+# endpoint now returns the ``ReportResponse`` shape -- not
+# ``WorkspaceResponse`` like every other FSM action. This
+# is the deliberate "data surface" split called out in the
+# endpoint's docstring.
+#
+# These tests pin the new shape and the error envelope.
+
+
+def test_fsm_report_action_returns_report_response_shape(
+    app_with_stubs,
+) -> None:
+    """Positive: /actions/report from SUMMARIZED returns 201
+    with the ReportResponse wire format.
+
+    Mirrors the page's flow: page calls ``runAction('report')``
+    (which hits this endpoint) and ``setReport(result)``
+    where ``result`` is typed as ``ReportResponse``. The shape
+    MUST match the legacy ``/reports/generate`` so the
+    ``Report.tsx`` page can swap endpoints without a refactor.
+    """
+    app, _, _ = app_with_stubs
+    client = TestClient(app)
+    wid = _advance_to_reported(app_with_stubs)
+
+    response = client.post(f"/workspaces/{wid}/actions/report")
+    assert response.status_code == 201, (
+        f"FSM /actions/report should be 201, got "
+        f"{response.status_code}: {response.text}"
+    )
+    body = response.json()
+    # ReportResponse fields. Order is the same as the legacy
+    # endpoint so the React page's ``setReport(result)``
+    # contract is preserved across the swap.
+    # The fixture's workspace id is a UUID object (the dict
+    # key in ``_make_state``); the response body serialises
+    # it as a string. Compare as strings so the test doesn't
+    # couple to the dict-key vs. response-body type.
+    assert str(body["workspace_id"]) == str(wid)
+    assert isinstance(body["summary"], str) and body["summary"]
+    assert isinstance(body["citations"], list)
+    assert isinstance(body["limitations"], list)
+    assert isinstance(body["future_work"], list)
+    # generated_at is an ISO-8601 timestamp from the
+    # pydantic default_factory; we just check it's a non-empty
+    # string.
+    assert "generated_at" in body
+    # Crucially, NOT a WorkspaceResponse: there is no
+    # ``state`` / ``allowed_actions`` / ``papers`` field.
+    # Pinning this catches a future contributor who
+    # accidentally reverts the response_model to
+    # WorkspaceResponse and breaks the page.
+    assert "state" not in body
+    assert "allowed_actions" not in body
+    assert "papers" not in body
+
+
+def test_fsm_report_action_workspace_advances_to_reported(
+    app_with_stubs,
+) -> None:
+    """Wire-format consistency: the FSM walk REPORTED ->
+    COMPLETED is still recorded even though the response
+    body is the report content.
+
+    The user-facing payload is the report, but the FSM
+    contract MUST still hold: a refetch shows state=REPORTED
+    + report_available=true. Without this assertion a future
+    contributor could break the state machine while keeping
+    the response model intact.
+    """
+    app, _, _ = app_with_stubs
+    client = TestClient(app)
+    wid = _advance_to_reported(app_with_stubs)
+
+    # _advance_to_reported already called /actions/report.
+    # A second call would re-run the report -- which is legal
+    # from REPORTED (per the FSM table). We test that the
+    # workspace has the expected state via a refetch.
+    r = client.get(f"/workspaces/{wid}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["state"] == "REPORTED"
+    assert body["report_available"] is True
+
+
 # Legacy /reports/generate error envelope
 # ---------------------------------------------------------------------------
 #

@@ -80,16 +80,45 @@ interface UseWorkspaceResult {
   searchAndAddPapers: (
     question: string,
   ) => Promise<WorkspaceResponse>;
-  /** Run a single FSM action. Refreshes the workspace on success. */
+  /**
+   * Run a single FSM action. Refreshes the workspace on success.
+   *
+   * Return shape depends on the action (intentional split
+   * between *action surface* and *data surface* -- see
+   * ``app/api/routes/workspace_actions.py::report_action``):
+   *
+   * - Most actions (``search``, ``summarize``, ``compare``,
+   *   ``complete``, ``publish``, ``retry``) return
+   *   ``WorkspaceResponse`` so the page can mirror state
+   *   via ``setCurrentWorkspace``.
+   * - ``report`` returns ``ReportResponse`` because the
+   *   ``Report.tsx`` page renders the report content
+   *   directly via ``setReport(result)`` -- it doesn't
+   *   need the workspace state (which is fetched
+   *   separately by ``fetchWorkspace``).
+   *
+   * Callers narrow the return type via TypeScript's
+   * discriminated union: ``action === 'report'`` implies
+   * ``Promise<ReportResponse>``, anything else implies
+   * ``Promise<WorkspaceResponse>``. We don't use TypeScript
+   * method overloads here (the useWorkspace result is an
+   * interface, where overload merging is fragile).
+   */
   runAction: (
     action: WorkspaceAction,
     options?: { query?: string },
-  ) => Promise<WorkspaceResponse>;
+  ) => Promise<WorkspaceResponse | ReportResponse>;
   /** Fetch the FSM status (state, allowed_actions, history). */
   fetchTransitions: () => Promise<WorkspaceStatusResponse>;
   /** Fetch the stored evidence comparison. */
   fetchEvidenceComparison: () => Promise<EvidenceComparisonResponse>;
-  /** Generate a report for the workspace (legacy wrapper). */
+  /**
+   * Generate a report for the workspace.
+   *
+   * Routes through the FSM-aware ``/actions/report``
+   * endpoint (returns ``ReportResponse``). The legacy
+   * ``/reports/generate`` endpoint is deprecated.
+   */
   generateReport: (
     options?: Partial<Omit<ReportRequest, 'workspace_id'>>,
   ) => Promise<ReportResponse>;
@@ -198,17 +227,42 @@ export function useWorkspace(
   );
 
   // Run a single FSM action. Refreshes the workspace on success.
+  //
+  // The 'report' case is a special case: the backend returns
+  // ``ReportResponse`` (the report content), not a
+  // ``WorkspaceResponse``. We still mirror the workspace
+  // state via a separate ``fetchWorkspace`` call so the
+  // store stays consistent, but we don't try to feed the
+  // report content into ``setCurrentWorkspace`` (it would
+  // crash the state machine -- ``WorkspaceResponse`` and
+  // ``ReportResponse`` have different shapes).
   const runAction = useCallback(
     async (
       action: WorkspaceAction,
       actionOptions?: { query?: string },
-    ): Promise<WorkspaceResponse> => {
+    ): Promise<WorkspaceResponse | ReportResponse> => {
       if (!workspaceId) {
         throw new Error('No workspace ID available.');
       }
       setLoading(true);
       setError(null);
       try {
+        if (action === 'report') {
+          // FSM-aware report action. Returns ReportResponse.
+          // We don't pass it to setCurrentWorkspace (wrong
+          // shape); the page calls fetchWorkspace separately
+          // to keep the store in sync.
+          const data = await api.runReportAction(workspaceId);
+          // Best-effort refresh -- the page's flow is to
+          // call fetchWorkspace right after setReport, so
+          // the duplicate GET is harmless. We do it here so
+          // other consumers of the store (e.g. the action
+          // bar's allowed-actions pill) see the new state
+          // without a separate refetch.
+          await fetchWorkspace(workspaceId).catch(() => undefined);
+          return data;
+        }
+
         let data: WorkspaceResponse;
         switch (action) {
           case 'search':
@@ -219,9 +273,6 @@ export function useWorkspace(
             break;
           case 'compare':
             data = await api.runCompareAction(workspaceId);
-            break;
-          case 'report':
-            data = await api.runReportAction(workspaceId);
             break;
           case 'complete':
             data = await api.runCompleteAction(workspaceId);
@@ -253,7 +304,7 @@ export function useWorkspace(
         setLoading(false);
       }
     },
-    [workspaceId, setCurrentWorkspace],
+    [workspaceId, fetchWorkspace, setCurrentWorkspace],
   );
 
   // Fetch the FSM status payload.

@@ -84,6 +84,7 @@ from app.api.schemas.search_response import PaperResponse
 from app.api.schemas.workspace_action_request import (
     WorkspaceActionRequest,
 )
+from app.api.schemas.report_response import ReportResponse
 from app.api.schemas.workspace_response import WorkspaceResponse
 from app.api.schemas.workspace_status_response import (
     WorkspaceStatusResponse,
@@ -323,7 +324,8 @@ def compare_action(
 
 @router.post(
     "/{workspace_id}/actions/report",
-    response_model=WorkspaceResponse,
+    response_model=ReportResponse,
+    status_code=status.HTTP_201_CREATED,
     summary="Generate the final research report from the workspace.",
 )
 def report_action(
@@ -331,17 +333,113 @@ def report_action(
     orchestrator: WorkspaceOrchestrator = Depends(
         get_workspace_orchestrator
     ),
-) -> WorkspaceResponse:
-    """Run the REPORT action.
+) -> ReportResponse:
+    """Run the REPORT action and return the rendered report.
 
     The report is generated from the workspace's *current* papers
     and summary — it does not re-query PubMed.
+
+    Response shape
+    --------------
+    Unlike the other FSM action endpoints (which return
+    ``WorkspaceResponse`` so the React frontend can mirror state
+    via ``setCurrentWorkspace``), this endpoint returns the
+    canonical ``ReportResponse`` shape -- the same one the
+    legacy ``/reports/generate`` endpoint returns. The split is
+    intentional: the *action surface* is FSM-aware (so we get
+    proper 409 / ``last_error`` envelopes), but the *data
+    surface* is the report content (because the page renders
+    it directly via ``setReport(result)`` rather than reading
+    ``currentWorkspace.report``).
+
+    The FSM contract is still enforced end-to-end: a REPORT
+    from an illegal state returns ``409`` with the standard
+    FSM envelope, and an orchestrator crash returns ``409``
+    with ``error="report_generation_failed"`` +
+    ``last_error`` + ``allowed_actions``. See
+    ``test_publish_action_*`` in ``tests/integration/test_api_fsm.py``
+    and the v4 schema migration in ``sqlite_workspace_repository.py``
+    for the audit trail.
+
+    Returns
+    -------
+    ReportResponse
+        The generated report (workspace_id, summary text,
+        citations, limitations, future_work, generated_at).
+
+    Raises
+    ------
+    HTTPException
+        * ``409 Conflict`` (illegal_workspace_action) if the
+          FSM doesn't allow REPORT from the current state.
+        * ``409 Conflict`` (report_generation_failed) if the
+          LLM call crashes; ``last_error`` carries the
+          orchestrator's reason.
+        * ``400 Bad Request`` for validation errors.
     """
-    return _run_action(
-        orchestrator,
-        workspace_id,
-        WorkspaceAction.REPORT.value,
-        orchestrator.report,
+    try:
+        workspace = orchestrator.report(workspace_id)
+    except IllegalWorkspaceActionError as exc:
+        raise _illegal_action_response(exc) from exc
+    except CitationValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "citation_validation_failed",
+                "message": str(exc),
+            },
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        # Mirror the legacy endpoint's recovery pattern
+        # (see ``app/api/routes/report.py`` -- the ``b900965``
+        # bug fix). The orchestrator's ``report()`` already
+        # moved the workspace to ERROR before re-raising, so
+        # we re-fetch to surface ``last_error`` in the
+        # envelope. Without this catch, the user would see a
+        # bare 500 (FastAPI's default handler) and lose
+        # actionable context.
+        logger.exception(
+            "FSM /actions/report failed for workspace %s", workspace_id
+        )
+        try:
+            failed = orchestrator.get_workspace(workspace_id)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "report_generation_failed",
+                    "exception_type": type(exc).__name__,
+                    "message": str(exc),
+                },
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "report_generation_failed",
+                "message": str(exc),
+                "current_state": failed.state.value,
+                "last_error": failed.last_error,
+                "action": WorkspaceAction.REPORT.value,
+                "allowed_actions": [
+                    a.value for a in failed.allowed_actions()
+                ],
+            },
+        ) from exc
+
+    if workspace.report is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Report generation produced no report.",
+        )
+
+    return ReportResponse.from_domain(
+        workspace_id=str(workspace_id),
+        report=workspace.report,
     )
 
 

@@ -374,7 +374,15 @@ export const api = {
   },
 
   /** Run the REPORT action on a workspace. */
-  runReportAction: (workspaceId: string): Promise<WorkspaceResponse> => {
+  /**
+   * FSM-aware REPORT action. Returns the rendered report
+   * directly (the same shape the legacy /reports/generate
+   * endpoint returns) so the page can call ``setReport(result)``
+   * without a reshape. The endpoint still enforces the FSM
+   * contract end-to-end (illegal action -> 409 with
+   * ``last_error`` + ``allowed_actions``).
+   */
+  runReportAction: (workspaceId: string): Promise<ReportResponse> => {
     return fetchJson(
       buildUrl(`/workspaces/${workspaceId}/actions/report`),
       { method: 'POST' },

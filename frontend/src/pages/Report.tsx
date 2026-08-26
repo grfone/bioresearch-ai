@@ -77,7 +77,6 @@ export const Report: React.FC = () => {
     loading,
     error,
     fetchWorkspace,
-    generateReport,
     runAction,
   } = useWorkspace(workspaceId);
 
@@ -180,8 +179,22 @@ export const Report: React.FC = () => {
       fresh?.workspace_id === workspaceId && fresh.summary == null;
     setPhase(willSummarize ? 'Summarizing…' : 'Generating report…');
     try {
-      const result = await generateReport();
-      setReport(result);
+      // FSM-aware REPORT action. The hook's ``runAction``
+      // special-cases 'report' to call the FSM-aware
+      // endpoint and return ``ReportResponse`` -- so the
+      // legacy ``/reports/generate`` endpoint is bypassed
+      // (it's still wired on the backend, marked deprecated,
+      // and kept for any external client that hasn't migrated).
+      // See ADR-009 and the b900965 / 1faf32e sessions for
+      // the FSM-audit context.
+      const result = await runAction('report');
+      // The hook's return type is ``WorkspaceResponse |
+      // ReportResponse`` because TypeScript can't narrow
+      // method overloads on an interface. At this call site
+      // we *know* the action is 'report' so the return is
+      // a ReportResponse -- the cast is safe and the
+      // runtime hook special-cases the 'report' branch.
+      setReport(result as ReportResponse);
       // Optionally refetch workspace to update report_available flag.
       await fetchWorkspace(workspaceId);
     } catch (err) {

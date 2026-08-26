@@ -24,8 +24,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 
 // Mock the api client. The Report page calls
-// ``api.generateReport`` (legacy endpoint) via the
-// useWorkspace hook.
+// ``api.runReportAction`` (FSM-aware endpoint) via the
+// useWorkspace hook's ``runAction('report')`` dispatch.
+// The legacy ``api.generateReport`` is kept in the mock
+// only because the hook's ``generateReport`` wrapper still
+// exists for any callers that haven't migrated; the
+// Report page does not use it.
 vi.mock('../api/client', () => ({
   api: {
     generateReport: vi.fn(),
@@ -36,6 +40,14 @@ vi.mock('../api/client', () => ({
     // exposes both because the wire-format test below
     // asserts on which endpoint gets called.
     runPublishAction: vi.fn(),
+    // The REPORT button (and the auto-summarise/auto-compare
+    // pipeline that runs as part of the REPORT action) now
+    // routes through the FSM-aware endpoint. ``runAction``
+    // in the hook special-cases 'report' to call this method
+    // and return ``ReportResponse`` -- the page stores the
+    // result via ``setReport`` directly. See ADR-009 + the
+    // b900965/1faf32e sessions for the audit context.
+    runReportAction: vi.fn(),
     // The download URL is built client-side from the
     // workspace id; we expose a stub that just echoes the
     // input so tests can assert on the call site.
@@ -50,7 +62,6 @@ vi.mock('../api/client', () => ({
 // the workspace fetch). The Report page reads
 // ``workspace`` to decide the next phase label.
 const mockFetchWorkspace = vi.fn();
-const mockGenerateReport = vi.fn();
 const mockRunAction = vi.fn();
 const mockUseWorkspaceReturn: {
   workspace: unknown;
@@ -71,7 +82,7 @@ const mockUseWorkspaceReturn: {
   loading: false,
   error: null,
   fetchWorkspace: mockFetchWorkspace,
-  generateReport: mockGenerateReport,
+  generateReport: mockRunAction,
   runAction: mockRunAction,
 };
 vi.mock('../hooks/useWorkspace', () => ({
@@ -228,7 +239,7 @@ describe('Report > loader phases', () => {
     // Block the generateReport call so we can assert the
     // phase label while it's in flight.
     let resolveGenerate!: (v: unknown) => void;
-    mockGenerateReport.mockImplementation(
+    mockRunAction.mockImplementation(
       () =>
         new Promise((resolve) => {
           resolveGenerate = resolve;
@@ -282,7 +293,7 @@ describe('Report > loader phases', () => {
     mockStoreCurrentWorkspace.current = mockUseWorkspaceReturn.workspace;
     // The generateReport call resolves quickly so we see
     // the Summarizing phase label before it disappears.
-    mockGenerateReport.mockImplementation(
+    mockRunAction.mockImplementation(
       () => new Promise((resolve) => setTimeout(() => resolve({ content: '...', sections: [] }), 50)),
     );
 
@@ -338,7 +349,7 @@ describe('Report > loader phases', () => {
     // the Report page splits on newlines to extract the
     // H1 title. The original API returns a single string
     // here, NOT the ``Summary`` domain object.
-    mockGenerateReport.mockResolvedValue({
+    mockRunAction.mockResolvedValue({
       content: '# A Test Report\n\nSome content here.',
       summary: '# A Test Report\n\nSome content here.',
       sections: [{ title: 'Introduction', content: 'Some content.' }],
@@ -427,20 +438,36 @@ describe('Report > Publish as PDF', () => {
     mockUseWorkspaceReturn.workspace = workspace;
     mockStoreCurrentWorkspace.current = workspace;
     mockFetchWorkspace.mockResolvedValue(workspace);
-    mockRunAction.mockResolvedValue({
-      ...workspace,
-      // PUBLISH moves us to COMPLETED and flips the flag.
-      state: 'COMPLETED',
-      published_report_available: true,
+    // ``runAction`` is now action-aware (the page's
+    // 'report' branch returns ``ReportResponse``, every
+    // other action returns ``WorkspaceResponse``). We
+    // default to a per-action implementation that
+    // individual tests can override per-call via
+    // ``mockRejectedValueOnce`` etc.
+    mockRunAction.mockImplementation(async (action: string) => {
+      if (action === 'report') {
+        return {
+          content: '# A Test Report\n\nSome content here.',
+          summary: '# A Test Report\n\nSome content here.',
+          sections: [{ title: 'Introduction', content: 'Some content.' }],
+          citations: [],
+          limitations: [],
+          future_work: [],
+        } as never;
+      }
+      // Default: every other action returns the post-action
+      // workspace. Tests that need a specific behaviour
+      // (e.g. publish failure) override via
+      // ``mockRejectedValueOnce`` / ``mockResolvedValueOnce``
+      // BEFORE the click -- that one-shot wins.
+      return {
+        ...workspace,
+        // PUBLISH moves us to COMPLETED and flips the flag.
+        state: action === 'publish' ? 'COMPLETED' : workspace.state,
+        published_report_available:
+          action === 'publish' ? true : workspace.published_report_available,
+      } as never;
     });
-    mockGenerateReport.mockResolvedValue({
-      content: '# A Test Report\n\nSome content here.',
-      summary: '# A Test Report\n\nSome content here.',
-      sections: [{ title: 'Introduction', content: 'Some content.' }],
-      citations: [],
-      limitations: [],
-      future_work: [],
-    } as never);
   }
 
   it('renders the "Publish as PDF" button when a report is available', async () => {
@@ -559,7 +586,32 @@ describe('Report > Publish as PDF', () => {
 
   it('surfaces a publish error and keeps the button enabled for retry', async () => {
     setupReadyToPublish(false);
-    mockRunAction.mockRejectedValueOnce(new Error('FSM rejected PUBLISH'));
+    // The first ``runAction`` call from the useEffect's
+    // ``handleGenerateReport`` (action='report') must SUCCEED --
+    // otherwise the page would render the report error UI,
+    // not the publish one. The 'publish' call is the one we
+    // want to fail, so we wrap the mock to dispatch per-action.
+    //
+    // We chain: one-shot for 'publish' (after the useEffect's
+    // 'report' has been consumed by setupReadyToPublish's
+    // default mockImplementation), then fall back to the
+    // default. ``mockRejectedValueOnce`` doesn't accept a
+    // predicate, so we use ``mockImplementation`` to gate on
+    // the action.
+    const baseImpl = mockRunAction.getMockImplementation();
+    mockRunAction.mockImplementation(
+      async (action: string) => {
+        if (action === 'publish') {
+          throw new Error('FSM rejected PUBLISH');
+        }
+        if (baseImpl) {
+          return (baseImpl as (...args: unknown[]) => unknown)(
+            action,
+          ) as never;
+        }
+        return {} as never;
+      },
+    );
     const { Report } = await import('./Report');
     render(<Report />);
     await waitFor(() => {
@@ -636,10 +688,32 @@ describe('Report > error UI', () => {
     mockUseWorkspaceReturn.workspace = workspace;
     mockStoreCurrentWorkspace.current = workspace;
     mockFetchWorkspace.mockResolvedValue(workspace);
-    mockRunAction.mockResolvedValue({
-      ...workspace,
-      state: 'CREATED',
-      allowed_actions: ['add_paper', 'search'],
+    // ``runAction`` is action-aware: 'retry' returns the
+    // workspace advanced to CREATED; 'report' returns a
+    // ReportResponse-shaped object. Individual tests
+    // override per-call via ``mockRejectedValueOnce`` /
+    // ``mockResolvedValueOnce`` -- the most-recent one-shot
+    // wins. We provide a default here so tests that don't
+    // care about the per-action shape just work.
+    mockRunAction.mockImplementation(async (action: string) => {
+      if (action === 'report') {
+        return {
+          workspace_id: 'ws-1',
+          question: 'x',
+          summary: '# A Test Report\n\nSome content here.',
+          citations: [],
+          limitations: [],
+          future_work: [],
+          generated_at: '2026-01-01T00:00:00Z',
+        } as never;
+      }
+      // 'retry' or anything else: returns the post-retry
+      // workspace.
+      return {
+        ...workspace,
+        state: 'CREATED',
+        allowed_actions: ['add_paper', 'search'],
+      } as never;
     });
     return { workspace };
   }
@@ -662,7 +736,7 @@ describe('Report > error UI', () => {
 
   it('surfaces the last_error message in a recoverable failure', async () => {
     const { workspace } = setupError();
-    mockGenerateReport.mockRejectedValueOnce(
+    mockRunAction.mockRejectedValueOnce(
       makeApiError(409, {
         error: 'report_generation_failed',
         message:
@@ -703,7 +777,7 @@ describe('Report > error UI', () => {
 
   it('keeps the "Retry" label for non-recoverable failures', async () => {
     setupError();
-    mockGenerateReport.mockRejectedValueOnce(
+    mockRunAction.mockRejectedValueOnce(
       makeApiError(409, {
         error: 'illegal_workspace_action',
         message: 'Action report is not allowed from state SUMMARIZED',
@@ -732,7 +806,7 @@ describe('Report > error UI', () => {
 
   it('"Recover & Retry" CTA calls the FSM RETRY action THEN re-generates', async () => {
     setupError();
-    mockGenerateReport.mockRejectedValueOnce(
+    mockRunAction.mockRejectedValueOnce(
       makeApiError(409, {
         error: 'report_generation_failed',
         current_state: 'ERROR',
@@ -740,14 +814,24 @@ describe('Report > error UI', () => {
         allowed_actions: ['retry'],
       }),
     );
-    // Second call (after RETRY) succeeds.
-    mockGenerateReport.mockResolvedValueOnce({
-      content: '# A Test Report\n\nSome content.',
+    // Second call (after RETRY) succeeds. The Recover & Retry
+    // CTA triggers THREE actions in sequence on the page:
+    //   1. ``runAction('retry')`` -- FSM RETRY action
+    //   2. ``fetchWorkspace()`` -- refetch the (now-CREATED) session
+    //   3. ``runAction('report')`` -- re-attempt generation
+    // We provide one-shot successes for the post-RETRY calls.
+    // The 'retry' call uses the default ``mockImplementation``
+    // (which returns the workspace shape -- correct for
+    // 'retry' since the hook contract is that 'retry' returns
+    // ``WorkspaceResponse``).
+    mockRunAction.mockResolvedValueOnce({
+      workspace_id: 'ws-1',
+      question: 'x',
       summary: '# A Test Report\n\nSome content.',
-      sections: [{ title: 'Introduction', content: 'Some content.' }],
       citations: [],
       limitations: [],
       future_work: [],
+      generated_at: '2026-01-01T00:00:00Z',
     } as never);
     const { Report } = await import('./Report');
     render(<Report />);
@@ -755,10 +839,11 @@ describe('Report > error UI', () => {
       expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
     });
 
-    // Clear mocks so the click-time call sequence is clean.
+    // Clear the useEffect's first call (the rejected 'report')
+    // so the post-click call sequence is clean for the
+    // assertions below.
     mockRunAction.mockClear();
     mockFetchWorkspace.mockClear();
-    mockGenerateReport.mockClear();
 
     fireEvent.click(
       await screen.findByRole('button', { name: /Recover.*Retry/i }),
@@ -770,13 +855,19 @@ describe('Report > error UI', () => {
     });
     // Then fetchWorkspace refetches the (now-CREATED) session.
     expect(mockFetchWorkspace).toHaveBeenCalled();
-    // Then generateReport() re-attempts.
-    expect(mockGenerateReport).toHaveBeenCalledTimes(1);
+    // Then ``handleGenerateReport`` re-runs the 'report'
+    // action -- so ``runAction`` is called TWICE total: once
+    // for 'retry' and once for 'report'.
+    await waitFor(() => {
+      expect(mockRunAction).toHaveBeenCalledTimes(2);
+    });
+    expect(mockRunAction).toHaveBeenNthCalledWith(1, 'retry');
+    expect(mockRunAction).toHaveBeenNthCalledWith(2, 'report');
   });
 
   it('falls through to plain Retry for network/transport errors', async () => {
     setupError();
-    mockGenerateReport.mockRejectedValueOnce(
+    mockRunAction.mockRejectedValueOnce(
       // No structured envelope -- plain network error from
       // fetchJson's catch path.
       makeApiError(0, 'fetch failed', 'TypeError: fetch failed'),
