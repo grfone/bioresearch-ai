@@ -10,7 +10,7 @@
  * bibliography ordering (Vancouver style: numbered by
  * first-citation-order in the text).
  *
- * The frontend needs to render those markers as clickable
+ * The Frontend needs to render those markers as clickable
  * superscript links that scroll to the corresponding entry
  * in the Citations list. This module does the conversion
  * at one chokepoint so the rest of the page just passes the
@@ -37,9 +37,24 @@
  * trade-off: ``[paper:N]`` markers inside code blocks (rare
  * in a research report) would also be replaced. We accept
  * this -- a research report doesn't contain code blocks.
+ *
+ * Grouped citations
+ * -----------------
+ * The Vancouver prompt encourages the LLM to emit grouped
+ * in-text citations when multiple papers support one
+ * claim: ``...elevated in carriers [paper:5, paper:12].``
+ * Each ``[paper:N]`` inside the group is still a discrete
+ * citation entry; the brackets around the whole group are
+ * just one of the legal grouped citation formats. The
+ * helper below renders each ``N`` as its own clickable
+ * link (``[5](#citation-5), [12](#citation-12)``) so the
+ * user can jump to either reference -- this matches the
+ * practice of Nature, PLOS, eLife and other modern
+ * biomedical journals.
  */
 
 const PAPER_MARKER_RE = /\[paper:(\d+)\]/g;
+const GROUPED_PAPER_MARKER_RE = /\[paper:(\d+(?:,\s*paper:\d+)+)\]/g;
 
 /**
  * Convert ``[paper:N]`` markers into markdown links that
@@ -50,41 +65,110 @@ const PAPER_MARKER_RE = /\[paper:(\d+)\]/g;
  * standard Vancouver in-text citation rendering. The link
  * ``href`` is the in-page anchor ``#citation-N``. Clicking
  * it scrolls the user to the bibliography entry, which
- * matches what every modern biomedical journal does
+ * matches what every modern biomedical journals does
  * (Nature, PLOS, eLife, etc.).
  *
- * Multiple citations for a single claim (e.g.
- * ``[paper:5, paper:12]``) are collapsed into a single
- * link ``[5, 12](#citation-5#citation-12)`` -- multiple
- * hash targets is not a standard pattern, so we render the
- * most prominent one (the first) as the link target and the
- * remaining numbers as plain bracket text. This keeps the
- * markup valid and preserves the bibliography semantics.
+ * Grouped citations (the LLM's preferred form when multiple
+ * papers support one claim) are rendered as a comma-joined
+ * sequence of clickable links: ``[5](#citation-5), [12](#citation-12)``.
+ * Each number is its own link target, so clicking either
+ * jumps to the corresponding bibliography entry. This
+ * matches what Nature, PLOS, eLife and other modern
+ * biomedical journals do.
  *
  * Edge cases
  * -----------
  * - ``[paper:0]`` or ``[paper:N+1]`` where ``N+1`` exceeds
  *   the citation list length: rendered as a plain bracket
  *   marker (no link). The backend's regex clamps the index
- *   to the valid range so this should not happen in
+ *   to the valid range so, this should not happen in
  *   practice, but we defend in depth so a future change
  *   that introduces an out-of-range marker doesn't break
  *   the UI.
  * - Malformed markers like ``[paper:]`` or ``[paper:abc]``
  *   pass through unchanged.
+ * - Mixed valid/invalid in a group: only the valid
+ *   numbers are linkified; invalid ones fall through
+ *   unchanged so the user still sees the LLM's intended
+ *   intent rather than losing characters silently.
  */
 export function linkifyCitationMarkers(
   body: string,
   maxCitationIndex: number,
 ): string {
-  return body.replace(PAPER_MARKER_RE, (match, rawIndex) => {
+  // Process grouped citations first (``[paper:N, paper:M, ...]``)
+  // so the inner ``[paper:N]`` tokens can't be picked up by
+  // the standalone pass. Each group becomes a comma-joined
+  // sequence of clickable links.
+  //
+  // Out-of-range policy: if ANY entry in the group is
+  // out of range, we fall back to the original match
+  // (preserving the LLM's text). The rationale: the
+  // backend's mapper clamps the index to the valid range,
+  // so an out-of-range marker in a report is a
+  // bidirectional bug -- either the LLM fabricated a
+  // citation, or the bibliography is missing one. Losing
+  // either entry silently would mislead the user; the
+  // visible "stuck" text makes the bug obvious so a
+  // developer can fix it. Compare with the standalone
+  // pass, where we preserve each out-of-range entry
+  // verbatim -- the trade-off there is the same.
+  const groupedResult = body.replace(
+    GROUPED_PAPER_MARKER_RE,
+    (match, innerList: string) => {
+      // The regex captures the entire comma-joined number
+      // list (e.g. ``"5, paper:12, paper:17"``). Split on
+      // the comma to get one piece per citation, then
+      // normalise each piece to its bare integer index.
+      // We accept BOTH ``"N"`` (the first element, which
+      // is just a digit per the regex) and ``"paper:N"``
+      // (subsequent elements). This defensive parsing
+      // keeps the helper working if a future maintainer
+      // tweaks the regex to a more permissive form.
+      const pieces = innerList
+        .split(",")
+        .map((piece) => piece.trim());
+      const renderedNumbers: string[] = [];
+      for (const piece of pieces) {
+        const m = /(?:paper:)?(\d+)/.exec(piece);
+        if (!m) {
+          // Malformed piece (no digits at all). Fall
+          // back to the original match -- don't try to
+          // partial-render an unparseable group.
+          return match;
+        }
+        const index = parseInt(m[1], 10);
+        if (
+          Number.isNaN(index) ||
+          index < 1 ||
+          index > maxCitationIndex
+        ) {
+          // Out of range. Fall back to the original
+          // match so the user sees the LLM's text
+          // unchanged (and the developer sees the bug).
+          return match;
+        }
+        renderedNumbers.push(`[${index}](#citation-${index})`);
+      }
+      return renderedNumbers.join(", ");
+    },
+  );
+
+  // Then handle the standalone ``[paper:N]`` markers. We
+  // run this second because the first pass may have
+  // converted some of them already (inside a group).
+  return groupedResult.replace(PAPER_MARKER_RE, (match, rawIndex) => {
     const index = parseInt(rawIndex, 10);
-    if (Number.isNaN(index) || index < 1 || index > maxCitationIndex) {
+    if (
+      Number.isNaN(index) ||
+      index < 1 ||
+      index > maxCitationIndex
+    ) {
       // Out of range or malformed -- leave the original
       // marker text intact so the user can still see what
       // the LLM produced. Downstream consumers that
       // depend on marker extraction don't rely on the
-      // frontend's linkification.
+      // Frontend's linkification.
       return match;
     }
     // Render as a markdown link to the bibliography

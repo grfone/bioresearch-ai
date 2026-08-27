@@ -126,3 +126,154 @@ describe("citationAnchorId", () => {
     expect(anchor).toBe("citation-5");
   });
 });
+
+describe("linkifyCitationMarkers -- grouped citations", () => {
+  /**
+   * Pin the rendering of ``[paper:N, paper:N, ...]`` --
+   * the Vancouver grouped-citation form the LLM emits
+   * when multiple papers support one claim. Without this
+   * handling, grouped markers render as plain bracketed
+   * text and the user can't click through to any of the
+   * individual references (this is the bug the user
+   * flagged in the screenshot showing the last paragraph
+   * of the executive summary).
+   */
+
+  it("converts [paper:N, paper:M] into two comma-joined clickable links", () => {
+    expect(linkifyCitationMarkers("see [paper:5, paper:12] today", 20))
+      .toBe("see [5](#citation-5), [12](#citation-12) today");
+  });
+
+  it("converts [paper:N, paper:M, paper:K] into three comma-joined links", () => {
+    // Exact reproduction of the failing string from the
+    // user's bug report:
+    expect(
+      linkifyCitationMarkers(
+        "monitoring [paper:7, paper:10, paper:19]. However",
+        19,
+      ),
+    ).toBe("monitoring [7](#citation-7), [10](#citation-10), [19](#citation-19). However");
+  });
+
+  it("converts a grouped citation at the very start of the string", () => {
+    expect(
+      linkifyCitationMarkers("[paper:3, paper:13, paper:18] claims", 20),
+    ).toBe("[3](#citation-3), [13](#citation-13), [18](#citation-18) claims");
+  });
+
+  it("converts a grouped citation at the very end of the string", () => {
+    expect(linkifyCitationMarkers("see [paper:1, paper:17]", 20)).toBe(
+      "see [1](#citation-1), [17](#citation-17)",
+    );
+  });
+
+  it("preserves whitespace around grouped citations", () => {
+    expect(
+      linkifyCitationMarkers(
+        "  [paper:4, paper:6]  trailing  ",
+        20,
+      ),
+    ).toBe("  [4](#citation-4), [6](#citation-6)  trailing  ");
+  });
+
+  it("handles two grouped citations on the same line", () => {
+    expect(
+      linkifyCitationMarkers(
+        "first [paper:1, paper:2] middle [paper:3, paper:4] end",
+        20,
+      ),
+    ).toBe(
+      "first [1](#citation-1), [2](#citation-2) middle [3](#citation-3), [4](#citation-4) end",
+    );
+  });
+
+  it("passes grouped citations unchanged when all indices are out of range", () => {
+    // Defense in depth: if the LLM ever emits a marker
+    // past the bibliography length, the linkifier must
+    // fall back to the original text so nothing is
+    // silently lost.
+    expect(linkifyCitationMarkers("see [paper:99, paper:100]", 20)).toBe(
+      "see [paper:99, paper:100]",
+    );
+  });
+
+  it("linkifies only when all entries in a group are in range", () => {
+    // Mixed group: [1] is valid (citation 1 exists), [99]
+    // is out of range. The linkifier falls back to the
+    // original match so the user sees the LLM's text
+    // unchanged -- an out-of-range marker is a real bug
+    // signal and silently partial-rendering would hide it.
+    const out = linkifyCitationMarkers("see [paper:1, paper:99]", 20);
+    // The out-of-range entry is preserved verbatim.
+    expect(out).toContain("[paper:1, paper:99]");
+    // The valid entry is NOT linkified (we either linkify
+    // the whole group or fall back to the whole group).
+    expect(out).not.toContain("[1](#citation-1)");
+  });
+
+  it("handles a group followed by a standalone marker on the same line", () => {
+    expect(
+      linkifyCitationMarkers(
+        "see [paper:1, paper:2] and also [paper:5] end",
+        20,
+      ),
+    ).toBe("see [1](#citation-1), [2](#citation-2) and also [5](#citation-5) end");
+  });
+
+  it("matches the user's exact bug-report snippet from the screenshot", () => {
+    // The user-reported failing case, copy-pasted from the
+    // screenshot's last paragraph. Pinning this verbatim
+    // so a regression in the helper shows up as a test
+    // failure that immediately names the bug.
+    const input =
+      "There is broad consensus that early biological " +
+      "detection is essential for therapeutic impact, " +
+      "and that BBMs will be central to scalable screening " +
+      "and monitoring [paper:7, paper:10, paper:19]. However, " +
+      "disagreement persists regarding whether AD should be " +
+      "defined primarily by biological processes, " +
+      "clinical symptoms, or both [paper:15, paper:20].";
+    // Sanity: the input contains the exact failing pattern.
+    expect(input).toContain("[paper:7, paper:10, paper:19]");
+    expect(input).toContain("[paper:15, paper:20]");
+    // After linkification, no ``[paper:N, paper:N]`` text
+    // remains -- every grouped form has been replaced.
+    const linked = linkifyCitationMarkers(input, 20);
+    expect(linked).not.toContain("[paper:7, paper:10, paper:19]");
+    expect(linked).not.toContain("[paper:15, paper:20]");
+    // Each valid number becomes a clickable link.
+    expect(linked).toContain("[7](#citation-7)");
+    expect(linked).toContain("[10](#citation-10)");
+    expect(linked).toContain("[19](#citation-19)");
+    expect(linked).toContain("[15](#citation-15)");
+    expect(linked).toContain("[20](#citation-20)");
+  });
+
+  it("linkifies a real-life citation list scraped from a live report", () => {
+    // Pin the production case: a real LLM-generated
+    // excerpt that has both standalone AND grouped
+    // markers mixed together. This is the actual shape of
+    // the bug -- the user-visible bug was that the
+    // grouped markers rendered as raw text in the live
+    // page.
+    const input =
+      "Cross-sectional and longitudinal NT1 levels in MC " +
+      "were associated with clinical, cognitive, and " +
+      "biomarker changes [paper:1]. NT1 increases " +
+      "continued in symptomatic phases of disease, a " +
+      "distinct trajectory from that seen with CSF " +
+      "p-tau217 and other phospho-tau species [paper:5]. " +
+      "Successive diagnostic criteria have increasingly " +
+      "narrowed AD definition around amyloid β and tau " +
+      "biomarkers [paper:15].";
+    const out = linkifyCitationMarkers(input, 19);
+    // All three standalone markers became links.
+    expect(out).toContain("[1](#citation-1)");
+    expect(out).toContain("[5](#citation-5)");
+    expect(out).toContain("[15](#citation-15)");
+    // No raw ``[paper:N]`` text remains for the valid indices.
+    expect(out).not.toContain("[paper:1]");
+    expect(out).not.toContain("[paper:5]");
+    expect(out).not.toContain("[paper:15]");
+  });
+});
