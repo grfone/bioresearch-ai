@@ -79,18 +79,22 @@ const GROUPED_PAPER_MARKER_RE = /\[paper:(\d+(?:,\s*paper:\d+)+)\]/g;
  * Edge cases
  * -----------
  * - ``[paper:0]`` or ``[paper:N+1]`` where ``N+1`` exceeds
- *   the citation list length: rendered as a plain bracket
- *   marker (no link). The backend's regex clamps the index
- *   to the valid range so, this should not happen in
- *   practice, but we defend in depth so a future change
- *   that introduces an out-of-range marker doesn't break
- *   the UI.
+ *   the citation list length: SILENTLY DROPPED. The
+ *   backend's mapper clamps the index to the valid range,
+ *   so an out-of-range marker means the LLM fabricated a
+ *   citation that doesn't exist in the bibliography.
+ *   Showing the user a raw ``[paper:N]`` artefact in the
+ *   rendered page would be misleading -- the linkifier
+ *   drops the marker and lets the backend's logs surface
+ *   the bug for developers. Same policy for both
+ *   standalone and grouped markers.
  * - Malformed markers like ``[paper:]`` or ``[paper:abc]``
- *   pass through unchanged.
+ *   pass through unchanged (they're not parseable as
+ *   numbers at all, so the regex never matches them).
  * - Mixed valid/invalid in a group: only the valid
- *   numbers are linkified; invalid ones fall through
- *   unchanged so the user still sees the LLM's intended
- *   intent rather than losing characters silently.
+ *   numbers are linkified; invalid ones are silently
+ *   dropped so the user doesn't see a partial / broken
+ *   bracket fragment.
  */
 export function linkifyCitationMarkers(
   body: string,
@@ -101,18 +105,19 @@ export function linkifyCitationMarkers(
   // the standalone pass. Each group becomes a comma-joined
   // sequence of clickable links.
   //
-  // Out-of-range policy: if ANY entry in the group is
-  // out of range, we fall back to the original match
-  // (preserving the LLM's text). The rationale: the
-  // backend's mapper clamps the index to the valid range,
-  // so an out-of-range marker in a report is a
-  // bidirectional bug -- either the LLM fabricated a
-  // citation, or the bibliography is missing one. Losing
-  // either entry silently would mislead the user; the
-  // visible "stuck" text makes the bug obvious so a
-  // developer can fix it. Compare with the standalone
-  // pass, where we preserve each out-of-range entry
-  // verbatim -- the trade-off there is the same.
+  // Out-of-range policy: silently drop entries that are
+  // out of range -- the backend's mapper clamps the index
+  // to the valid range, so an out-of-range marker is a
+  // bidirectional bug (LLM fabricated a citation, or
+  // bibliography is missing one). Showing the user the
+  // raw ``[paper:N]`` text as visible artefacts would be
+  // ugly and misleading -- the right UX is to render the
+  // valid links and let the backend's logs catch the bug.
+  // This is also how the standalone pass behaves (an
+  // out-of-range ``[paper:99]`` stays literal, but the
+  // grouped pass is more aggressive because the surrounding
+  // context makes a "mixed" rendering visually jarring --
+  // ``see [1](#citation-1), [paper:99]`` looks like a typo).
   const groupedResult = body.replace(
     GROUPED_PAPER_MARKER_RE,
     (match, innerList: string) => {
@@ -131,25 +136,27 @@ export function linkifyCitationMarkers(
       const renderedNumbers: string[] = [];
       for (const piece of pieces) {
         const m = /(?:paper:)?(\d+)/.exec(piece);
-        if (!m) {
-          // Malformed piece (no digits at all). Fall
-          // back to the original match -- don't try to
-          // partial-render an unparseable group.
-          return match;
-        }
+        if (!m) continue; // Malformed piece: skip silently.
         const index = parseInt(m[1], 10);
         if (
           Number.isNaN(index) ||
           index < 1 ||
           index > maxCitationIndex
         ) {
-          // Out of range. Fall back to the original
-          // match so the user sees the LLM's text
-          // unchanged (and the developer sees the bug).
-          return match;
+          // Out of range: skip silently. The backend's
+          // citation-extraction logs surface this as a
+          // data-quality warning -- the user-facing UI
+          // renders only the valid links.
+          continue;
         }
         renderedNumbers.push(`[${index}](#citation-${index})`);
       }
+      // If EVERY number in the group was invalid/malformed,
+      // return the original match so the user at least sees
+      // the LLM's text. If the group is genuinely broken
+      // (e.g. all hallucinated indices), we'd rather show
+      // raw ``[paper:N]`` than silently delete it.
+      if (renderedNumbers.length === 0) return match;
       return renderedNumbers.join(", ");
     },
   );
@@ -157,6 +164,16 @@ export function linkifyCitationMarkers(
   // Then handle the standalone ``[paper:N]`` markers. We
   // run this second because the first pass may have
   // converted some of them already (inside a group).
+  //
+  // Out-of-range policy: silently drop. An out-of-range
+  // marker means the LLM fabricated a citation (the
+  // bibliography doesn't have an entry at that index).
+  // Showing the user a raw ``[paper:19]`` artefact when
+  // the bibliography only has 9 entries is misleading.
+  // The backend's logs and the citation-extraction
+  // step's hallucination-detection surfaces the bug for
+  // developers; the user-facing UI should never display
+  // it.
   return groupedResult.replace(PAPER_MARKER_RE, (match, rawIndex) => {
     const index = parseInt(rawIndex, 10);
     if (
@@ -164,12 +181,14 @@ export function linkifyCitationMarkers(
       index < 1 ||
       index > maxCitationIndex
     ) {
-      // Out of range or malformed -- leave the original
-      // marker text intact so the user can still see what
-      // the LLM produced. Downstream consumers that
-      // depend on marker extraction don't rely on the
-      // Frontend's linkification.
-      return match;
+      // Out of range: drop silently. Returning an empty
+      // string collapses the bracket to nothing, so the
+      // user just sees the surrounding prose without
+      // the broken marker. If the marker was the only
+      // thing on its line (e.g. ``- [paper:99]\n``), the
+      // line becomes empty -- the markdown list renderer
+      // will skip it.
+      return "";
     }
     // Render as a markdown link to the bibliography
     // anchor. The label is just the number (Vancouver style).

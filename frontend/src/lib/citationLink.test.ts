@@ -54,25 +54,37 @@ describe("linkifyCitationMarkers", () => {
     );
   });
 
-  it("leaves out-of-range markers alone as a defense-in-depth guard", () => {
+  it("silently drops out-of-range standalone markers", () => {
     // The backend clamps the marker index to the valid
     // range, but if a future change ever lets an out-of-
-    // range marker through, the frontend must not crash
-    // and must not produce a broken link to a non-existent
-    // anchor.
+    // range marker through, the linkifier silently drops
+    // it -- never producing a broken link to a non-
+    // existent anchor AND never leaving visible
+    // ``[paper:99]`` artefacts in the rendered page.
+    // Hallucinated indices are surfaced via the backend's
+    // logs.
     expect(linkifyCitationMarkers("out of range [paper:99]", 20)).toBe(
-      "out of range [paper:99]",
+      "out of range ",
     );
     expect(linkifyCitationMarkers("zero index [paper:0]", 20)).toBe(
-      "zero index [paper:0]",
+      "zero index ",
+    );
+    // Edge case: the marker is the only thing on its
+    // line. The result is an empty string in the middle
+    // of the prose (downstream the markdown list renderer
+    // handles the empty bullet gracefully).
+    expect(linkifyCitationMarkers("only [paper:99] here", 20)).toBe(
+      "only  here",
     );
   });
 
   it("does not consume markers past the upper bound even if N is large", () => {
     // The ``maxCitationIndex`` argument bounds the legal
-    // range. A marker past it must not produce a link.
+    // range. A marker past it is silently dropped -- the
+    // linkifier returns an empty string for the marker
+    // portion so the surrounding prose flows normally.
     expect(linkifyCitationMarkers("cap [paper:50] here", 20)).toBe(
-      "cap [paper:50] here",
+      "cap  here",
     );
   });
 
@@ -199,16 +211,32 @@ describe("linkifyCitationMarkers -- grouped citations", () => {
 
   it("linkifies only when all entries in a group are in range", () => {
     // Mixed group: [1] is valid (citation 1 exists), [99]
-    // is out of range. The linkifier falls back to the
-    // original match so the user sees the LLM's text
-    // unchanged -- an out-of-range marker is a real bug
-    // signal and silently partial-rendering would hide it.
+    // is out of range. The linkifier silently drops the
+    // invalid entry and renders the valid one -- this
+    // matches the UX the user wants (no visible ``[paper:99]``
+    // artefact in the rendered page). Hallucinated indices
+    // are surfaced via the backend's logs, not the UI.
     const out = linkifyCitationMarkers("see [paper:1, paper:99]", 20);
-    // The out-of-range entry is preserved verbatim.
-    expect(out).toContain("[paper:1, paper:99]");
-    // The valid entry is NOT linkified (we either linkify
-    // the whole group or fall back to the whole group).
-    expect(out).not.toContain("[1](#citation-1)");
+    // The valid entry is a link to citation-1.
+    expect(out).toContain("[1](#citation-1)");
+    // The out-of-range entry is dropped (no visible
+    // ``[paper:99]`` text).
+    expect(out).not.toContain("[paper:99]");
+    // The leading/trailing prose is preserved.
+    expect(out.startsWith("see ")).toBe(true);
+  });
+
+  it("drops out-of-range entries from a group with mixed valid/invalid", () => {
+    // Pin the production case: a 3-element group where
+    // only one entry is out of range. The result should
+    // be a comma-joined sequence of the two valid links
+    // with the hallucinated entry silently dropped.
+    const out = linkifyCitationMarkers(
+      "see [paper:1, paper:99, paper:2].",
+      5,
+    );
+    expect(out).toBe("see [1](#citation-1), [2](#citation-2).");
+    expect(out).not.toContain("[paper:99]");
   });
 
   it("handles a group followed by a standalone marker on the same line", () => {

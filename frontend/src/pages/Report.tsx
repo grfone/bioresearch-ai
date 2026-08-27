@@ -689,7 +689,7 @@ export const Report: React.FC = () => {
                           key={idx}
                           className="text-secondary text-sm leading-relaxed"
                       >
-                        {item}
+                        {linkifyCitationMarkers(item, report.citations.length)}
                       </li>
                   ))}
                 </ul>
@@ -710,7 +710,7 @@ export const Report: React.FC = () => {
                           key={idx}
                           className="text-secondary text-sm leading-relaxed"
                       >
-                        {item}
+                        {linkifyCitationMarkers(item, report.citations.length)}
                       </li>
                   ))}
                 </ul>
