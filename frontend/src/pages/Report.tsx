@@ -65,6 +65,10 @@ import { useWorkspaceStore } from '../state/workspaceStore';
 import { api } from '../api/client';
 import type { ReportResponse } from '../models/report';
 import { hasLimitations, hasFutureWork } from '../models/report';
+import {
+  citationAnchorId,
+  linkifyCitationMarkers,
+} from '../lib/citationLink';
 import { FileText, RefreshCw, AlertCircle, Lightbulb, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -525,7 +529,10 @@ export const Report: React.FC = () => {
           ?.replace(/^#\s+/, "") ?? "Research Report";
 
 // Remove the title from the markdown so it isn't shown twice
-  const reportBody = report.summary.replace(/^# .*\n?/, "");
+  const reportBody = linkifyCitationMarkers(
+    report.summary.replace(/^# .*\n?/, ""),
+    report.citations.length,
+  );
 
   return (
       <div className="page section">
@@ -655,8 +662,12 @@ export const Report: React.FC = () => {
                   {report.citations.map((citation, idx) => (
                       <li
                           key={idx}
+                          id={citationAnchorId(idx + 1)}
                           className="text-secondary text-sm leading-relaxed"
                       >
+                        <span className="text-primary font-semibold mr-2">
+                          [{idx + 1}]
+                        </span>
                         {citation}
                       </li>
                   ))}

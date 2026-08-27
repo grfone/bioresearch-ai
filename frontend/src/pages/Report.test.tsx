@@ -953,3 +953,216 @@ describe('Report > error UI', () => {
     expect(screen.queryByTestId('report-error-detail-at')).toBeNull();
   });
 });
+
+describe('Report > citation rendering (Vancouver / ICMJE inline links)', () => {
+  /**
+   * Pin the contract that the report body renders
+   * ``[paper:N]`` markers as clickable in-text links
+   * targeting the corresponding bibliography entry.
+   * This is the user's pinned requirement: real
+   * scientific writing closes each claim with a
+   * citation, and the citations are clickable links to
+   * the bibliography.
+   */
+
+  /**
+   * Helper: render the Report page with a workspace in
+   * REPORTED state and a body containing ``[paper:N]``
+   * markers + a populated citations list.
+   */
+  function setupWithCitationMarkers() {
+    const workspace = {
+      workspace_id: 'ws-1',
+      question: 'x',
+      state: 'REPORTED',
+      summary: { text: 'A summary.', paper_ids: [] },
+      papers: [],
+      total_papers: 0,
+      allowed_actions: ['publish', 'complete'],
+      has_evidence_comparison: false,
+      report_available: true,
+      published_report_available: false,
+      last_error: null,
+      progress: 1.0,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      paper_sources: {},
+    };
+    mockUseWorkspaceReturn.workspace = workspace;
+    mockStoreCurrentWorkspace.current = workspace;
+    mockFetchWorkspace.mockResolvedValue(workspace);
+    mockRunAction.mockImplementation(
+      async (action: string) => {
+        if (action === 'report') {
+          return {
+            workspace_id: 'ws-1',
+            question: 'x',
+            summary:
+              '## Executive Summary\n\n' +
+              'Plasma p-tau217 is a sensitive marker [paper:1]. ' +
+              'BBMs are poised to expand access [paper:2]. ' +
+              'NT1 trajectory diverges from CSF p-tau217 in ' +
+              'symptomatic phases [paper:3].\n\n' +
+              '## Limitations\n' +
+              '- <limitation 1>\n' +
+              '## Future Work\n' +
+              '- <future 1>',
+            citations: [
+              'First citation. Smith A, et al. Nature, 2026.',
+              'Second citation. Jones B, et al. Cell, 2026.',
+              'Third citation. Patel D, et al. Lancet, 2026.',
+            ],
+            limitations: [],
+            future_work: [],
+            generated_at: '2026-01-01T00:00:00Z',
+          } as never;
+        }
+        return {
+          ...workspace,
+          state: action === 'publish' ? 'COMPLETED' : workspace.state,
+          published_report_available:
+            action === 'publish' ? true : workspace.published_report_available,
+        } as never;
+      },
+    );
+  }
+
+  it('renders [paper:N] markers as clickable [N] links to #citation-N', async () => {
+    setupWithCitationMarkers();
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+    // The body should render [1], [2], [3] as links.
+    // ``ReactMarkdown`` parses ``[1](#citation-1)`` so the
+    // link's accessible name is just the label ``1`` (the
+    // square brackets are markdown syntax, not part of the
+    // rendered text). We pin on the label so the test
+    // catches a regression that re-introduces the literal
+    // ``[paper:N]`` markers in the rendered text.
+    await waitFor(() => {
+      const link1 = screen.getByRole('link', { name: '1' });
+      expect(link1).toBeInTheDocument();
+      const link2 = screen.getByRole('link', { name: '2' });
+      expect(link2).toBeInTheDocument();
+      const link3 = screen.getByRole('link', { name: '3' });
+      expect(link3).toBeInTheDocument();
+      // Each link targets the right anchor.
+      expect(link1.getAttribute('href')).toBe('#citation-1');
+      expect(link2.getAttribute('href')).toBe('#citation-2');
+      expect(link3.getAttribute('href')).toBe('#citation-3');
+    });
+    // The raw ``[paper:N]`` marker text MUST NOT appear in
+    // the rendered DOM (the page would still work, but the
+    // "clickable link" requirement wouldn't be met -- and
+    // it would indicate the linkifier isn't being called).
+    expect(screen.queryByText('[paper:1]')).toBeNull();
+    expect(screen.queryByText('[paper:2]')).toBeNull();
+    expect(screen.queryByText('[paper:3]')).toBeNull();
+  });
+
+  it('attaches id="citation-N" to each <li> in the citations list', async () => {
+    setupWithCitationMarkers();
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+    // The <li> with id="citation-1" must exist so the in-text
+    // link has somewhere to scroll to.
+    expect(document.getElementById('citation-1')).not.toBeNull();
+    expect(document.getElementById('citation-2')).not.toBeNull();
+    expect(document.getElementById('citation-3')).not.toBeNull();
+  });
+
+  it('renders the citation number prefix in each bibliography entry', async () => {
+    setupWithCitationMarkers();
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+    // The Vancouver convention is to render the
+    // bibliography as a numbered list (1, 2, 3 ...).
+    // The page renders "[1]" / "[2]" / "[3]" prefixes
+    // inside each <li> so the user can see the in-text
+    // citation number next to each entry.
+    expect(screen.getByText('[1]')).toBeInTheDocument();
+    expect(screen.getByText('[2]')).toBeInTheDocument();
+    expect(screen.getByText('[3]')).toBeInTheDocument();
+  });
+
+  it('does not render link for a marker index beyond the citations list', async () => {
+    // Defensive: if a future change ever lets an out-of-
+    // range marker through, the page must not crash and
+    // must not produce a broken anchor link. The marker
+    // should be rendered as plain bracket text.
+    const workspace = {
+      workspace_id: 'ws-1',
+      question: 'x',
+      state: 'REPORTED',
+      summary: { text: 'A summary.', paper_ids: [] },
+      papers: [],
+      total_papers: 0,
+      allowed_actions: ['publish', 'complete'],
+      has_evidence_comparison: false,
+      report_available: true,
+      published_report_available: false,
+      last_error: null,
+      progress: 1.0,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      paper_sources: {},
+    };
+    mockUseWorkspaceReturn.workspace = workspace;
+    mockStoreCurrentWorkspace.current = workspace;
+    mockFetchWorkspace.mockResolvedValue(workspace);
+    mockRunAction.mockImplementation(
+      async (action: string) => {
+        if (action === 'report') {
+          return {
+            workspace_id: 'ws-1',
+            question: 'x',
+            summary:
+              '## Executive Summary\n\n' +
+              'In-range marker [paper:1]. Out-of-range [paper:99].\n\n' +
+              '## Limitations\n' +
+              '- <l>\n' +
+              '## Future Work\n' +
+              '- <f>',
+            citations: [
+              'Single citation.',
+            ],
+            limitations: [],
+            future_work: [],
+            generated_at: '2026-01-01T00:00:00Z',
+          } as never;
+        }
+        return workspace as never;
+      },
+    );
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+    // In-range [1] should link.
+    await waitFor(() => {
+      expect(
+        screen.getByRole('link', { name: '1' }),
+      ).toBeInTheDocument();
+    });
+    // Out-of-range [99] must NOT link (no anchor exists for
+    // it; the page would scroll to a non-existent element
+    // or no-op). We check the marker text is present but
+    // not wrapped in a link.
+    expect(screen.queryByRole('link', { name: '99' })).toBeNull();
+    // The marker text should still appear in the DOM as
+    // ``[paper:99]`` (the original marker format, since the
+    // linkifier's out-of-range guard passes it through
+    // unchanged -- including the ``paper:`` prefix that
+    // the in-range linkifier strips).
+    expect(screen.getByText(/\[paper:99\]/)).toBeInTheDocument();
+  });
+});

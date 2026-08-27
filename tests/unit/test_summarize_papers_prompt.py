@@ -10,11 +10,18 @@ Tests that pin the structure of the summary prompt emitted by
 2. Ask the LLM to preserve the ``[paper:N]`` markers verbatim in
    its synthesis text -- this is how downstream tools build the
    bibliography.
+3. (Vancouver / ICMJE) Instruct the LLM to place citations
+   INLINE at the end of the sentence or clause being cited,
+   not as sentence prefixes. Real scientific reports end each
+   claim with a bracketed number, not start each line with one.
+   This is the user's explicit requirement -- the previous
+   "prefix-style" output (``[paper:N] argues that ...``)
+   was flagged as "not how we write in science".
 
 The prompt-level tests here pin the structure of the prompt so a
-future refactor doesn't silently drop the markers. The
-report-mapper-level tests in ``test_report_mapper.py`` pin the
-extraction logic.
+future refactor doesn't silently drop the markers or regress
+to the prefix style. The report-mapper-level tests in
+``test_report_mapper.py`` pin the extraction logic.
 """
 from typing import Iterator
 
@@ -146,3 +153,145 @@ def test_summary_prompt_marker_numbering_matches_papers_used_order() -> None:
     assert "First paper" in p1_block
     assert "Second paper" in p2_block
     assert "Third paper" in p3_block
+class TestSummarizePromptVancouverStyle:
+    """Pin the Vancouver / ICMJE in-text citation rules.
+
+    These tests guard against a regression to the "prefix
+    style" the user explicitly rejected (``[paper:N] argues
+    that ...`` as a sentence opener). Real scientific writing
+    closes each claim with a citation, not opens each line
+    with one.
+    """
+
+    def test_system_prompt_instructs_inline_citation_placement(self):
+        """The system prompt must instruct the LLM to place
+        ``[paper:N]`` markers INLINE at the end of the cited
+        sentence or clause -- not as sentence prefixes.
+
+        Concretely, the prompt must mention the phrase
+        ``END of the sentence`` (or the equivalent) so the
+        LLM knows where to position the marker. Pinning the
+        exact phrase is brittle but the user has been clear
+        about this requirement, so we want a sharp failure
+        if a future refactor regresses the wording.
+        """
+        papers = [_paper("Some paper title")]
+        prompt = _execute_and_capture(papers)
+        system = prompt.system or ""
+        # The prompt must explicitly direct the LLM to put
+        # citations at the end of the sentence, not the
+        # beginning. ``end of the sentence`` and ``NOT prefix``
+        # are the two key signals.
+        assert "end of the sentence" in system.lower(), (
+            "system prompt must instruct the LLM to place "
+            "citations at the END of the sentence; found: "
+            f"{system!r}"
+        )
+        assert "not prefix" in system.lower() or "do not prefix" in system.lower(), (
+            "system prompt must warn against the prefix style; "
+            f"found: {system!r}"
+        )
+
+    def test_system_prompt_prohibits_one_citation_per_line(self):
+        """The previous behaviour was "one citation per line"
+        because the system prompt didn't actively forbid it.
+        The new prompt must say ``do NOT emit one citation
+        per line`` (or equivalent) so the LLM doesn't fall
+        back to the bullet-style output.
+        """
+        papers = [_paper("Some paper title")]
+        prompt = _execute_and_capture(papers)
+        system = (prompt.system or "").lower()
+        assert "one citation per line" in system, (
+            "system prompt must explicitly forbid one "
+            "citation per line; found: " + repr(prompt.system)
+        )
+
+    def test_system_prompt_includes_vancouver_or_icmje_label(self):
+        """The prompt names the canonical citation style so
+        the LLM has a recognised reference. ``Vancouver``
+        and/or ``ICMJE`` (the International Committee of
+        Medical Journal Editors) are the standard biomedical
+        styles and the right choice here.
+        """
+        papers = [_paper("Some paper title")]
+        prompt = _execute_and_capture(papers)
+        system = prompt.system or ""
+        assert "Vancouver" in system or "ICMJE" in system, (
+            "system prompt should reference the canonical "
+            "biomedical citation style (Vancouver / ICMJE); "
+            f"found: {system!r}"
+        )
+
+    def test_system_prompt_includes_good_and_bad_output_examples(self):
+        """A few-shot example is the most reliable way to
+        teach an LLM a citation pattern. The prompt must
+        include BOTH a ``GOOD`` example (inline, paragraph
+        form) and a ``BAD`` example (one-per-line, prefix
+        form) so the model has unambiguous positive and
+        negative anchors.
+        """
+        papers = [_paper("Some paper title")]
+        prompt = _execute_and_capture(papers)
+        system = prompt.system or ""
+        assert "GOOD" in system and "BAD" in system, (
+            "system prompt must include both GOOD and BAD "
+            "examples; found: " + repr(prompt.system)
+        )
+
+    def test_system_prompt_warns_against_breaking_paragraph_per_citation(self):
+        """The LLM's instinct when seeing the bare marker
+        instruction was to break the paragraph at every
+        marker -- producing the "bibliography" layout the
+        user rejected. The prompt must explicitly forbid
+        that.
+        """
+        papers = [_paper("Some paper title")]
+        prompt = _execute_and_capture(papers)
+        system = (prompt.system or "").lower()
+        assert "do not break" in system or "not break" in system, (
+            "system prompt must explicitly warn against "
+            "breaking the paragraph after every citation; "
+            f"found: {prompt.system!r}"
+        )
+
+    def test_marker_format_paragraph_instruction_still_present(self):
+        """The original marker-preservation contract (the
+        regex relies on it) must still be in the prompt
+        even after the style rewrite. Otherwise the LLM
+        might drop ``[paper:N]`` entirely and we'd lose
+        reliable citation extraction.
+        """
+        papers = [_paper("Some paper title")]
+        prompt = _execute_and_capture(papers)
+        system = prompt.system or ""
+        assert "[paper:N]" in system or "[paper:" in system, (
+            "system prompt must still mention [paper:N] so "
+            "the LLM keeps emitting the markers downstream "
+            "tooling extracts. Without this, the report "
+            "mapper's marker-based matching falls back to "
+            "title substring matching, which fails because "
+            "real LLM summaries paraphrase paper titles."
+        )
+
+    def test_system_prompt_documents_grouped_citation_syntax(self):
+        """Multiple sources for one claim collapse to a single
+        bracketed group: ``[paper:5, paper:12]``. The prompt
+        must document this so the LLM groups instead of
+        scattering.
+        """
+        papers = [_paper("Some paper title")]
+        prompt = _execute_and_capture(papers)
+        system = (prompt.system or "").lower()
+        # The prompt's "grouped" wording could be expressed
+        # several ways; we assert on a representative one.
+        assert (
+            "bracketed group" in system
+            or "[paper:5, paper:12]" in system
+            or "group of citations" in system
+            or "multiple sources" in system
+        ), (
+            "system prompt must explain how to handle multiple "
+            "citations for one claim (group them inline); "
+            f"found: {prompt.system!r}"
+        )
