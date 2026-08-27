@@ -43,6 +43,9 @@ from app.domain.entities.research_question import ResearchQuestion
 from app.domain.entities.summary import Summary
 from app.domain.interfaces.llm_provider import LLMProvider
 from app.domain.models.prompt import Prompt
+from app.infrastructure.llm.citation_sanitizer import (
+    sanitize_citation_markers,
+)
 
 
 class SummarizePapersUseCase:
@@ -178,7 +181,19 @@ class SummarizePapersUseCase:
                 "  [paper:19] argues that phosphorylated tau217 ...\n"
                 "  [paper:10] highlights that BBMs are poised ...\n"
                 "  [paper:15] observes that successive diagnostic ...\n\n"
-                "Write like GOOD. Never like BAD."
+                "Write like GOOD. Never like BAD.\n\n"
+                "Bibliography size constraint\n"
+                "----------------------------\n"
+                "The bibliography for this summary contains exactly "
+                f"{len(papers)} entries -- numbered ``[paper:1]`` "
+                f"through ``[paper:{len(papers)}]``. Every citation marker "
+                "you emit MUST be in that range.\n"
+                "DO NOT emit ``[paper:N]`` for any N > "
+                f"{len(papers)} -- there is no corresponding bibliography "
+                "entry, and downstream tools will silently drop the marker, "
+                "leaving the user's reading experience with a missing "
+                "citation. If you find yourself wanting to cite a paper "
+                "that isn't in the bibliography, do not cite it."
             ),
             user=question.question,
             context=context,
@@ -187,7 +202,24 @@ class SummarizePapersUseCase:
 
         response = self._llm_provider.generate(prompt)
 
+        # Sanitise the LLM output at the ingest boundary so
+        # hallucinated ``[paper:N]`` markers (where N exceeds
+        # the bibliography size) never reach persistent
+        # storage. The prompt already warns the LLM about
+        # the bibliography size, but in practice models
+        # still hallucinate indices past the bound. We
+        # silently drop them here and log a warning so
+        # developers see the data-quality signal.
+        # Defence-in-depth: the frontend linkifier also
+        # drops out-of-range markers at render time, but
+        # sanitising at ingest keeps the stored text clean
+        # and avoids needing to re-strip on every read.
+        sanitized_text = sanitize_citation_markers(
+            response.content,
+            len(papers),
+        )
+
         return Summary(
-            text=response.content,
+            text=sanitized_text,
             papers_used=papers,
         )

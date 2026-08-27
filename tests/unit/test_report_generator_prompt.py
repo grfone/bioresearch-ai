@@ -214,3 +214,81 @@ class TestReportGeneratorPromptStructure:
                 f"the report using these exact strings); "
                 f"found: {user!r}"
             )
+
+
+class TestReportGeneratorPromptBibliographySizeConstraint:
+    """Pin the prompt's explicit bibliography-size constraint.
+
+    Matches the contract pinned on the summarizer prompt
+    in ``test_summarize_papers_prompt.py``. The LLM sees
+    the actual paper count, not a hardcoded ``20``.
+    """
+
+    def test_user_message_includes_bibliography_size_phrase(self):
+        """The user prompt must tell the LLM the bibliography
+        size so it knows the valid range for ``[paper:N]``
+        markers. A future refactor that drops this clause
+        would regress the fix; this test pins the contract.
+        """
+        prompt = _build_prompt()
+        user = prompt.user or ""
+        assert "exactly 1 entries" in user, (
+            "report prompt must tell the LLM the bibliography "
+            "has exactly N entries; found: " + repr(user)
+        )
+
+    def test_user_message_size_phrase_scales_with_paper_count(self):
+        """The size phrase is parameterised on
+        ``len(summary.papers_used)`` so the LLM sees the
+        actual count.
+
+        We mock the ``Summary`` so we can vary its paper
+        count and inspect the resulting prompt.
+        """
+        # 3-paper summary
+        three_papers = [
+            Paper(
+                title=f"Paper {i}",
+                authors=[Author(first_name="A", last_name="B")],
+                journal=Journal(name="J"),
+                year=2026,
+                abstract="abs",
+            )
+            for i in range(1, 4)
+        ]
+        summary = Summary(
+            text="Plasma p-tau217 is a marker [paper:1].\n",
+            papers_used=three_papers,
+        )
+        generator = LLMReportGenerator.__new__(LLMReportGenerator)
+        prompt = LLMReportGenerator._build_prompt(
+            ResearchQuestion(question="What is X?"),
+            summary,
+        )
+        user = prompt.user or ""
+        assert "exactly 3 entries" in user, (
+            "report prompt must use the actual paper count; "
+            "found: " + repr(user)
+        )
+        assert "any N > 3" in user, (
+            "report prompt's upper bound must match the "
+            "actual paper count; found: " + repr(user)
+        )
+
+    def test_user_message_tells_llm_to_drop_unciteable_papers(self):
+        """The prompt ends with: ``If you find yourself
+        wanting to cite a paper that isn't in the
+        bibliography, do not cite it.`` The same actionable
+        language as the summarizer prompt.
+        """
+        prompt = _build_prompt()
+        user = prompt.user or ""
+        assert (
+            "If you find yourself wanting to cite a paper that "
+            "isn't in the bibliography, do not cite it"
+            in user
+        ), (
+            "report prompt must tell the LLM explicitly not "
+            "to cite papers outside the bibliography; found: "
+            + repr(user)
+        )

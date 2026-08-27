@@ -65,10 +65,14 @@ from app.domain.interfaces.report_generator import (
 
 from app.domain.interfaces.llm_provider import (
     LLMProvider,
+    LLMResponse,
 )
 
 from app.domain.models.prompt import Prompt
 
+from app.infrastructure.llm.citation_sanitizer import (
+    sanitize_citation_markers,
+)
 from app.infrastructure.llm.report_mapper import (
     ReportMapper,
 )
@@ -168,8 +172,38 @@ class LLMReportGenerator(ReportGenerator):
             prompt
         )
 
+        # Sanitise hallucinated ``[paper:N]`` markers in the
+        # LLM's report output. The report mapper's
+        # ``_extract_section`` parses Limitations and Future
+        # Work bullets from ``response.content``; sanitising
+        # here means hallucinated markers never end up in
+        # the extracted bullet strings. Defence in depth: the
+        # summary's text is also sanitised in
+        # ``SummarizePapersUseCase.execute``, and the
+        # frontend linkifier drops out-of-range markers at
+        # render time as a third line of defence.
+        bibliography_size = len(list(summary.papers_used or []))
+        sanitized_content = sanitize_citation_markers(
+            response.content,
+            bibliography_size,
+        )
+        # Reconstruct an ``LLMResponse`` carrying the
+        # sanitised content. ``LLMResponse`` is a frozen
+        # dataclass -- we can't mutate ``response`` in
+        # place -- so we build a new instance preserving
+        # the metadata fields (``model``, token counts,
+        # finish reason) for the report's metadata dict.
+        sanitized_response = LLMResponse(
+            content=sanitized_content,
+            model=response.model,
+            finish_reason=response.finish_reason,
+            prompt_tokens=response.prompt_tokens,
+            completion_tokens=response.completion_tokens,
+            total_tokens=response.total_tokens,
+        )
+
         return self._report_mapper.map(
-            response,
+            sanitized_response,
             summary,
         )
 
@@ -219,6 +253,7 @@ class LLMReportGenerator(ReportGenerator):
         # bibliography instead -- that's the real evidence of
         # credibility. See ADR-009 (planned) for the rationale.
         summary_text = summary.text or ""
+        bibliography_size = len(list(summary.papers_used or []))
         user_prompt = (
             "Create a structured biomedical research report "
             "for this research question:\n\n"
@@ -244,6 +279,19 @@ class LLMReportGenerator(ReportGenerator):
             "(downstream tooling extracts them via regex), but "
             "the surrounding prose must read like a proper "
             "scientific report, not a bibliography.\n\n"
+            "Bibliography size constraint\n"
+            "----------------------------\n"
+            "The bibliography for this report contains exactly "
+            f"{bibliography_size} entries -- numbered ``[paper:1]`` "
+            f"through ``[paper:{bibliography_size}]``. Every "
+            "citation marker you emit MUST be in that range.\n"
+            "DO NOT emit ``[paper:N]`` for any N > "
+            f"{bibliography_size} -- there is no corresponding "
+            "bibliography entry, and downstream tools will "
+            "silently drop the marker, leaving the user's reading "
+            "experience with a missing citation. If you find "
+            "yourself wanting to cite a paper that isn't in the "
+            "bibliography, do not cite it.\n\n"
             "Output structure (use exactly these section headings):\n\n"
             "# <report title>\n\n"
             "## Executive Summary\n"

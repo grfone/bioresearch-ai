@@ -295,3 +295,74 @@ class TestSummarizePromptVancouverStyle:
             "citations for one claim (group them inline); "
             f"found: {prompt.system!r}"
         )
+
+
+class TestSummarizePromptBibliographySizeConstraint:
+    """Pin the prompt's explicit bibliography-size constraint.
+
+    The Vancouver / ICMJE prompt tells the LLM not to
+    fabricate citation indices, but the LLM still
+    hallucinates ``[paper:N]`` markers where N exceeds
+    ``len(papers_used)``. The fix has two layers: the
+    prompt explicitly states the bibliography size, AND
+    the backend ``sanitize_citation_markers`` helper
+    drops out-of-range markers at the ingest boundary.
+    This class pins the prompt layer so a future prompt
+    refactor doesn't lose the size-constraint wording.
+    """
+
+    def test_system_prompt_includes_bibliography_size_phrase(self):
+        # Use a single paper so the size phrase is clear.
+        papers = [_paper("Only paper")]
+        prompt = _execute_and_capture(papers)
+        system = prompt.system or ""
+        # Phrase: the bibliography is exactly N entries,
+        # for any N. We assert on the size-bound substring
+        # which appears for any N.
+        assert "exactly 1 entries" in system, (
+            "system prompt must tell the LLM the bibliography "
+            "has exactly N entries; found: " + repr(system)
+        )
+
+    def test_system_prompt_size_phrase_scales_with_paper_count(self):
+        """The size phrase is parameterised on ``len(papers)``
+        so the LLM sees the actual count, not a hardcoded
+        ``20``. Verify with 3 papers that the prompt says
+        ``3 entries`` -- a future prompt refactor that
+        hardcodes the count would silently mis-inform the
+        LLM.
+        """
+        papers = [_paper(f"Paper {i}") for i in range(1, 4)]  # 3 papers
+        prompt = _execute_and_capture(papers)
+        system = prompt.system or ""
+        assert "exactly 3 entries" in system, (
+            "system prompt must use the actual paper count, "
+            "not a hardcoded number; found: " + repr(system)
+        )
+        # And the upper bound is 3, not 20 (a common
+        # misconfiguration if someone hardcodes).
+        assert "any N > 3" in system, (
+            "system prompt's upper bound must match the "
+            "actual paper count; found: " + repr(system)
+        )
+
+    def test_system_prompt_tells_llm_to_drop_unciteable_papers(self):
+        """The prompt ends with the actionable instruction:
+        ``If you find yourself wanting to cite a paper that
+        isn't in the bibliography, do not cite it.`` This
+        is the final pin -- the LLM may otherwise rationalise
+        ``[paper:99]`` as ``I happen to know a paper with
+        that ID, so I'll cite it``.
+        """
+        papers = [_paper("Only paper")]
+        prompt = _execute_and_capture(papers)
+        system = prompt.system or ""
+        assert (
+            "If you find yourself wanting to cite a paper that "
+            "isn't in the bibliography, do not cite it"
+            in system
+        ), (
+            "system prompt must tell the LLM explicitly not "
+            "to cite papers outside the bibliography; found: "
+            + repr(system)
+        )
