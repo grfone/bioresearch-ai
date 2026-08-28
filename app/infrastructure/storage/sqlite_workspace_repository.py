@@ -264,7 +264,36 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
     """
 
     def __init__(self, db_path: str = "bioresearch.db") -> None:
-        self.db_path = db_path
+        # SQLite ``:memory:`` databases are per-connection --
+        # every ``sqlite3.connect(":memory:")`` call returns a
+        # fresh private DB. CI tests use
+        # ``DATABASE_URL=sqlite:///:memory:`` so the schema
+        # created in ``_init_db`` would be invisible to
+        # subsequent per-call methods like
+        # ``workspace_state_counts``.
+        #
+        # Workaround: rewrite ``:memory:`` to a per-process
+        # temporary file path. The file is created on first
+        # access and lives for the duration of the process.
+        # All ``sqlite3.connect`` calls against the same path
+        # share the database -- unlike ``:memory:``, where
+        # each call gets a fresh private DB. Using a temp
+        # file (rather than a shared-cache URI) avoids the
+        # SQLite quirk that the in-memory database is only
+        # visible while the originating connection is open.
+        #
+        # File-backed paths are passed through unchanged.
+        if db_path == ":memory:":
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(
+                prefix="bioresearch-",
+                suffix=".db",
+                delete=False,
+            )
+            tmp.close()
+            self.db_path = tmp.name
+        else:
+            self.db_path = db_path
         self._init_db()
         # v6 in-place data migration: rewrite every legacy
         # Summary blob (``{"text": ...}``) to the new
@@ -280,28 +309,55 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         # is deployed -- loads cleanly. The next repository
         # instantiation re-runs the data migration and
         # normalises the restored data.
-        migrated = self._migrate_v6_data(self.db_path)
-        if migrated > 0:
+        #
+        # NOTE: the v6 data migration runs INSIDE the
+        # ``_init_db`` connection (not in a separate
+        # connection) so it sees the schema. SQLite in-memory
+        # databases (used in CI tests with
+        # ``DATABASE_URL=sqlite:///:memory:``) are per-
+        # connection -- a second ``sqlite3.connect(...)`` on
+        # the same path would get a brand-new empty database
+        # with no schema. Running the migration in the same
+        # connection as the schema init avoids that
+        # regression. For file-backed databases the two-
+        # connection approach was fine (both connections
+        # share the file), but consolidating to one
+        # connection is simpler and works in both cases.
+        migrated_count = self._init_db()
+        if migrated_count > 0:
             logger.info(
                 "workspace_repository: migrated %d legacy Summary "
                 "rows from 'text' to 'body'.",
-                migrated,
+                migrated_count,
             )
 
     # ------------------------------------------------------------------
     # Schema management
     # ------------------------------------------------------------------
 
-    def _init_db(self) -> None:
+    def _init_db(self) -> int:
         """
-        Create the workspaces table if it does not already exist and
-        apply any pending additive migrations.
+        Create the workspaces table if it does not already
+        exist and apply any pending additive migrations.
 
-        The migration is idempotent: running it on a fresh database
-        creates the latest schema; running it on an existing
-        database only adds the columns that are missing.
+        Returns
+        -------
+        int
+            Number of legacy Summary rows rewritten by
+            the v6 data migration (always 0 on a fresh
+            database; 0 if the data was already in the
+            ``body`` shape).
+
+        The migration is idempotent: running it on a
+        fresh database creates the latest schema; running
+        it on an existing database only adds the columns
+        that are missing. The v6 data rewrite runs in
+        the same connection as the schema creation so
+        SQLite in-memory databases (used in CI tests)
+        work correctly -- see the comment in ``__init__``
+        for the rationale.
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -328,7 +384,22 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             # Apply additive migrations.
             self._migrate(cursor)
 
+            # Apply v6 in-place data migration in the same
+            # connection -- see __init__ docstring.
+            migrated_count = self._migrate_v6_data(conn)
+
             conn.commit()
+        return migrated_count
+
+    def _connect(self) -> sqlite3.Connection:
+        """
+        Open a SQLite connection. For ``:memory:`` databases
+        ``__init__`` rewrites the path to a per-process
+        temporary file, so every call here opens against
+        the same file. File-backed paths open the
+        conventional way.
+        """
+        return sqlite3.connect(self.db_path)
 
     def _migrate(self, cursor: sqlite3.Cursor) -> None:
         """Apply pending schema migrations idempotently."""
@@ -392,14 +463,18 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         # a half-rewritten database.
         cursor.execute(f"PRAGMA user_version = {LATEST_SCHEMA_VERSION}")
 
-    def _migrate_v6_data(self, db_path: str) -> int:
+    def _migrate_v6_data(self, db_or_conn) -> int:
         """
         v6 in-place data migration: rewrite every legacy
         ``Summary`` blob to the new ``body`` shape.
 
-        Separated from ``_migrate`` so the data rewrite runs
-        in its own connection (the column-migration connection
-        has committed by the time this is called).
+        Runs in the same connection as ``_init_db`` so
+        SQLite in-memory databases (used in CI tests)
+        see the schema. Accepts either an open
+        ``sqlite3.Connection`` (preferred -- lets the caller
+        control connection lifetime) or a ``db_path``
+        string (legacy two-connection pattern, kept for
+        any external callers that still pass a path).
 
         See ``_V6_DATA_MIGRATION`` docstring above for the
         three on-disk shapes this helper handles.
@@ -410,7 +485,17 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             Number of rows rewritten. Zero on an already-v6
             database.
         """
-        conn = sqlite3.connect(db_path)
+        if isinstance(db_or_conn, str):
+            # Legacy single-call pattern: open our own
+            # connection. Works for file-backed DBs but
+            # NOT for ``:memory:`` (a fresh per-connection
+            # database with no schema). Kept for any
+            # external caller that passes a path string.
+            conn = sqlite3.connect(db_or_conn)
+            should_close = True
+        else:
+            conn = db_or_conn
+            should_close = False
         try:
             cursor = conn.cursor()
             cursor.execute(
@@ -440,7 +525,8 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             conn.commit()
             return migrated_count
         finally:
-            conn.close()
+            if should_close:
+                conn.close()
 
     # ------------------------------------------------------------------
     # Repository interface
@@ -452,7 +538,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         return self._save(workspace)
 
     def get(self, workspace_id: UUID) -> ResearchSession:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM workspaces WHERE id = ?",
@@ -471,7 +557,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         return self._save(workspace)
 
     def delete(self, workspace_id: UUID) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "DELETE FROM workspaces WHERE id = ?",
@@ -484,7 +570,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             conn.commit()
 
     def exists(self, workspace_id: UUID) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT 1 FROM workspaces WHERE id = ?",
@@ -493,7 +579,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             return cursor.fetchone() is not None
 
     def list_workspaces(self) -> List[ResearchSession]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM workspaces")
             rows = cursor.fetchall()
@@ -505,7 +591,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         Uses SQL ``GROUP BY state`` for efficiency -- one
         pass over the table instead of fetching every row.
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT state, COUNT(*) FROM workspaces GROUP BY state"
@@ -524,7 +610,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
     # ------------------------------------------------------------------
 
     def _save(self, workspace: ResearchSession) -> ResearchSession:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
