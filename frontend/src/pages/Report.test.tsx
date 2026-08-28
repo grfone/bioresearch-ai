@@ -374,7 +374,7 @@ describe('Report > loader phases', () => {
 
 
 /**
- * Tests for the "Publish as PDF" action.
+ * Tests for the "Generate PDF" action.
  *
  * The Publish button on the Report page runs the PUBLISH
  * action on the workspace FSM (REPORTED -> PUBLISHING ->
@@ -403,7 +403,7 @@ describe('Report > loader phases', () => {
  * and the next maintainer sees the Layer-4 fix from the
  * skill notes.
  */
-describe('Report > Publish as PDF', () => {
+describe('Report > Generate PDF', () => {
   /**
    * Helper: render the Report page with the workspace
    * already in a REPORTED state, a generated report ready,
@@ -470,7 +470,7 @@ describe('Report > Publish as PDF', () => {
     });
   }
 
-  it('renders the "Publish as PDF" button when a report is available', async () => {
+  it('renders the "Generate PDF" button when a report is available', async () => {
     setupReadyToPublish(false);
     const { Report } = await import('./Report');
     render(<Report />);
@@ -480,7 +480,7 @@ describe('Report > Publish as PDF', () => {
     });
     // The button is the FSM-aware endpoint caller.
     const button = await screen.findByRole('button', {
-      name: /Publish as PDF/i,
+      name: /Generate PDF/i,
     });
     expect(button).toBeInTheDocument();
     // We tag the button with ``data-action="publish-pdf"`` so
@@ -514,7 +514,7 @@ describe('Report > Publish as PDF', () => {
 
     // Click Publish -- this calls runAction('publish').
     const publishBtn = await screen.findByRole('button', {
-      name: /Publish as PDF/i,
+      name: /Generate PDF/i,
     });
     fireEvent.click(publishBtn);
 
@@ -569,7 +569,7 @@ describe('Report > Publish as PDF', () => {
     mockApi.runPublishAction.mockClear();
 
     fireEvent.click(
-      await screen.findByRole('button', { name: /Publish as PDF/i }),
+      await screen.findByRole('button', { name: /Generate PDF/i }),
     );
 
     // Positive: the FSM-aware hook was called with 'publish'.
@@ -619,7 +619,7 @@ describe('Report > Publish as PDF', () => {
     });
 
     fireEvent.click(
-      await screen.findByRole('button', { name: /Publish as PDF/i }),
+      await screen.findByRole('button', { name: /Generate PDF/i }),
     );
 
     // The publish error is shown in the dedicated error block
@@ -631,7 +631,7 @@ describe('Report > Publish as PDF', () => {
     });
     // Button still present (recoverable error, not a hard fail).
     expect(
-      screen.queryByRole('button', { name: /Publish as PDF/i }),
+      screen.queryByRole('button', { name: /Generate PDF/i }),
     ).not.toBeNull();
   });
 });/**

@@ -5,7 +5,7 @@
  * ----------
  * The LLM emits ``[paper:N]`` markers verbatim in the report
  * body (e.g. ``Plasma p-tau217 is a sensitive marker [paper:19].``)
- * so the backend's regex (``\[paper:(\d+)\]``) can extract
+ * so the backend's regex (``\\[paper:(\\d+)\]``) can extract
  * the citation list. The same marker also drives the
  * bibliography ordering (Vancouver style: numbered by
  * first-citation-order in the text).
@@ -207,4 +207,116 @@ export function linkifyCitationMarkers(
  */
 export function citationAnchorId(citationIndex1Based: number): string {
   return `citation-${citationIndex1Based}`;
+}
+
+/**
+ * Wrap DOI URLs in a citation string with markdown links.
+ *
+ * The backend's citation formatter (see ``app/domain/
+ * entities/citation.py::Citation.__str__``) emits each
+ * citation as a flat string ending in
+ * ``https://doi.org/{doi}`` -- e.g.
+ *
+ *     "Smith J, Jones K. Plasma p-tau217 as a marker.
+ *      https://doi.org/10.1234/abc.123"
+ *
+ * ReactMarkdown renders that as plain text. We want the
+ * DOI segment to be a clickable link so the user can jump
+ * to the paper's landing page. This helper rewrites the
+ * DOI substring into a markdown link, leaving the rest
+ * of the citation untouched.
+ *
+ * Link text choice
+ * ----------------
+ * The link text is the bare DOI (``10.1234/abc.123``)
+ * rather than the full URL. Modern biomedical convention
+ * (Nature, PLOS, eLife) is to render DOIs as
+ * ``doi:10.1234/abc.123`` or just ``10.1234/abc.123`` --
+ * not as the full ``https://doi.org/...`` URL. The full
+ * URL is still in the ``href`` so clicking takes the user
+ * to the right place; only the visible text is shorter.
+ *
+ * Edge cases
+ * ----------
+ * - DOI already wrapped in ``[text](...)`` markdown link:
+ *   skipped (the regex looks for ``https://doi.org/``,
+ *   not for ``[doi:...]``).
+ * - Multiple DOIs in the same string (unusual but possible):
+ *   each gets its own link.
+ * - No DOI in the string: returned unchanged.
+ */
+export function linkifyCitationDoi(citation: string): string {
+  // The backend emits ``https://doi.org/{doi}`` -- we look
+  // for the literal prefix and capture the DOI portion
+  // along with any trailing punctuation.
+  //
+  // The captured groups are:
+  //   - doiSuffix: bare DOI (possibly with trailing ``.``
+  //     or ``,`` -- sentence punctuation we want to keep
+  //     in the rendered output, not inside the link target).
+  //   - trailing: any trailing punctuation that was outside
+  //     the DOI URL but should stay outside the markdown
+  //     link.
+  //
+  // We need to preserve trailing punctuation OUTSIDE the
+  // link target so the rendered text reads correctly
+  // ("...https://doi.org/10.1234/abc.123." -- the period
+  // is sentence-ending, not part of the DOI).
+  // Match the URL body up to the next whitespace or
+  // closing paren. The character class intentionally
+  // INCLUDES ``.`` and ``/`` because the DOI itself
+  // contains dots (``10.1234/abc.456``) and slashes. It
+  // EXCLUDES whitespace, commas, semicolons, closing
+  // parens, and ``]`` (a common markdown link-target
+  // boundary in the source string).
+  //
+  // Trailing sentence-ending punctuation (``.``, ``,``,
+  // ``;``) is captured separately so the rendered
+  // citation retains it OUTSIDE the link target. The
+  // replacement function strips any leading ``.``/``,``/
+  // ``;`` that the URL body captured (defensive -- the
+  // DOI itself can end in ``.`` if a future refactor
+  // changes the backend's ``Citation.__str__`` shape).
+  const DOI_URL_RE =
+    /(https:\/\/doi\.org\/[^,\s;)\]]+)([.,;]*)/g;
+  return citation.replace(
+    DOI_URL_RE,
+    (_match, doiUrlWithPath: string, trailing: string) => {
+      // The greedy regex sometimes slurps the trailing
+      // ``.``/``,``/``;`` into the URL body (the second
+      // capture group is empty). Strip any trailing
+      // punctuation from the URL body and re-emit it
+      // AFTER the link so the rendered text reads
+      // "...[10.1234/abc.789](url).".
+      //
+      // Example: ``https://doi.org/10.1234/abc.789.`` is
+      // matched as group1="https://doi.org/10.1234/abc.789.",
+      // group2="". We strip the trailing ``.`` and re-emit it
+      // after the link. ``https://doi.org/10.1234/abc.111,``
+      // behaves the same way (comma is sentence-ending
+      // punctuation in the test citation).
+      //
+      // Defensive: a period at the end of a DOI URL is
+      // never valid -- ``https://doi.org/10.1234/abc.123.``
+      // (note the trailing period in the path) is not a
+      // working URL; the period is sentence-ending.
+      const TRAILING_PUNCT_RE = /[.,;]+$/;
+      const urlTrailingMatch = doiUrlWithPath.match(TRAILING_PUNCT_RE);
+      let doiUrlClean = doiUrlWithPath;
+      let recoveredTrailing = "";
+      if (urlTrailingMatch) {
+        doiUrlClean = doiUrlWithPath.slice(0, -urlTrailingMatch[0].length);
+        recoveredTrailing = urlTrailingMatch[0];
+      }
+      // The link text is the bare DOI (without the
+      // ``https://doi.org/`` prefix). Modern biomedical
+      // convention (Nature, PLOS, eLife) renders DOIs as
+      // ``doi:10.1234/abc.123`` or just ``10.1234/abc.123``
+      // -- not as the full URL. The full URL is still in
+      // the ``href`` so clicking takes the user to the
+      // right place; only the visible text is shorter.
+      const doiText = doiUrlClean.replace(/^https:\/\/doi\.org\//, "");
+      return `[${doiText}](${doiUrlClean})${recoveredTrailing}${trailing}`;
+    },
+  );
 }

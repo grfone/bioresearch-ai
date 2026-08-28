@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   citationAnchorId,
+  linkifyCitationDoi,
   linkifyCitationMarkers,
 } from "./citationLink";
 
@@ -303,5 +304,101 @@ describe("linkifyCitationMarkers -- grouped citations", () => {
     expect(out).not.toContain("[paper:1]");
     expect(out).not.toContain("[paper:5]");
     expect(out).not.toContain("[paper:15]");
+  });
+});describe("linkifyCitationDoi", () => {
+  /**
+   * The backend's ``Citation.__str__`` emits each citation
+   * ending in ``https://doi.org/{doi}``. This helper turns
+   * that DOI URL into a markdown link, leaving the rest of
+   * the citation text alone. The user's report page calls
+   * the result through ``renderCitationWithDoiLink`` to
+   * convert the markdown link into a real anchor element.
+   */
+
+  it("wraps a DOI URL in a markdown link", () => {
+    expect(
+      linkifyCitationDoi(
+        "Smith J, Jones K. Plasma p-tau217 as a marker. https://doi.org/10.1234/abc.123",
+      ),
+    ).toBe(
+      "Smith J, Jones K. Plasma p-tau217 as a marker. " +
+        "[10.1234/abc.123](https://doi.org/10.1234/abc.123)",
+    );
+  });
+
+  it("uses bare DOI as the link text (not the full URL)", () => {
+    // Modern biomedical convention: render the DOI as
+    // ``10.1234/abc.123``, not the full ``https://doi.org/...`` URL.
+    const out = linkifyCitationDoi(
+      "title here. https://doi.org/10.1234/abc.456",
+    );
+    expect(out).toContain("[10.1234/abc.456](");
+    expect(out).toContain("https://doi.org/10.1234/abc.456");
+    // The link text is the bare DOI -- the URL appears only
+    // inside the parentheses (the ``href``).
+    expect(out).not.toContain("[https://doi.org/10.1234/abc.456](");
+  });
+
+  it("preserves a trailing period outside the link target", () => {
+    // The DOI is sentence-ending -- the period is NOT part
+    // of the DOI. The link target should be the bare DOI;
+    // the period stays outside the ``[text](url)`` link.
+    expect(
+      linkifyCitationDoi(
+        "Smith J. Plasma marker. https://doi.org/10.1234/abc.789.",
+      ),
+    ).toBe(
+      "Smith J. Plasma marker. " +
+        "[10.1234/abc.789](https://doi.org/10.1234/abc.789).",
+    );
+  });
+
+  it("preserves a trailing comma outside the link target", () => {
+    expect(
+      linkifyCitationDoi(
+        "title here. https://doi.org/10.1234/abc.111, see also ref [3]",
+      ),
+    ).toBe(
+      "title here. " +
+        "[10.1234/abc.111](https://doi.org/10.1234/abc.111), see also ref [3]",
+    );
+  });
+
+  it("returns the input unchanged when no DOI URL is present", () => {
+    // The helper must be a no-op for citations without a
+    // DOI -- those happen when the paper has no DOI recorded
+    // (rare, but possible for older papers or non-indexed
+    // sources).
+    const text = "Smith J. Plasma marker. (no DOI)";
+    expect(linkifyCitationDoi(text)).toBe(text);
+  });
+
+  it("handles a DOI with a long suffix (multi-segment paths)", () => {
+    // Some publishers include sub-paths: ``10.1234/abc.123/supp-1``.
+    // The regex stops at whitespace and closing paren, so it
+    // captures the full suffix.
+    expect(
+      linkifyCitationDoi(
+        "title here. https://doi.org/10.1234/abc.456/v2/suppl",
+      ),
+    ).toBe(
+      "title here. " +
+        "[10.1234/abc.456/v2/suppl](https://doi.org/10.1234/abc.456/v2/suppl)",
+    );
+  });
+
+  it("handles multiple DOIs in the same citation string", () => {
+    // Some citations compare two papers and include both
+    // DOIs inline. Each gets its own link.
+    expect(
+      linkifyCitationDoi(
+        "title. https://doi.org/10.1/aaa ; https://doi.org/10.2/bbb",
+      ),
+    ).toContain("[10.1/aaa](https://doi.org/10.1/aaa)");
+    expect(
+      linkifyCitationDoi(
+        "title. https://doi.org/10.1/aaa ; https://doi.org/10.2/bbb",
+      ),
+    ).toContain("[10.2/bbb](https://doi.org/10.2/bbb)");
   });
 });

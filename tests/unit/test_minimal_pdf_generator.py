@@ -326,3 +326,264 @@ def test_generate_handles_long_summary_without_crashing(
     pdf = generator.generate(_make_report(text))
     assert pdf.startswith(b"%PDF-1.4")
     assert pdf.endswith(b"%%EOF\n")
+
+
+"""
+Tests for the new PDF format additions.
+
+Background
+----------
+The ``MinimalPDFGenerator`` historically embedded
+``[paper:N]`` markers from the LLM output verbatim in the
+PDF. That made the rendered document look like raw
+markdown -- citations like ``...research cohorts [paper:3,
+paper:13].`` appeared as bracketed markers in the prose,
+with the actual citation list at the bottom of the page.
+
+The fix: strip ``[paper:N]`` markers from the prose before
+rendering. The citations list still provides the reader-to-
+paper mapping -- the markers in the prose were redundant.
+
+Tests pin:
+1. Standalone ``[paper:N]`` markers are stripped.
+2. Grouped ``[paper:N, paper:M, ...]`` markers are stripped.
+3. Malformed ``[paper:abc]`` markers are NOT stripped
+   (they pass through unchanged; this is intentional).
+4. Trailing whitespace and punctuation are preserved
+   cleanly (no double spaces or dangling brackets).
+5. The H1 title line is extracted as the page heading
+   instead of appearing inline in the body.
+6. The citations list still shows up at the bottom of
+   the page (so the reader can find the references).
+"""
+
+
+class TestPDFPaperMarkerStrip:
+    """Pin the ``_strip_paper_markers`` helper."""
+
+    def test_strips_standalone_marker(self, generator):
+        """A single ``[paper:N]`` is removed cleanly.
+
+        ``"cohorts [paper:3]."`` becomes ``"cohorts."`` --
+        the surrounding text and the trailing period are
+        preserved.
+        """
+        assert generator._strip_paper_markers(
+            "cohorts [paper:3]."
+        ) == "cohorts."
+
+    def test_strips_grouped_marker(self, generator):
+        """``[paper:N, paper:M]`` is removed cleanly."""
+        assert generator._strip_paper_markers(
+            "cohorts [paper:3, paper:13]."
+        ) == "cohorts."
+
+    def test_strips_three_way_group(self, generator):
+        """``[paper:N, paper:M, paper:K]`` is removed cleanly.
+
+        A real-world example: the LLM often emits three or
+        four references in a single group when multiple
+        papers support one claim.
+        """
+        assert generator._strip_paper_markers(
+            "cohorts [paper:3, paper:13, paper:19]."
+        ) == "cohorts."
+
+    def test_does_not_strip_malformed_marker(self, generator):
+        """``[paper:abc]`` (non-numeric) passes through unchanged.
+
+        The regex requires ``\d+``, so non-numeric content
+        is never matched. ``[paper:abc]`` is preserved
+        exactly as the LLM wrote it. This is intentional --
+        we shouldn't silently rewrite malformed output.
+        """
+        assert generator._strip_paper_markers(
+            "cohorts [paper:abc]."
+        ) == "cohorts [paper:abc]."
+
+    def test_preserves_punctuation_around_stripped_marker(self, generator):
+        """Trailing punctuation (``.,``, ``;``, ``:``) stays
+        in place after the marker is stripped.
+
+        Before stripping: ``"cohorts [paper:3]; see ref [4]."``
+        After stripping:  ``"cohorts; see ref [4]."``
+        """
+        assert generator._strip_paper_markers(
+            "cohorts [paper:3]; see ref [4]."
+        ) == "cohorts; see ref [4]."
+
+    def test_collapses_double_spaces_left_by_strip(self, generator):
+        """When a marker was surrounded by spaces (``"a [paper:3] b"``)
+        the strip would leave ``"a  b"`` -- collapse to ``"a b"``.
+        """
+        assert generator._strip_paper_markers(
+            "a [paper:3] b"
+        ) == "a b"
+
+    def test_preserves_newlines(self, generator):
+        """The strip operates within lines and doesn't merge
+        paragraphs. Newlines between paragraphs are kept.
+        """
+        assert generator._strip_paper_markers(
+            "first [paper:3]\nsecond [paper:4]"
+        ) == "first\nsecond"
+
+    def test_no_markers_is_noop(self, generator):
+        """A string with no ``[paper:N]`` markers is returned
+        unchanged (modulo whitespace collapsing, which
+        shouldn't trigger here because there's no marker
+        for it to leave dangling spaces around).
+        """
+        assert generator._strip_paper_markers(
+            "Plain text with no markers."
+        ) == "Plain text with no markers."
+
+
+class TestPDFReportTitle:
+    """Pin the title-extraction logic in ``generate``."""
+
+    def test_h1_heading_appears_as_page_title(self, generator):
+        """A body starting with ``# Some Title`` puts that
+        title in the page heading, NOT inline in the body.
+        """
+        from tests.unit.test_minimal_pdf_generator import (
+            _make_report,
+        )
+
+        body = "# Tau Biomarkers in AD: A Synthesis\n\nFull body here."
+        pdf = generator.generate(_make_report(body))
+        # The title appears in the content stream (PDF
+        # escapes special chars but plain ASCII passes
+        # through unchanged).
+        assert b"Tau Biomarkers in AD: A Synthesis" in pdf
+
+    def test_title_line_not_repeated_in_body(self, generator):
+        """The title is shown ONCE at the top, not twice
+        (once as the heading and once inline in the body).
+        """
+        from tests.unit.test_minimal_pdf_generator import (
+            _make_report,
+        )
+
+        body = "# My Title\n\nFirst paragraph."
+        pdf = generator.generate(_make_report(body))
+        # Count occurrences of "My Title" in the PDF -- should
+        # be exactly 1.
+        assert pdf.count(b"My Title") == 1
+
+    def test_falls_back_to_generic_label_when_no_h1(self, generator):
+        """If the body has no leading ``# `` heading, the
+        page heading is the generic ``Biomedical Research
+        Report`` label (same behaviour as before the change).
+        """
+        from tests.unit.test_minimal_pdf_generator import (
+            _make_report,
+        )
+
+        body = "Just a body with no title heading."
+        pdf = generator.generate(_make_report(body))
+        # The generic title appears; the body content also
+        # appears.
+        assert b"Biomedical Research Report" in pdf
+        assert b"Just a body with no title heading." in pdf
+
+
+class TestPDFCitationSectionStillWorks:
+    """Pin that the citations list survives the strip.
+
+    The whole point of stripping markers from the prose is
+    that the citations list is the canonical reader-to-
+    paper mapping. If the strip accidentally nuked the
+    citations section too, the reader would have no way to
+    look up the references -- so this test guards against
+    that regression.
+    """
+
+    def test_citations_list_present_in_pdf(self, generator):
+        """The numbered citations list at the bottom of the
+        page is still rendered.
+        """
+        from tests.unit.test_minimal_pdf_generator import (
+            _make_report,
+        )
+
+        body = "Cohort study with citation [paper:1]."
+        pdf = generator.generate(_make_report(body))
+        # The fixture's citation uses paper.title="Tau
+        # phosphorylation in Alzheimer's disease" which
+        # appears in the APA-formatted citation list. The
+        # number "1." prefixes the entry.
+        assert b"1." in pdf
+        assert b"Tau phosphorylation" in pdf
+
+
+class TestPDFLimitationsAndFutureWorkStripped:
+    """Pin that the Limitations / Future Work lists also
+    have their markers stripped."""
+
+    def test_limitations_marker_stripped(self, generator):
+        """A limitation with ``[paper:N]`` renders without
+        the marker.
+        """
+        from app.domain.entities.author import Author
+        from app.domain.entities.journal import Journal
+        from app.domain.entities.paper import Paper
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_report import (
+            ResearchReport,
+        )
+
+        paper = Paper(
+            title="P",
+            authors=[Author(first_name="A", last_name="B")],
+            journal=Journal(name="J"),
+            year=2024,
+            abstract="",
+            doi="10.1/x",
+        )
+        report = ResearchReport(
+            summary=Summary(body="body", papers_used=[paper]),
+            citations=[],
+            limitations=[
+                "Sample size is small [paper:3]."
+            ],
+            future_work=[],
+            metadata={},
+        )
+        pdf = generator.generate(report)
+        # The marker is gone; the surrounding prose is kept.
+        assert b"Sample size is small." in pdf
+        assert b"[paper:3]" not in pdf
+
+    def test_future_work_marker_stripped(self, generator):
+        """A future-work bullet with ``[paper:N]`` renders
+        without the marker.
+        """
+        from app.domain.entities.author import Author
+        from app.domain.entities.journal import Journal
+        from app.domain.entities.paper import Paper
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_report import (
+            ResearchReport,
+        )
+
+        paper = Paper(
+            title="P",
+            authors=[Author(first_name="A", last_name="B")],
+            journal=Journal(name="J"),
+            year=2024,
+            abstract="",
+            doi="10.1/x",
+        )
+        report = ResearchReport(
+            summary=Summary(body="body", papers_used=[paper]),
+            citations=[],
+            limitations=[],
+            future_work=[
+                "Replicate in larger cohort [paper:5]."
+            ],
+            metadata={},
+        )
+        pdf = generator.generate(report)
+        assert b"Replicate in larger cohort." in pdf
+        assert b"[paper:5]" not in pdf

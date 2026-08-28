@@ -67,8 +67,10 @@ import type { ReportResponse } from '../models/report';
 import { hasLimitations, hasFutureWork } from '../models/report';
 import {
   citationAnchorId,
+  linkifyCitationDoi,
   linkifyCitationMarkers,
 } from '../lib/citationLink';
+import { renderCitationWithDoiLink } from '../lib/citationRender';
 import { FileText, RefreshCw, AlertCircle, Lightbulb, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -584,7 +586,7 @@ export const Report: React.FC = () => {
                 aria-busy={publishing}
             >
               <Download size={16}/>
-              {publishing ? 'Publishing…' : 'Publish as PDF'}
+              {publishing ? 'Generating…' : 'Generate PDF'}
             </button>
 
             {downloadUrl && (
@@ -668,7 +670,9 @@ export const Report: React.FC = () => {
                         <span className="text-primary font-semibold mr-2">
                           [{idx + 1}]
                         </span>
-                        {citation}
+                        {renderCitationWithDoiLink(
+                          linkifyCitationDoi(citation)
+                        )}
                       </li>
                   ))}
                 </ul>

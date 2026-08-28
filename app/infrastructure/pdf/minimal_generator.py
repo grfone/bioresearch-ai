@@ -112,19 +112,44 @@ class MinimalPDFGenerator(PDFGenerator):
     """
 
     def generate(self, report: ResearchReport) -> bytes:
-        text = report.summary.body.strip()
-        if not text:
+        raw_text = report.summary.body.strip()
+        if not raw_text:
             raise ValueError(
                 "Cannot render an empty report as PDF. The report's "
                 "summary body is empty."
             )
+
+        # Extract the report title from the first ``# `` heading
+        # line, mirroring the React UI's ``reportTitle``
+        # derivation in ``frontend/src/pages/Report.tsx``. The
+        # LLM is prompted to emit a top-level heading at the
+        # very start of the body (e.g. ``# Tau Biomarkers in
+        # Alzheimer's Disease: A Synthesis of Recent Evidence``)
+        # -- if the heading is missing, fall back to the
+        # generic label.
+        report_title = "Biomedical Research Report"
+        body_lines = raw_text.split("\n")
+        for line in body_lines:
+            if line.startswith("# "):
+                report_title = line[2:].strip()
+                break
+
+        # Strip the title line from the body so we don't print it
+        # twice (once as the page heading, once inline in the
+        # Executive Summary section).
+        if any(line.startswith("# ") for line in body_lines):
+            title_idx = next(
+                i for i, line in enumerate(body_lines) if line.startswith("# ")
+            )
+            body_lines = body_lines[title_idx + 1 :]
+        text = self._strip_paper_markers("\n".join(body_lines).strip())
 
         # Step 1: collect the stream of text lines that will be
         # drawn on the page. We flatten the structured report
         # into a list of (size_pt, text) tuples -- one per line.
         # Section headings get a larger font.
         page_lines: list[tuple[int, str]] = []
-        page_lines.append((_TITLE_FONT_SIZE_PT, "Biomedical Research Report"))
+        page_lines.append((_TITLE_FONT_SIZE_PT, report_title))
         page_lines.append((_BODY_FONT_SIZE_PT, ""))  # spacer
 
         # --- Summary section ---
@@ -139,8 +164,10 @@ class MinimalPDFGenerator(PDFGenerator):
             page_lines.append((_SECTION_FONT_SIZE_PT, "Citations"))
             page_lines.append((_BODY_FONT_SIZE_PT, ""))
             for i, citation in enumerate(report.citations, start=1):
-                citation_text = str(citation)
-                page_lines.append((_BODY_FONT_SIZE_PT, f"{i}. {citation_text}"))
+                citation_text = self._strip_paper_markers(str(citation))
+                page_lines.append(
+                    (_BODY_FONT_SIZE_PT, f"{i}. {citation_text}")
+                )
             page_lines.append((_BODY_FONT_SIZE_PT, ""))
 
         # --- Limitations section ---
@@ -148,7 +175,8 @@ class MinimalPDFGenerator(PDFGenerator):
             page_lines.append((_SECTION_FONT_SIZE_PT, "Limitations"))
             page_lines.append((_BODY_FONT_SIZE_PT, ""))
             for lim in report.limitations:
-                page_lines.append((_BODY_FONT_SIZE_PT, f"- {lim}"))
+                clean_lim = self._strip_paper_markers(lim)
+                page_lines.append((_BODY_FONT_SIZE_PT, f"- {clean_lim}"))
             page_lines.append((_BODY_FONT_SIZE_PT, ""))
 
         # --- Future Work section ---
@@ -156,7 +184,8 @@ class MinimalPDFGenerator(PDFGenerator):
             page_lines.append((_SECTION_FONT_SIZE_PT, "Future Work"))
             page_lines.append((_BODY_FONT_SIZE_PT, ""))
             for fw in report.future_work:
-                page_lines.append((_BODY_FONT_SIZE_PT, f"- {fw}"))
+                clean_fw = self._strip_paper_markers(fw)
+                page_lines.append((_BODY_FONT_SIZE_PT, f"- {clean_fw}"))
 
         # Step 2: lay out the lines on the page. PDF coordinates are
         # bottom-up (origin at bottom-left). We measure from the
@@ -355,6 +384,69 @@ class MinimalPDFGenerator(PDFGenerator):
             else:
                 out.append(ch)
         return "".join(out)
+
+    @staticmethod
+    def _strip_paper_markers(text: str) -> str:
+        """
+        Remove ``[paper:N]`` citation markers from text for
+        PDF rendering.
+
+        Why
+        ---
+        The LLM emits ``[paper:N]`` markers inline in the
+        report body so the backend's regex
+        (``\\[paper:(\\d+)\\]``) can extract citations and
+        the frontend's ``linkifyCitationMarkers`` can render
+        them as clickable superscripts. In the PDF the
+        markers are visual noise -- the citations list at
+        the bottom of the page already provides the
+        reader-to-paper mapping, so showing ``[paper:3,
+        paper:13]`` in the prose is redundant.
+
+        The marker form we strip
+        ------------------------
+        - Standalone: ``[paper:N]`` -- deleted entirely.
+          The ``[`` and ``]`` would otherwise leave
+          dangling brackets in the prose ("...research
+          cohorts [ ].").
+        - Grouped: ``[paper:N, paper:M, ...]`` -- deleted
+          entirely for the same reason. We do NOT replace
+          with ``[N, M]`` because (a) it adds visual noise
+          in a printed document where superscripts aren't
+          available, and (b) the reader sees the numbered
+          citations list at the bottom of the page, which
+          is the natural place to look up references.
+
+        Edges
+        -----
+        - The strip operates per-paragraph (split on ``\\n``)
+          so a marker at the very end of a paragraph is
+          caught.
+        - Malformed markers (e.g. ``[paper:abc]``) pass
+          through unchanged -- the regex requires
+          ``\\d+``, so non-numeric content is never
+          matched.
+        - Double spaces left after a marker removal are
+          collapsed to a single space -- ``"cohorts [paper:3]
+          ."`` becomes ``"cohorts ."`` (single space + period).
+        """
+        import re
+        # Match the standalone ``[paper:N]`` form. The
+        # greedy match captures up to ``]``.
+        text = re.sub(r"\s*\[paper:\d+\]", "", text)
+        # Match the grouped form ``[paper:N, paper:M, ...]``
+        # -- the regex captures the whole bracket group
+        # including any spaces inside. We strip trailing
+        # spaces before the bracket so ``"... [paper:N,
+        # paper:M] ."`` collapses cleanly.
+        text = re.sub(r"\s*\[paper:\d+(?:,\s*paper:\d+)+\]", "", text)
+        # Collapse runs of whitespace that the marker
+        # removal may have left behind (``"... [paper:3]
+        # ."`` -> ``"...  ."`` -- double space before the
+        # period). Limit to single spaces so newlines and
+        # paragraph breaks are preserved.
+        text = re.sub(r" +", " ", text)
+        return text
 
     @staticmethod
     def _wrap_text(text: str, font_size_pt: int) -> list[str]:
