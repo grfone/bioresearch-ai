@@ -30,12 +30,14 @@ Spec references
   to exist in every PDF reader; no font embedding required.
 
 Limitations
------------
+----------
 This generator is intentionally minimal. It handles ASCII text
-in Helvetica and produces one page (auto-extended for long
-content -- we do not currently implement multi-page flow; the
-report fits comfortably on a single page in practice for the
-20-paper summary we generate).
+in Helvetica and produces one or more pages (auto-extended for
+long content -- we don't currently implement widow/orphan control
+or keep-with-next; the layout simply emits a fresh page when the
+y-coordinate crosses the bottom margin). A real-world report
+body of 2-4 paragraphs plus a short citations list typically
+fits in 2 pages; long reports (10+ papers) may need 3-4.
 
 To extend: add a streaming text-layout loop that issues
 multiple ``BT...ET`` blocks per page, plus a ``/Pages`` array
@@ -187,24 +189,49 @@ class MinimalPDFGenerator(PDFGenerator):
                 clean_fw = self._strip_paper_markers(fw)
                 page_lines.append((_BODY_FONT_SIZE_PT, f"- {clean_fw}"))
 
-        # Step 2: lay out the lines on the page. PDF coordinates are
-        # bottom-up (origin at bottom-left). We measure from the
-        # top down and flip y = page_height - top_offset.
-        text_ops: list[str] = []
+        # Step 2: lay out the lines on the page(s). PDF
+        # coordinates are bottom-up (origin at bottom-left).
+        # We measure from the top down and flip
+        # y = page_height - top_offset.
+        #
+        # Multi-page flow: when the next line would cross
+        # the bottom margin, close the current page (its
+        # lines stay in ``pages[-1]``) and start a fresh
+        # page with y reset to the top margin. This is the
+        # simplest possible pagination -- no widow control,
+        # no keep-with-next, no orphans. A real-world report
+        # body of 2-4 paragraphs plus a short citations list
+        # typically fits in 2 pages; long reports (10+ papers)
+        # may need 3-4.
+        #
+        # The result is a list of pages, each a list of
+        # ``BT...ET`` content-stream lines. Step 3 assembles
+        # one PDF content-stream object per page (all
+        # sharing the same font resource).
+        pages: list[list[str]] = [[]]
         y = _PAGE_HEIGHT_PT - _MARGIN_TOP_PT
         for size, line in page_lines:
             if y < _MARGIN_BOTTOM_PT:
-                # Out of vertical space. We don't paginate (see the
-                # module docstring); stop drawing instead. The
-                # remaining content is silently truncated. In
-                # practice a 20-paper report fits comfortably.
-                break
+                # Out of vertical space on this page --
+                # start a fresh page and continue. We don't
+                # break out of the loop: every remaining
+                # ``page_lines`` entry gets a chance to render
+                # on a subsequent page. The number of pages
+                # in the output is whatever's needed to fit
+                # all the content (no silent truncation).
+                pages.append([])
+                y = _PAGE_HEIGHT_PT - _MARGIN_TOP_PT
+            current_page = pages[-1]
             if line == "":
-                # Spacer lines just consume vertical space -- no
-                # glyphs drawn.
+                # Spacer lines just consume vertical space --
+                # no glyphs drawn. The y-decrement still
+                # happens here, so a paragraph break at the
+                # bottom of a page correctly advances y to
+                # the next page (the y < MARGIN_BOTTOM check
+                # above catches it on the next iteration).
                 y -= _BODY_LINE_HEIGHT_PT
                 continue
-            text_ops.append(
+            current_page.append(
                 f"BT /F1 {size} Tf "
                 f"{_MARGIN_LEFT_PT} {y} Td "
                 f"({self._pdf_escape(line)}) Tj ET"
@@ -218,22 +245,22 @@ class MinimalPDFGenerator(PDFGenerator):
         #                     as a binary file)
         #   1 0 obj << ... >> endobj     (catalog)
         #   2 0 obj << ... >> endobj     (pages collection)
-        #   3 0 obj << ... >> endobj     (page)
+        #   3 0 obj << ... >> endobj     (page 1)
         #   4 0 obj << ... >> endobj     (font)
-        #   5 0 obj << ... >> endobj     (content stream)
-        #   xref
-        #   0 6
-        #   0000000000 65535 f
-        #   0000000009 00000 n
+        #   5 0 obj << ... >> endobj     (content stream 1)
+        #   6 0 obj << ... >> endobj     (page 2)
+        #   7 0 obj << ... >> endobj     (content stream 2)
         #   ...
-        #   trailer << ... >>
-        #   startxref
-        #   <byte offset>
-        #   %%EOF
         #
-        # Object numbering: we use 5 objects (catalog, pages,
-        # page, font, content). The xref tracks each one's byte
-        # offset for random-access readers.
+        # Object numbering: catalog (1) + pages (2) + each
+        # page is 2 objects (page dict + content stream).
+        # The font is shared -- defined once as object 4,
+        # referenced by every page's ``/Resources`` dict.
+        #
+        # The xref tracks every object's byte offset for
+        # random-access readers. ``/Size`` in the trailer
+        # is the count of objects plus 1 (for the always-
+        # present free object 0 at the start of the table).
 
         out = io.BytesIO()
         offsets: list[int] = []
@@ -246,44 +273,142 @@ class MinimalPDFGenerator(PDFGenerator):
         offsets.append(out.tell())
         out.write(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
 
-        # Object 2: Pages collection
-        offsets.append(out.tell())
-        out.write(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
+        # Object 2: Pages collection -- one entry per page,
+        # in document order. /Count is the number of pages.
+        # We fill in the page IDs later (after we know the
+        # object numbering), so write a placeholder first
+        # then patch the byte range with the real ID list.
+        page_ids_placeholder_offset = out.tell()
+        offsets.append(page_ids_placeholder_offset)
+        out.write(b"__PAGES_PLACEHOLDER__\nendobj\n")
 
-        # Object 3: Page
+        # Object 3: Font (defined once, shared by every
+        # page's /Resources dict).
+        font_object_id = 3
         offsets.append(out.tell())
         out.write(
-            f"3 0 obj\n"
-            f"<< /Type /Page /Parent 2 0 R "
-            f"/MediaBox [0 0 {_PAGE_WIDTH_PT} {_PAGE_HEIGHT_PT}] "
-            f"/Resources << /Font << /F1 4 0 R >> >> "
-            f"/Contents 5 0 R >>\n"
-            f"endobj\n".encode("latin-1")
-        )
-
-        # Object 4: Font (Helvetica, one of the PDF base 14 fonts
-        # guaranteed to exist in every reader -- no embedding needed)
-        offsets.append(out.tell())
-        out.write(
-            b"4 0 obj\n"
+            b"3 0 obj\n"
             b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
             b"/Encoding /WinAnsiEncoding >>\n"
             b"endobj\n"
         )
 
-        # Object 5: Content stream. Each line is a BT/ET block
-        # positioned in the page.
-        content_bytes = "\n".join(text_ops).encode("latin-1")
-        offsets.append(out.tell())
-        out.write(
-            f"5 0 obj\n<< /Length {len(content_bytes)} >>\nstream\n".encode("latin-1")
-        )
-        out.write(content_bytes)
-        out.write(b"\nendstream\nendobj\n")
+        # Objects 4, 5, 6, 7, ... : alternating page dict +
+        # content stream. Each page is exactly 2 objects
+        # in the PDF. The list of page IDs is needed in the
+        # Pages collection object (object 2), but we don't
+        # know those IDs until AFTER we emit the per-page
+        # objects here. So we wrote object 2 with a
+        # placeholder text earlier and patch it in-place
+        # below with the real ``/Kids`` list.
+        #
+        # Note: ``page_text_ops`` here refers to the PER-PAGE
+        # text ops (a ``list[str]``) -- distinct from the
+        # ``page_lines`` in the layout loop above
+        # (``list[tuple[int, str]]``).
+
+        # Re-emit pages, dropping any trailing empty ones.
+        # An "empty" page is one with zero non-empty text
+        # ops (spacers alone are still effectively empty --
+        # they'd render as a blank page with no text).
+        def _is_non_empty(page: list[str]) -> bool:
+            return any(line.strip() for line in page)
+
+        non_empty_pages = [p for p in pages if _is_non_empty(p)]
+        if not non_empty_pages:
+            # Defensive: if every page is empty (zero content),
+            # force-emit a single placeholder page so the
+            # PDF has at least one page. The placeholder
+            # contains a single text op so the file is a
+            # valid single-page PDF.
+            non_empty_pages = [
+                [
+                    f"BT /F1 {_BODY_FONT_SIZE_PT} Tf "
+                    f"{_MARGIN_LEFT_PT} {_PAGE_HEIGHT_PT - _MARGIN_TOP_PT} Td "
+                    f"({self._pdf_escape('(empty report)')}) Tj ET"
+                ]
+            ]
+
+        page_object_ids: list[int] = []
+        next_object_id = font_object_id + 1
+        for page_text_ops in non_empty_pages:
+            page_obj_id = next_object_id
+            content_obj_id = next_object_id + 1
+            page_object_ids.append(page_obj_id)
+            next_object_id += 2
+
+            # Page dict: references its content stream and
+            # the shared font resource.
+            offsets.append(out.tell())
+            out.write(
+                f"{page_obj_id} 0 obj\n"
+                f"<< /Type /Page /Parent 2 0 R "
+                f"/MediaBox [0 0 {_PAGE_WIDTH_PT} {_PAGE_HEIGHT_PT}] "
+                f"/Resources << /Font << /F1 {font_object_id} 0 R >> >> "
+                f"/Contents {content_obj_id} 0 R >>\n"
+                f"endobj\n".encode("latin-1")
+            )
+
+            # Content stream: the BT/ET ops for this page.
+            content_bytes = "\n".join(page_text_ops).encode("latin-1")
+            offsets.append(out.tell())
+            out.write(
+                f"{content_obj_id} 0 obj\n"
+                f"<< /Length {len(content_bytes)} >>\n"
+                f"stream\n".encode("latin-1")
+            )
+            out.write(content_bytes)
+            out.write(b"\nendstream\nendobj\n")
+
+        # Now patch the Pages collection object with the
+        # real page IDs. The placeholder sits between the
+        # line ``b"__PAGES_PLACEHOLDER__\n"`` (inclusive)
+        # and ``b"\nendobj\n"``. We replace the whole
+        # object in-place by overwriting its bytes.
+        kids_list = " ".join(f"{pid} 0 R" for pid in page_object_ids)
+        pages_object_text = (
+            f"2 0 obj\n"
+            f"<< /Type /Pages /Kids [{kids_list}] "
+            f"/Count {len(page_object_ids)} >>\n"
+            f"endobj\n"
+        ).encode("latin-1")
+
+        # Splice the real Pages object over the placeholder.
+        # The placeholder was written at ``page_ids_placeholder_offset``
+        # with a known fixed length. After the splice, every
+        # object whose offset came AFTER the placeholder will
+        # have shifted by ``len(pages_object_text) -
+        # placeholder_len``. We adjust the offsets list in
+        # place so the xref points to the new positions.
+        placeholder_start = page_ids_placeholder_offset
+        placeholder_len = len(b"__PAGES_PLACEHOLDER__\nendobj\n")
+
+        # Read the tail (everything after the placeholder).
+        out.seek(placeholder_start + placeholder_len)
+        tail = out.read()
+        # Truncate back to just-before-the-placeholder, then
+        # write the real Pages object and the tail. Net effect
+        # is in-place replacement of the placeholder.
+        out.seek(placeholder_start)
+        out.write(pages_object_text)
+        out.write(tail)
+
+        # Compute the size delta and shift every offset that
+        # comes AFTER the placeholder's original end position.
+        # The placeholder's last byte was at
+        # ``placeholder_start + placeholder_len``. Offsets
+        # strictly greater than that need to move by
+        # ``new_total_len - old_total_len``.
+        delta = len(pages_object_text) - placeholder_len
+        for i, off in enumerate(offsets):
+            if off > placeholder_start + placeholder_len - 1:
+                offsets[i] = off + delta
+        out.seek(0, 2)  # seek to end
 
         # xref + trailer
+        total_objects = next_object_id
         xref_offset = out.tell()
-        out.write(b"xref\n0 6\n")
+        out.write(f"xref\n0 {total_objects}\n".encode("latin-1"))
         out.write(b"0000000000 65535 f \n")  # free object 0
         for offset in offsets:
             # PDF spec: each xref entry is exactly 20 bytes --
@@ -292,7 +417,7 @@ class MinimalPDFGenerator(PDFGenerator):
             # newline.
             out.write(f"{offset:010d} 00000 n \n".encode("latin-1"))
         out.write(
-            f"trailer\n<< /Size 6 /Root 1 0 R >>\n"
+            f"trailer\n<< /Size {total_objects} /Root 1 0 R >>\n"
             f"startxref\n{xref_offset}\n"
             f"%%EOF\n".encode("latin-1")
         )

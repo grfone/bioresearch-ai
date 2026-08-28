@@ -35,8 +35,6 @@ Author
 Guillermo Ramajo Fernández
 """
 
-from __future__ import annotations
-
 import io
 
 import pytest
@@ -587,3 +585,242 @@ class TestPDFLimitationsAndFutureWorkStripped:
         pdf = generator.generate(report)
         assert b"Replicate in larger cohort." in pdf
         assert b"[paper:5]" not in pdf
+"""
+Tests for multi-page PDF output.
+
+Background
+----------
+The minimal generator historically produced single-page PDFs
+with content silently truncated when the body exceeded the
+available vertical space (the no-pagination limitation).
+This was acceptable when reports were short (1-2 paragraphs)
+but breaks for long reports: Limitations and Future Work
+sections would simply be missing from the rendered PDF.
+
+The new layout: when the y-coordinate crosses the bottom
+margin, the current page is closed and a fresh page starts.
+This produces a multi-page PDF where every ``page_lines``
+entry from the layout phase renders somewhere in the
+output.
+
+Tests pin:
+  1. Short reports stay on a single page (no regression
+     for the common case).
+  2. Long reports produce multiple pages with ``/Count``
+     matching the number of pages emitted.
+  3. Every page has a content stream that renders the
+     expected body content (no silent loss).
+  4. Limitations and Future Work sections are present in
+     multi-page output (the original motivation for the
+     fix).
+  5. The xref offsets match the actual byte positions of
+     each object -- a regression here would crash PDF
+     readers.
+"""
+
+import re
+
+from app.domain.entities.author import Author
+from app.domain.entities.journal import Journal
+from app.domain.entities.paper import Paper
+from app.domain.entities.research_report import ResearchReport
+from app.domain.entities.summary import Summary
+
+
+def _paper(title="P", doi="10.1/x") -> Paper:
+    return Paper(
+        title=title,
+        authors=[Author(first_name="A", last_name="B")],
+        journal=Journal(name="J"),
+        year=2024,
+        abstract="",
+        doi=doi,
+    )
+
+
+def _make_custom_report(
+    body: str,
+    citations: list | None = None,
+    limitations: list | None = None,
+    future_work: list | None = None,
+) -> ResearchReport:
+    """Build a report with explicit sections, for multi-page
+    tests. The default ``_make_report`` in the test file
+    only takes a body string; this lets the multi-page
+    tests assert about Limitations/Future Work sections
+    without re-creating the fixture for every case.
+    """
+    paper = _paper()
+    return ResearchReport(
+        summary=Summary(body=body, papers_used=[paper]),
+        citations=citations if citations is not None else [],
+        limitations=limitations if limitations is not None else [],
+        future_work=future_work if future_work is not None else [],
+        metadata={"model": "stub"},
+    )
+
+
+def _count_pages(pdf: bytes) -> int:
+    """Count the number of page dicts in the PDF.
+
+    Walks the ``/Type /Page`` declarations (excluding
+    ``/Type /Pages``). Each page produces exactly one such
+    dict.
+    """
+    return len(re.findall(rb"/Type\s*/Page[^s]", pdf))
+
+
+def _count_kids(pdf: bytes) -> int:
+    """Parse the /Count field from the Pages collection
+    object. Should equal the number of page dicts.
+    """
+    m = re.search(rb"/Count\s+(\d+)", pdf)
+    if not m:
+        return 0
+    return int(m.group(1))
+
+
+class TestPDFSinglePageShortReport:
+    """A short report fits on one page -- no regression
+    vs. the pre-pagination behaviour.
+    """
+
+    def test_short_body_is_single_page(self, generator):
+        pdf = generator.generate(
+            _make_custom_report("Short body.")
+        )
+        assert _count_pages(pdf) == 1
+        assert _count_kids(pdf) == 1
+
+    def test_short_body_keeps_sections_together(self, generator):
+        """Title, exec summary, citations, limitations, and
+        future work all stay on page 1 if everything fits.
+        """
+        body = "Short body."
+        citations = [_paper(title=f"Citation {i}") for i in range(5)]
+        limitations = ["Lim A", "Lim B"]
+        future_work = ["FW A", "FW B"]
+        pdf = generator.generate(
+            _make_custom_report(
+                body,
+                citations=citations,
+                limitations=limitations,
+                future_work=future_work,
+            )
+        )
+        assert _count_pages(pdf) == 1
+        # Each section's content is present somewhere in the PDF.
+        assert b"Biomedical Research Report" in pdf
+        assert b"Executive Summary" in pdf
+        assert b"Citations" in pdf
+        assert b"Limitations" in pdf
+        assert b"Future Work" in pdf
+
+
+class TestPDFMultiPageLongReport:
+    """A long report spans multiple pages."""
+
+    def test_long_body_produces_multiple_pages(self, generator):
+        """A body of ~200 sentences wraps to multiple pages.
+
+        The exact number depends on the wrap width, but for
+        Helvetica 11pt with 1-inch margins on letter paper,
+        the body comfortably exceeds one page.
+        """
+        long_body = "This is a sentence in a long report. " * 200
+        pdf = generator.generate(
+            _make_custom_report(long_body)
+        )
+        page_count = _count_pages(pdf)
+        assert page_count >= 2, (
+            f"long body should produce >= 2 pages; got {page_count}"
+        )
+        assert _count_kids(pdf) == page_count
+
+    def test_every_page_has_a_content_stream(self, generator):
+        """Every page dict must have a ``/Contents`` pointer
+        to a content-stream object. A missed page would
+        leave the reader with a blank page at the end.
+        """
+        long_body = "This is a sentence in a long report. " * 200
+        pdf = generator.generate(
+            _make_custom_report(long_body)
+        )
+        contents_count = len(re.findall(rb"/Contents\s+\d+\s+0\s+R", pdf))
+        page_count = _count_pages(pdf)
+        assert contents_count == page_count, (
+            f"expected {page_count} /Contents pointers; got {contents_count}"
+        )
+
+    def test_limitations_appear_in_long_report(self, generator):
+        """The original motivation for pagination: with a
+        long body, the Limitations section MUST appear in
+        the PDF (previously truncated silently).
+        """
+        long_body = "This is a sentence in a long report. " * 200
+        pdf = generator.generate(
+            _make_custom_report(
+                long_body,
+                limitations=["Real Limitation"],
+            )
+        )
+        assert b"Limitations" in pdf
+        assert b"Real Limitation" in pdf
+
+    def test_future_work_appears_in_long_report(self, generator):
+        """Future Work section MUST appear even when the
+        body is long.
+        """
+        long_body = "This is a sentence in a long report. " * 200
+        pdf = generator.generate(
+            _make_custom_report(
+                long_body,
+                future_work=["Real Future Work"],
+            )
+        )
+        assert b"Future Work" in pdf
+        assert b"Real Future Work" in pdf
+
+    def test_xref_offsets_match_actual_object_positions(self, generator):
+        """The xref entries must point to the actual byte
+        positions of each object in the PDF. A regression
+        here would crash strict readers (the ``xref num N
+        not found`` error from ``pdftotext``).
+        """
+        long_body = "This is a sentence in a long report. " * 200
+        pdf = generator.generate(
+            _make_custom_report(long_body)
+        )
+        # Walk every "N 0 obj" declaration and capture its
+        # byte offset.
+        declared: dict[int, int] = {}
+        for m in re.finditer(rb"(\d+) 0 obj\n", pdf):
+            declared[int(m.group(1))] = m.start()
+        # Parse xref entries and check each one resolves.
+        xref_match = re.search(
+            rb"xref\n0 \d+\n"
+            + b"0000000000 65535 f \n"
+            + rb"(.*?)\ntrailer",
+            pdf,
+            re.DOTALL,
+        )
+        assert xref_match, "no xref table found"
+        xref_lines = xref_match.group(1).strip().split(b"\n")
+        checked = 0
+        for line in xref_lines:
+            parts = line.split()
+            if len(parts) < 3 or parts[2] != b"n":
+                continue
+            offset = int(parts[0])
+            matched = [
+                oid for oid, off in declared.items() if off == offset
+            ]
+            assert matched, (
+                f"xref points to offset {offset} but no object "
+                f"starts there. Declared offsets: "
+                f"{sorted(declared.items())}"
+            )
+            checked += 1
+        assert checked == len(declared), (
+            f"only checked {checked} of {len(declared)} objects"
+        )

@@ -526,3 +526,310 @@ class TestReportGeneratorPromptSanitisationHardening:
             and "unusually long" in r.message
         ]
         assert length_warnings == []
+"""
+Tests for the H1 title directive in the report prompt.
+
+Background
+----------
+The LLM occasionally omits the leading ``# <title>``
+heading, which causes both the PDF generator and the React
+UI to fall back to the generic placeholder
+``"Biomedical Research Report"``. The user-visible bug is
+that every PDF in the system gets the same title.
+
+The fix: add a prominent directive to the user prompt that
+spells out (a) WHY the H1 matters (the PDF/UI extract it
+from the first line), (b) WHAT it should look like
+(5-15 word headline, no prefix), and (c) CONCRETE EXAMPLES
+(three real-world biomedical-report titles).
+
+Tests pin the new directive so a future refactor doesn't
+silently weaken it back to the pre-fix one-liner.
+"""
+
+
+class TestReportGeneratorPromptH1TitleDirective:
+    """Pin the H1-title directive in the report prompt.
+
+    The directive has to be loud enough that the LLM
+    actually emits a H1 (the empirical failure mode we
+    observed pre-fix). The tests below check the prompt
+    contains:
+
+    1. The literal ``# <report title>`` placeholder (the
+       parser's anchor).
+    2. An emphatic instruction that this line is required
+       (e.g. "REQUIRED", "must", "THIS LINE").
+    3. The reason (the PDF/UI extract the title from the
+       first line).
+    4. Length guidance (5-15 words is a useful range --
+       too short loses specificity, too long loses the
+       "headline" feel).
+    5. Concrete worked examples (LLMs respond better to
+       examples than to abstract rules).
+    6. An anti-pattern warning (no prefix, no date, no
+       question mark in the title).
+    """
+
+    def test_user_prompt_contains_h1_placeholder(self):
+        from app.infrastructure.llm.report_generator import (
+            LLMReportGenerator,
+        )
+        from app.domain.entities.author import Author
+        from app.domain.entities.journal import Journal
+        from app.domain.entities.paper import Paper
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+
+        papers = [
+            Paper(
+                title="P1",
+                authors=[Author(first_name="A", last_name="B")],
+                journal=Journal(name="J"),
+                year=2024,
+                abstract="",
+                doi="10.1/x",
+            )
+        ]
+        summary = Summary(body="body", papers_used=papers)
+        prompt = LLMReportGenerator(
+            llm_provider=None, report_mapper=None
+        )._build_prompt(
+            ResearchQuestion(question="What is X?"), summary
+        )
+        user = prompt.user or ""
+        assert "# <report title>" in user, (
+            "report prompt must include the # <report title> "
+            "placeholder so the LLM knows what shape the "
+            "expected output starts with"
+        )
+
+    def test_user_prompt_emphasises_h1_is_required(self):
+        """The directive must be loud enough to overcome the
+        LLM's tendency to skip preamble. An emphatic word
+        like ``REQUIRED``, ``MUST``, or ``THIS LINE`` in
+        the same paragraph as the H1 is the empirical
+        pattern that works.
+        """
+        from app.infrastructure.llm.report_generator import (
+            LLMReportGenerator,
+        )
+        from app.domain.entities.author import Author
+        from app.domain.entities.journal import Journal
+        from app.domain.entities.paper import Paper
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+
+        papers = [
+            Paper(
+                title="P1",
+                authors=[Author(first_name="A", last_name="B")],
+                journal=Journal(name="J"),
+                year=2024,
+                abstract="",
+                doi="10.1/x",
+            )
+        ]
+        summary = Summary(body="body", papers_used=papers)
+        prompt = LLMReportGenerator(
+            llm_provider=None, report_mapper=None
+        )._build_prompt(
+            ResearchQuestion(question="What is X?"), summary
+        )
+        user = prompt.user or ""
+        # Find the H1 section.
+        idx = user.find("# <report title>")
+        assert idx > -1, "H1 placeholder missing from prompt"
+        # Look at the surrounding 800 chars for the emphatic
+        # instruction. "REQUIRED" is the keyword we used.
+        section = user[idx : idx + 800]
+        assert "REQUIRED" in section or "MUST" in section, (
+            f"H1 section must contain an emphatic 'REQUIRED' "
+            f"or 'MUST' to overcome the LLM's tendency to "
+            f"skip preamble; got: {section[:400]!r}"
+        )
+
+    def test_user_prompt_explains_why_h1_matters(self):
+        """Tell the LLM WHY it must emit the H1.
+
+        Without the why, the LLM treats the directive as a
+        stylistic preference and may emit an empty
+        preamble. With the why (``the PDF generator and
+        React UI extract the title from the first line``),
+        the LLM treats it as a hard requirement.
+        """
+        from app.infrastructure.llm.report_generator import (
+            LLMReportGenerator,
+        )
+        from app.domain.entities.author import Author
+        from app.domain.entities.journal import Journal
+        from app.domain.entities.paper import Paper
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+
+        papers = [
+            Paper(
+                title="P1",
+                authors=[Author(first_name="A", last_name="B")],
+                journal=Journal(name="J"),
+                year=2024,
+                abstract="",
+                doi="10.1/x",
+            )
+        ]
+        summary = Summary(body="body", papers_used=papers)
+        prompt = LLMReportGenerator(
+            llm_provider=None, report_mapper=None
+        )._build_prompt(
+            ResearchQuestion(question="What is X?"), summary
+        )
+        user = prompt.user or ""
+        idx = user.find("# <report title>")
+        section = user[idx : idx + 1000]
+        # The why explanation mentions PDF/UI/title-extraction.
+        assert "PDF" in section, (
+            "H1 section must explain WHY (mention the PDF generator) "
+            "so the LLM treats the directive as load-bearing"
+        )
+        assert "title" in section.lower()
+
+    def test_user_prompt_includes_concrete_examples(self):
+        """A few-shot example helps the LLM calibrate. We
+        include three real-world biomedical-report titles
+        so the LLM has a target distribution.
+        """
+        from app.infrastructure.llm.report_generator import (
+            LLMReportGenerator,
+        )
+        from app.domain.entities.author import Author
+        from app.domain.entities.journal import Journal
+        from app.domain.entities.paper import Paper
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+
+        papers = [
+            Paper(
+                title="P1",
+                authors=[Author(first_name="A", last_name="B")],
+                journal=Journal(name="J"),
+                year=2024,
+                abstract="",
+                doi="10.1/x",
+            )
+        ]
+        summary = Summary(body="body", papers_used=papers)
+        prompt = LLMReportGenerator(
+            llm_provider=None, report_mapper=None
+        )._build_prompt(
+            ResearchQuestion(question="What is X?"), summary
+        )
+        user = prompt.user or ""
+        # Three concrete examples -- if a future refactor
+        # drops the examples the LLM has less to anchor on.
+        examples_present = sum(
+            1
+            for example in [
+                "Plasma p-tau217",
+                "Tau Biomarkers",
+                "Blood-Based Biomarkers",
+            ]
+            if example in user
+        )
+        assert examples_present >= 2, (
+            f"H1 section should contain at least 2 of 3 worked "
+            f"examples to anchor the LLM; found {examples_present}"
+        )
+
+    def test_user_prompt_includes_length_guidance(self):
+        """A length range (e.g. 5-15 words) prevents the
+        LLM from emitting either single-word stubs or
+        full-paragraph "headlines" that don't fit a
+        H1.
+        """
+        from app.infrastructure.llm.report_generator import (
+            LLMReportGenerator,
+        )
+        from app.domain.entities.author import Author
+        from app.domain.entities.journal import Journal
+        from app.domain.entities.paper import Paper
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+
+        papers = [
+            Paper(
+                title="P1",
+                authors=[Author(first_name="A", last_name="B")],
+                journal=Journal(name="J"),
+                year=2024,
+                abstract="",
+                doi="10.1/x",
+            )
+        ]
+        summary = Summary(body="body", papers_used=papers)
+        prompt = LLMReportGenerator(
+            llm_provider=None, report_mapper=None
+        )._build_prompt(
+            ResearchQuestion(question="What is X?"), summary
+        )
+        user = prompt.user or ""
+        # The length guidance is a digit range -- look for
+        # "5-15" or similar patterns.
+        import re
+
+        assert re.search(r"\d+\s*-\s*\d+\s*word", user), (
+            "H1 section should include a word-count range "
+            "to bound the title length"
+        )
+
+    def test_user_prompt_lists_anti_patterns(self):
+        """Anti-patterns the LLM should NOT emit in the H1
+        line: number prefixes (``# 1. Title``), date
+        prefixes (``# 2024 Title``), question marks
+        (``# What is X?``). These are common LLM
+        defaults when the H1 directive is unclear.
+        """
+        from app.infrastructure.llm.report_generator import (
+            LLMReportGenerator,
+        )
+        from app.domain.entities.author import Author
+        from app.domain.entities.journal import Journal
+        from app.domain.entities.paper import Paper
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+
+        papers = [
+            Paper(
+                title="P1",
+                authors=[Author(first_name="A", last_name="B")],
+                journal=Journal(name="J"),
+                year=2024,
+                abstract="",
+                doi="10.1/x",
+            )
+        ]
+        summary = Summary(body="body", papers_used=papers)
+        prompt = LLMReportGenerator(
+            llm_provider=None, report_mapper=None
+        )._build_prompt(
+            ResearchQuestion(question="What is X?"), summary
+        )
+        user = prompt.user or ""
+        # Tell the LLM not to prefix with a number, date,
+        # or question mark. These are the common LLM
+        # bad-patterns we want to avoid.
+        assert "DO NOT" in user or "do not" in user, (
+            "prompt should contain a 'DO NOT' or 'do not' "
+            "directive guarding the H1 line"
+        )
