@@ -38,6 +38,8 @@ Guillermo Ramajo Fernández
 
 from __future__ import annotations
 
+import logging
+
 from app.domain.entities.paper import Paper
 from app.domain.entities.research_question import ResearchQuestion
 from app.domain.entities.summary import Summary
@@ -46,6 +48,9 @@ from app.domain.models.prompt import Prompt
 from app.infrastructure.llm.citation_sanitizer import (
     sanitize_citation_markers,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class SummarizePapersUseCase:
@@ -219,7 +224,34 @@ class SummarizePapersUseCase:
             len(papers),
         )
 
+        # Fallback: inject an H1 title if the synthesis LLM
+        # omitted one. Both downstream consumers (the PDF
+        # generator and the React UI) extract the report
+        # title from the first ``# `` line of
+        # ``summary.body``. When the LLM skips the H1 the
+        # user sees the generic ``"Biomedical Research
+        # Report"`` label everywhere -- the fallback derives
+        # a title from the first sentence and prepends it
+        # so the consumers pick it up automatically.
+        #
+        # The fallback is idempotent (no-op when the body
+        # already starts with ``# ``) so the LLM's choice
+        # of title wins when present. See
+        # ``app/infrastructure/llm/title_fallback.py`` for
+        # the derivation algorithm and rationale.
+        from app.infrastructure.llm.title_fallback import (
+            inject_h1_fallback,
+        )
+        body_with_title = inject_h1_fallback(sanitized_text)
+        if body_with_title != sanitized_text:
+            logger.info(
+                "summarize_papers: injected H1 fallback title "
+                "because the synthesis LLM omitted one. "
+                "title=%r",
+                body_with_title.split("\n", 1)[0],
+            )
+
         return Summary(
-            body=sanitized_text,
+            body=body_with_title,
             papers_used=papers,
         )
