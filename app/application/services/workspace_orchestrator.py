@@ -796,7 +796,7 @@ class WorkspaceOrchestrator:
           1. ``session.report`` is not None (the FSM table already
              guarantees this -- PUBLISH is only legal from
              REPORTED, and REPORTED implies report exists).
-          2. ``session.report.summary.text`` is non-empty (otherwise
+          2. ``session.report.summary.body`` is non-empty (otherwise
              the generator raises ``ValueError``).
 
         Audit trail

@@ -43,7 +43,7 @@ def _paper(title: str, doi: str | None = None) -> Paper:
 
 
 def _summary(text: str, papers: list[Paper]) -> Summary:
-    return Summary(text=text, papers_used=papers)
+    return Summary(body=text, papers_used=papers)
 
 
 def _response(text: str = "Body of the report.") -> LLMResponse:

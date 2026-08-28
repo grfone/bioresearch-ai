@@ -157,7 +157,7 @@ def test_validate_report_accepts_known_citation() -> None:
     paper = _paper(pmid="12345")
     v = CitationValidator([paper])
     report = ResearchReport(
-        summary=Summary(text="x", papers_used=[paper]),
+        summary=Summary(body="x", papers_used=[paper]),
         citations=[Citation(paper=paper)],
     )
     v.validate_report(report)
@@ -168,7 +168,7 @@ def test_validate_report_rejects_unknown_citation() -> None:
     foreign = _paper(pmid="99999")
     v = CitationValidator([paper])
     report = ResearchReport(
-        summary=Summary(text="x", papers_used=[paper]),
+        summary=Summary(body="x", papers_used=[paper]),
         citations=[Citation(paper=foreign)],
     )
     with pytest.raises(CitationValidationError):

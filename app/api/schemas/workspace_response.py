@@ -373,8 +373,8 @@ class WorkspaceResponse(BaseModel):
         # Summary
         summary = getattr(session, "summary", None)
         summary_text = None
-        if summary is not None and hasattr(summary, "text"):
-            summary_text = summary.text
+        if summary is not None and hasattr(summary, "body"):
+            summary_text = summary.body
         elif isinstance(summary, str):
             summary_text = summary
 

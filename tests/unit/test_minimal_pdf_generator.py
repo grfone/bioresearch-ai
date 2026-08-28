@@ -59,7 +59,7 @@ from app.infrastructure.pdf.minimal_generator import MinimalPDFGenerator
 def _make_report(text: str) -> ResearchReport:
     """Build a minimal ResearchReport whose summary is ``text``.
 
-    The generator only reads ``summary.text``; citations,
+    The generator only reads ``summary.body``; citations,
     limitations, and future_work can be empty for these tests.
     """
     paper = Paper(
@@ -71,7 +71,7 @@ def _make_report(text: str) -> ResearchReport:
         doi="10.1038/nature14539",
     )
     return ResearchReport(
-        summary=Summary(text=text, papers_used=[paper]),
+        summary=Summary(body=text, papers_used=[paper]),
         citations=[
             Citation(
                 paper=paper,

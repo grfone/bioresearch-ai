@@ -41,7 +41,7 @@ def _paper(title: str = "Some paper") -> Paper:
 
 
 def _summary(text: str = "A summary.") -> Summary:
-    return Summary(text=text, papers_used=[_paper("First paper")])
+    return Summary(body=text, papers_used=[_paper("First paper")])
 
 
 def _build_prompt():
@@ -169,7 +169,7 @@ class TestReportGeneratorPromptMarkersPreserved:
         reader could assume the summary was included.
 
         This test pins the corrected behaviour: the prompt
-        must contain the actual ``summary.text`` string.
+        must contain the actual ``summary.body`` string.
         """
         prompt = _build_prompt()
         # The full summary text we passed in.
@@ -257,7 +257,7 @@ class TestReportGeneratorPromptBibliographySizeConstraint:
             for i in range(1, 4)
         ]
         summary = Summary(
-            text="Plasma p-tau217 is a marker [paper:1].\n",
+            body="Plasma p-tau217 is a marker [paper:1].\n",
             papers_used=three_papers,
         )
         generator = LLMReportGenerator.__new__(LLMReportGenerator)

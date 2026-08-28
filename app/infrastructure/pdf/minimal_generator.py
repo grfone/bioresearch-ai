@@ -112,11 +112,11 @@ class MinimalPDFGenerator(PDFGenerator):
     """
 
     def generate(self, report: ResearchReport) -> bytes:
-        text = report.summary.text.strip()
+        text = report.summary.body.strip()
         if not text:
             raise ValueError(
                 "Cannot render an empty report as PDF. The report's "
-                "summary has no text."
+                "summary body is empty."
             )
 
         # Step 1: collect the stream of text lines that will be

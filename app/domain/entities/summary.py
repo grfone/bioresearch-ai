@@ -42,8 +42,12 @@ class Summary:
 
     Attributes
     ----------
-    text : str
-        The generated summary presented to the researcher.
+    body : str
+        The generated summary presented to the researcher. Named
+        ``body`` rather than ``text`` because the value is the LLM's
+        full report body (with inline ``[paper:N]`` citation
+        markers) -- not a short text snippet. The previous name
+        ``text`` was misleading.
 
     papers_used : list[Paper]
         Scientific publications used to generate the summary.
@@ -52,7 +56,7 @@ class Summary:
         to generate citations or inspect the supporting evidence.
     """
 
-    text: str
+    body: str
 
     papers_used: list[Paper] = field(default_factory=list)
 

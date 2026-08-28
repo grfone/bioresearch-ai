@@ -55,7 +55,7 @@ def _make_state():
     )
     paper = Paper(title="T", pmid="111")
     workspace.add_papers([paper])
-    workspace.set_summary(Summary(text="stub", papers_used=[paper]))
+    workspace.set_summary(Summary(body="stub", papers_used=[paper]))
     workspaces: dict[UUID, ResearchSession] = {workspace.id: workspace}
 
     def _get(wid: UUID) -> ResearchSession:

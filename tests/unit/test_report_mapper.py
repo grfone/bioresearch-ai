@@ -6,7 +6,7 @@ an LLM response + Summary into a ResearchReport.
 
 The mapper must:
   - Build a deduplicated citations list from ``summary.papers_used``
-  - Order citations by first appearance in ``summary.text`` so the
+  - Order citations by first appearance in ``summary.body`` so the
     most-referenced papers are listed first
   - Cap at ``_MAX_CITATIONS`` so the UI stays manageable
   - Surface limitations and future work from the LLM output
@@ -42,7 +42,7 @@ def _paper(title: str, doi: str | None = None) -> Paper:
 
 
 def _summary(text: str, papers: list[Paper]) -> Summary:
-    return Summary(text=text, papers_used=papers)
+    return Summary(body=text, papers_used=papers)
 
 
 def _response(text: str = "Body of the report.") -> LLMResponse:

@@ -52,6 +52,7 @@ Guillermo Ramajo Fernández
 """
 
 import json
+import logging
 import sqlite3
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -72,6 +73,86 @@ from app.domain.entities.research_session import ResearchSession, StateTransitio
 from app.domain.entities.summary import Summary
 from app.domain.interfaces.workspace_repository import WorkspaceRepository
 from app.core.enums.workspace_state import WorkspaceAction
+
+
+logger = logging.getLogger(__name__)
+
+
+def _rewrite_legacy_summary_in_blob(blob: dict) -> bool:
+    """
+    Rewrite ``{"text": ...}`` to ``{"body": ...}`` in a Summary
+    blob if the legacy shape is detected.
+
+    Handles three on-disk shapes:
+
+      1. A standalone Summary JSON (in the ``summary`` column):
+         ``{"text": "...", "papers_used": [...]}``.
+
+      2. A nested Summary inside a ResearchReport, serialised
+         as a dict (newer shape): ``{"summary": {"text": "...",
+         "papers_used": [...]}, "citations": [...], ...}``.
+
+      3. A nested Summary inside a ResearchReport, serialised
+         as a stringified JSON blob (legacy shape):
+         ``{"summary": "{\"text\": \"...\", \"papers_used\": [...]}",
+         "citations": [...], ...}``. The legacy
+         ``_serialize_report`` wrote the Summary blob to JSON
+         once for the inner object and again for the outer
+         envelope, producing this double-encoded shape.
+
+    The function walks the dict and rewrites every Summary it
+    finds in-place. Returns True if any rewrite happened.
+
+    Parameters
+    ----------
+    blob : dict
+        Deserialised JSON from a single column. Mutated in
+        place when the legacy shape is detected.
+
+    Returns
+    -------
+    bool
+        True if any ``text`` -> ``body`` rewrite happened
+        (signalling the caller to persist the blob).
+    """
+    changed = False
+
+    # Case 1: the blob IS a Summary (the ``summary`` column).
+    if isinstance(blob.get("text"), str) and "body" not in blob:
+        blob["body"] = blob.pop("text")
+        changed = True
+
+    # Case 2 & 3: the blob contains a nested Summary under
+    # ``report.summary`` (the ``report`` column) -- either as
+    # a dict (newer shape) or as a stringified JSON blob
+    # (legacy shape).
+    nested = blob.get("summary")
+    if isinstance(nested, dict):
+        # Case 2: nested dict.
+        if (
+            isinstance(nested.get("text"), str)
+            and "body" not in nested
+        ):
+            nested["body"] = nested.pop("text")
+            changed = True
+    elif isinstance(nested, str):
+        # Case 3: nested stringified JSON. Parse, rewrite, and
+        # re-serialise back to a string. The legacy
+        # ``_serialize_report`` produced this double-encoded
+        # shape; the newer ``_serialize_report`` writes the
+        # inner Summary as a real dict, but the on-disk data
+        # has not been migrated yet.
+        try:
+            inner = json.loads(nested)
+        except (json.JSONDecodeError, TypeError):
+            # Malformed inner payload -- leave it alone so the
+            # operator can inspect the broken row.
+            return changed
+        if isinstance(inner, dict) and _rewrite_legacy_summary_in_blob(inner):
+            blob["summary"] = json.dumps(inner, separators=(",", ":"))
+            changed = True
+
+    return changed
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +239,20 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
     def __init__(self, db_path: str = "bioresearch.db") -> None:
         self.db_path = db_path
         self._init_db()
+        # One-shot migration of the legacy Summary schema
+        # (``{"text": ...}`` -> ``{"body": ...}``). The legacy
+        # deserializer still tolerates the old shape, so this is
+        # a "best effort" normalisation -- a future operator
+        # rollback, restoring a backup made before the rename,
+        # will still load cleanly because the deserializer
+        # accepts both shapes.
+        migrated = self._migrate_legacy_summaries()
+        if migrated > 0:
+            logger.info(
+                "workspace_repository: migrated %d legacy Summary "
+                "rows from 'text' to 'body'.",
+                migrated,
+            )
 
     # ------------------------------------------------------------------
     # Schema management
@@ -428,7 +523,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             return "null"
         return json.dumps(
             {
-                "text": summary.text,
+                "body": summary.body,
                 "papers_used": [self._paper_to_dict(p) for p in summary.papers_used],
             }
         )
@@ -818,10 +913,103 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         papers_used = self._deserialize_papers(
             json.dumps(data.get("papers_used", []))
         )
+        # Forward-compatibility: accept the new ``body`` key, fall
+        # back to the legacy ``text`` key if ``body`` is absent.
+        # Existing workspaces (created before the field rename)
+        # have ``text``; new workspaces write ``body``. We log a
+        # warning the first time we see the legacy shape so the
+        # operator knows the migration hasn't run yet (or that
+        # the migration helper should be invoked).
+        if "body" in data:
+            body_value = data["body"]
+        elif "text" in data:
+            logger.warning(
+                "workspace_repository: loading Summary with legacy "
+                "'text' key -- this shape was renamed to 'body' "
+                "by the Summary rename refactor. The legacy "
+                "deserializer still works for backwards "
+                "compatibility, but the migration helper "
+                "(_migrate_legacy_summaries) should be invoked "
+                "to normalise on-disk data."
+            )
+            body_value = data["text"]
+        else:
+            raise KeyError(
+                "Summary JSON contains neither 'body' nor legacy "
+                "'text' key. The on-disk shape is unrecognised."
+            )
         return Summary(
-            text=data["text"],
+            body=body_value,
             papers_used=papers_used,
         )
+
+    def _migrate_legacy_summaries(self) -> int:
+        """
+        One-shot migration: rewrite every workspace row whose
+        ``summary`` JSON has the legacy ``text`` key into the
+        new ``body`` key shape.
+
+        Why a separate migration (not just write the new shape
+        on next update)
+        --------------------------------------------
+        The on-disk Summary JSON is opaque to the rest of the
+        system -- only this repository reads and writes it.
+        The legacy deserializer still accepts the old shape,
+        so leaving rows alone is technically safe. But we
+        prefer to normalise the data eagerly so:
+
+          - Operators inspecting the DB see a single canonical
+            shape.
+          - The "legacy 'text' key" warning in
+            ``_deserialize_summary`` fires only when a backup
+            has been restored, not on the routine path.
+
+        The helper is idempotent: a row already in the new
+        shape (no ``text`` key) is skipped, so calling it
+        twice in a row is a no-op.
+
+        Returns
+        -------
+        int
+            Number of rows rewritten. Zero on a fresh
+            database or after the migration has already run.
+        """
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, summary, report FROM workspaces"
+            )
+            rows = cursor.fetchall()
+            migrated_count = 0
+            for workspace_id, summary_json, report_json in rows:
+                for column, raw in (
+                    ("summary", summary_json),
+                    ("report", report_json),
+                ):
+                    if not raw or raw == "null":
+                        continue
+                    try:
+                        data = json.loads(raw)
+                    except json.JSONDecodeError:
+                        # Malformed payload -- leave it alone so
+                        # the operator can inspect the broken
+                        # row.
+                        continue
+                    if not _rewrite_legacy_summary_in_blob(data):
+                        # Already in the new shape (or not a
+                        # Summary blob at all).
+                        continue
+                    new_raw = json.dumps(data, separators=(",", ":"))
+                    cursor.execute(
+                        f"UPDATE workspaces SET {column} = ? WHERE id = ?",
+                        (new_raw, workspace_id),
+                    )
+                    migrated_count += 1
+            conn.commit()
+            return migrated_count
+        finally:
+            conn.close()
 
     def _deserialize_report(self, report_json: str) -> Optional[ResearchReport]:
         if not report_json or report_json == "null":

@@ -188,10 +188,10 @@ class ReportMapper:
         citation in the final report.
 
         Ordering: papers are sorted by their first appearance in
-        ``summary.text``. This preserves the order the LLM chose to
+        ``summary.body``. This preserves the order the LLM chose to
         mention them, which is the best proxy we have for
         "relevance" without re-running a separate ranking model.
-        Papers that don't appear at all in the summary text (e.g.
+        Papers that don't appear at all in the summary body (e.g.
         the LLM saw them but never cited them) are dropped -- if
         they didn't influence the synthesis, citing them in the
         report would be misleading.
@@ -227,7 +227,7 @@ class ReportMapper:
         #   title-substring matcher found zero citations in production
         #   even with 20 papers loaded, because the LLM rewrote every
         #   title in the synthesis. ``[paper:N]`` markers in the
-        #   summary text bypass the paraphrasing problem: the LLM
+        #   summary body bypass the paraphrasing problem: the LLM
         #   references the paper by its 1-indexed position in the
         #   papers list, which is independent of the title text.
         #
@@ -247,7 +247,7 @@ class ReportMapper:
         if not papers:
             return []
 
-        text = summary.text or ""
+        text = summary.body or ""
 
         import re as _re
 

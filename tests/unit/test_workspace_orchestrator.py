@@ -226,7 +226,7 @@ def _make_report(text: str = "Executive summary.") -> ResearchReport:
     need to satisfy the orchestrator's "report exists" check.
     """
     return ResearchReport(
-        summary=Summary(text=text, papers_used=[]),
+        summary=Summary(body=text, papers_used=[]),
         citations=[],
         limitations=[],
         future_work=[],
@@ -402,7 +402,7 @@ def test_report_uses_workspace_papers_not_research(
 
     # Force a summary (the stub LLM doesn't matter here).
     ws2 = repo.get(ws.id)
-    ws2.set_summary(Summary(text="stub", papers_used=workspace_papers))
+    ws2.set_summary(Summary(body="stub", papers_used=workspace_papers))
     repo.update(ws2)
 
     orch.report(ws.id)
@@ -468,7 +468,7 @@ def test_report_auto_summarises_when_summary_missing(
     assert result.state is WorkspaceState.REPORTED
     assert result.summary is not None
     # The marker proves the summarise step actually ran.
-    assert "auto-summarise-marker" in result.summary.text
+    assert "auto-summarise-marker" in result.summary.body
 
 
 def test_complete_advances_to_completed(

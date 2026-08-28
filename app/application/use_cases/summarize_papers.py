@@ -220,6 +220,6 @@ class SummarizePapersUseCase:
         )
 
         return Summary(
-            text=sanitized_text,
+            body=sanitized_text,
             papers_used=papers,
         )

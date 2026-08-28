@@ -252,7 +252,7 @@ class LLMReportGenerator(ReportGenerator):
         # tautological. We surface the supporting papers and their
         # bibliography instead -- that's the real evidence of
         # credibility. See ADR-009 (planned) for the rationale.
-        summary_text = summary.text or ""
+        summary_text = summary.body or ""
         bibliography_size = len(list(summary.papers_used or []))
         user_prompt = (
             "Create a structured biomedical research report "

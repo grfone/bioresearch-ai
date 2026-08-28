@@ -175,7 +175,7 @@ class ReportResponse(BaseModel):
 
         return cls(
             workspace_id=workspace_id,
-            summary=report.summary.text,
+            summary=report.summary.body,
             citations=[
                 str(citation)
                 for citation in report.citations
