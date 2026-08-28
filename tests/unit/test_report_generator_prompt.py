@@ -292,3 +292,81 @@ class TestReportGeneratorPromptBibliographySizeConstraint:
             "to cite papers outside the bibliography; found: "
             + repr(user)
         )
+
+
+class TestReportGeneratorPromptEmptyBodyGuard:
+    """Pin the ``summary.body or ""`` fallback so a literal
+    ``None`` or empty body never leaks the string ``"None"``
+    into the LLM prompt.
+
+    Why this matters: the prompt builder uses f-string
+    interpolation to embed ``{summary_text}`` directly. If
+    ``summary_text`` were ``None``, the f-string would
+    silently coerce to the string ``"None"`` and the LLM
+    would see a literal token that means nothing. The
+    ``or ""`` fallback in ``_build_prompt`` is load-bearing.
+
+    These tests pin both edge cases:
+      - ``Summary(body='')`` -> empty context, no leak.
+      - ``Summary(body=None)`` -> empty context, no leak.
+    """
+
+    def test_empty_body_produces_empty_context_no_none_leak(self):
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+        summary = Summary(body="", papers_used=[])
+        prompt = LLMReportGenerator._build_prompt(
+            ResearchQuestion(question="What is X?"), summary,
+        )
+        user = prompt.user or ""
+        assert "None" not in user, (
+            "report prompt must not contain the literal "
+            "string 'None' when summary.body is empty; the "
+            "`summary.body or \"\"` fallback should produce an "
+            "empty context instead. Found: " + repr(user[:300])
+        )
+
+    def test_none_body_does_not_leak_into_prompt(self):
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+        # ``Summary.body`` is typed ``str`` but the dataclass
+        # is ``slots=True, frozen=True`` -- we have to go
+        # around the type checker for this test, which is
+        # exactly the situation the ``or ""`` guard handles.
+        summary = Summary(body=None, papers_used=[])  # type: ignore[arg-type]
+        prompt = LLMReportGenerator._build_prompt(
+            ResearchQuestion(question="What is X?"), summary,
+        )
+        user = prompt.user or ""
+        assert "None" not in user, (
+            "report prompt must not contain the literal "
+            "string 'None' even if Summary.body is None at "
+            "runtime. The `summary.body or \"\"` fallback is "
+            "load-bearing for this case. Found: " + repr(user[:300])
+        )
+
+    def test_normal_body_is_embedded_verbatim(self):
+        """Pin the happy path so a future refactor that
+        accidentally drops the body from the prompt gets
+        caught immediately. This complements the empty-body
+        guard tests above.
+        """
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+        summary = Summary(
+            body="Plasma p-tau217 is a sensitive AD marker [paper:1].",
+            papers_used=[_paper("Only paper")],
+        )
+        user = (
+            LLMReportGenerator._build_prompt(
+                ResearchQuestion(question="What is X?"), summary,
+            ).user or ""
+        )
+        assert "Plasma p-tau217 is a sensitive AD marker" in user
+        assert "[paper:1]" in user

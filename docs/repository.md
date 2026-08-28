@@ -30,11 +30,7 @@ bioresearch-ai/
 │   │   ├── agents
 │   │   ├── prompts
 │   │   │   ├── __init__.py
-│   │   │   ├── comparison_prompt
-│   │   │   ├── report_prompt
-│   │   │   ├── review_prompt
-│   │   │   ├── search_prompt
-│   │   │   └── summary_prompt
+│   │   │   └── comparison_prompt
 │   │   │
 │   │   ├── services/
 │   │   │   ├── __init__.py

@@ -236,13 +236,19 @@ class LLMReportGenerator(ReportGenerator):
         Future versions may extract prompts into dedicated prompt builders.
         """
 
-        # The summary text contains ``[paper:N]`` markers (one per
-        # cited paper; index ``N`` is the position in
-        # ``summary.papers_used``). We mirror that convention
-        # in the report -- the LLM should use the same markers
-        # when it cites a paper, so the citation pipeline can
-        # match the LLM's mentions back to the bibliography
-        # we build in ``ReportMapper``.
+        # The summary text (``summary.body``) contains
+        # ``[paper:N]`` markers (one per cited paper; index
+        # ``N`` is the position in ``summary.papers_used``).
+        # We mirror that convention in the report -- the LLM
+        # should use the same markers when it cites a paper,
+        # so the citation pipeline can match the LLM's
+        # mentions back to the bibliography we build in
+        # ``ReportMapper``. Reading the field with ``or ````
+        # handles the rare empty-string case (a Summary
+        # created with no body) by falling back to an empty
+        # prompt context. A literal ``None`` body would surface
+        # as the string ``"None"`` via f-string interpolation,
+        # so the ``or ```` is load-bearing.
         #
         # We ask for four sections the report UI already renders:
         # Title, Executive Summary, Limitations, Future Work.

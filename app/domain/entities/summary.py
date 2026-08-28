@@ -43,11 +43,22 @@ class Summary:
     Attributes
     ----------
     body : str
-        The generated summary presented to the researcher. Named
-        ``body`` rather than ``text`` because the value is the LLM's
-        full report body (with inline ``[paper:N]`` citation
-        markers) -- not a short text snippet. The previous name
-        ``text`` was misleading.
+        The LLM-generated report body presented to the researcher.
+        Named ``body`` rather than ``text`` because the value is
+        the LLM's full synthesis (with inline ``[paper:N]``
+        citation markers and Vancouver-style structure) -- not a
+        short text snippet. The previous name ``text`` was
+        misleading.
+
+        Consumers:
+          - ``LLMReportGenerator._build_prompt`` reads this field
+            directly (``summary.body or ""``) and embeds it in the
+            report-generation user prompt as the evidence
+            foundation.
+          - ``ReportMapper._build_citations`` reads this field
+            (``summary.body``) and runs ``[paper:N]`` regex
+            extraction plus title-substring fallback to derive
+            the ordered bibliography.
 
     papers_used : list[Paper]
         Scientific publications used to generate the summary.
