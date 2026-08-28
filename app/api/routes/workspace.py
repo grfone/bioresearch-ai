@@ -94,7 +94,7 @@ from app.application.services.research_assistant import (
     ResearchAssistant,
 )
 
-from app.config.container import Container
+from app.config.container import get_research_assistant
 
 # Import the domain ResearchQuestion if needed
 # from app.domain.entities.research_question import ResearchQuestion
@@ -106,19 +106,16 @@ router = APIRouter(
 )
 
 
-def get_research_assistant() -> ResearchAssistant:
-    """
-    Provide a configured ResearchAssistant instance.
-
-    This dependency function acts as the presentation-layer entry point
-    into the application facade.
-
-    Returns
-    -------
-    ResearchAssistant
-        Fully configured application facade.
-    """
-    return Container.build()
+# ``get_research_assistant`` is imported from
+# ``app.config.container`` so the canonical dependency
+# provider (with its module-level singleton cache) is used.
+# This avoids building a fresh ``ResearchAssistant`` on
+# every request -- ``Container.build()`` constructs a new
+# orchestrator, search use case, summarizer, and report
+# generator every call. The shared instance is safe
+# because the underlying components are stateless across
+# requests (the workspace repository has its own
+# singleton via ``Container._workspace_repository``).
 
 
 @router.post(

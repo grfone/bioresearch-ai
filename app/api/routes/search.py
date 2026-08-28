@@ -89,7 +89,7 @@ from app.application.services.research_assistant import (
     ResearchAssistant,
 )
 
-from app.config.container import Container
+from app.config.container import get_research_assistant
 
 
 router = APIRouter(
@@ -98,21 +98,16 @@ router = APIRouter(
 )
 
 
-def get_research_assistant() -> ResearchAssistant:
-    """
-    Retrieve the configured application facade.
-
-    This dependency provider exposes the application composition root
-    to the API layer without allowing HTTP controllers to instantiate
-    infrastructure dependencies directly.
-
-    Returns
-    -------
-    ResearchAssistant
-        Fully configured BioResearch AI application facade.
-    """
-
-    return Container.build()
+# ``get_research_assistant`` is imported from
+# ``app.config.container`` so the canonical dependency
+# provider (with its module-level singleton cache) is used.
+# This avoids building a fresh ``ResearchAssistant`` on
+# every request -- ``Container.build()`` constructs a new
+# orchestrator, search use case, summarizer, and report
+# generator every call. The shared instance is safe
+# because the underlying components are stateless across
+# requests (the workspace repository has its own
+# singleton via ``Container._workspace_repository``).
 
 
 @router.post(
