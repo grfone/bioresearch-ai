@@ -28,7 +28,7 @@ Existing workspaces stored before the rename have the legacy
      and logs a warning when the legacy shape is loaded.
 
   2. A one-shot migration helper
-     (``_migrate_legacy_summaries``) runs at repository
+     (``_migrate_v6_data``) runs at repository
      instantiation and rewrites the on-disk JSON in place.
 
   3. The migration helper handles three on-disk shapes:
@@ -463,3 +463,218 @@ class TestLegacyDeserializerWarning:
             "deserializer should emit a warning when loading the "
             "legacy 'text' shape"
         )
+class TestRepositoryV6SchemaMigration:
+    """Pin the contract that the v6 schema bump formalises the
+    Summary ``text`` -> ``body`` data migration.
+
+    The schema-version mechanism (``PRAGMA user_version``,
+    ``LATEST_SCHEMA_VERSION = 6``) was previously used only
+    for additive ``ALTER TABLE`` migrations (v2-v5). The v6
+    bump extends it to cover the Summary rename, so:
+
+      1. The schema version integer reflects BOTH the column
+         state AND the on-disk JSON shape.
+      2. A future operator looking at ``PRAGMA user_version``
+         can tell whether the data migration has run.
+      3. A future schema change follows the same template:
+         add a v(N+1) ``_V(N+1)_DATA_MIGRATION`` (or
+         ``_V(N+1)_COLUMNS``) tuple, bump ``LATEST_SCHEMA_VERSION``,
+         and add a step to ``_migrate``.
+    """
+
+    def test_latest_schema_version_is_six(self):
+        """Pin the schema-version integer. A future bump to 7
+        must update both this constant and the migration
+        block; this test fails if either is forgotten.
+        """
+        from app.infrastructure.storage.sqlite_workspace_repository import (
+            LATEST_SCHEMA_VERSION,
+        )
+        assert LATEST_SCHEMA_VERSION == 6
+
+    def test_fresh_database_has_user_version_six(self, tmp_path):
+        """A brand-new database (no legacy rows) should have
+        ``PRAGMA user_version = 6`` after the repository is
+        instantiated. The migration walks zero rows but still
+        bumps the version pragma via the v6 data step.
+        """
+        db_path = str(tmp_path / "fresh.db")
+        SqliteWorkspaceRepository(db_path=db_path)
+        conn = sqlite3.connect(db_path)
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        conn.close()
+        assert version == 6
+
+    def test_v5_database_with_legacy_rows_upgrades_to_v6(
+        self, tmp_path
+    ):
+        """End-to-end v5 -> v6: a v5-shape database (legacy
+        ``text`` rows, no user_version bump above 5) gets
+        the column additions skipped (already present) but
+        the v6 data migration still runs and rewrites the
+        rows.
+
+        This is the integration test that pins the new
+        schema-version flow end to end -- no v6 migration
+        would silently no-op if this test broke.
+        """
+        db_path = str(tmp_path / "v5_legacy.db")
+        # Step 1: create a v5-shape database with legacy
+        # ``text`` rows. We bypass the live repository's
+        # __init__ to simulate a database that was created
+        # before the v6 bump was deployed.
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        v5_create = """
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id TEXT PRIMARY KEY,
+                question TEXT NOT NULL,
+                papers TEXT,
+                summary TEXT,
+                report TEXT,
+                notes TEXT,
+                metadata TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'CREATED',
+                state_history TEXT,
+                evidence_comparison TEXT,
+                published_report TEXT,
+                last_error TEXT,
+                last_error_at TEXT
+            )
+        """
+        cursor.execute(v5_create)
+        cursor.execute(
+            """
+            INSERT INTO workspaces (id, question, papers, state,
+                created_at, updated_at, summary, report, state_history)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "ws-v5-legacy-1",
+                "v5 test?",
+                _serialize_papers_for_migration(),
+                "REPORTED",
+                "2026-08-28T00:00:00+00:00",
+                "2026-08-28T00:00:00+00:00",
+                json.dumps({"text": "v5 legacy body", "papers_used": []}),
+                "null",
+                "[]",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        # Step 2: instantiate the repository. __init__ runs
+        # _migrate (no-op for v5-schema columns that already
+        # exist) and then _migrate_v6_data, which walks every
+        # row and rewrites legacy "text" -> "body".
+        SqliteWorkspaceRepository(db_path=db_path)
+
+        # Step 3: verify the on-disk shape and the version
+        # pragma.
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        version = cursor.execute("PRAGMA user_version").fetchone()[0]
+        cursor.execute(
+            "SELECT summary FROM workspaces WHERE id = ?",
+            ("ws-v5-legacy-1",),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        assert version == 6
+        assert row is not None
+        data = json.loads(row[0])
+        assert "body" in data
+        assert "text" not in data
+        assert data["body"] == "v5 legacy body"
+
+    def test_v6_migration_is_idempotent(self, tmp_path):
+        """A v6-shape database (already migrated) instantiates
+        cleanly without re-rewriting anything. The helper
+        returns False for already-migrated rows so the
+        migration loop is a no-op.
+        """
+        db_path = str(tmp_path / "v6.db")
+        # First instantiation: runs the v6 data migration.
+        repo1 = SqliteWorkspaceRepository(db_path=db_path)
+        # Confirm the on-disk shape is canonical.
+        _seed_v6_row(db_path)
+        # Second instantiation: must NOT see anything to
+        # migrate (the helper is idempotent).
+        repo2 = SqliteWorkspaceRepository(db_path=db_path)
+        assert repo1 is not repo2  # different instances
+        # Verify the row is still in v6 shape and the
+        # version pragma is still 6.
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        version = cursor.execute("PRAGMA user_version").fetchone()[0]
+        cursor.execute(
+            "SELECT summary FROM workspaces WHERE id = ?",
+            ("ws-v6-canonical",),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        assert version == 6
+        data = json.loads(row[0])
+        assert "body" in data
+        assert "text" not in data
+
+    def test_v6_version_constant_module_attribute(self):
+        """The version constant must be importable as a
+        module attribute (not a class attribute) so other
+        modules can read it without instantiating the
+        repository. This was the convention for v2-v5 and
+        v6 follows it.
+        """
+        from app.infrastructure.storage import (
+            sqlite_workspace_repository,
+        )
+        assert hasattr(sqlite_workspace_repository, "LATEST_SCHEMA_VERSION")
+        assert sqlite_workspace_repository.LATEST_SCHEMA_VERSION == 6
+
+
+def _serialize_papers_for_migration() -> str:
+    """Minimal papers JSON for seeding test rows."""
+    return json.dumps(
+        [
+            {
+                "title": "Paper",
+                "authors": [{"first_name": "A", "last_name": "B", "affiliation": None}],
+                "journal": {"name": "J", "issn": None, "publisher": None},
+                "year": 2026,
+                "abstract": "abstract",
+                "doi": None,
+                "pmid": None,
+                "keywords": [],
+                "url": None,
+            }
+        ]
+    )
+
+
+def _seed_v6_row(db_path: str) -> None:
+    """Seed a v6-shape (canonical) row directly into the DB."""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO workspaces (id, question, papers, state,
+            created_at, updated_at, summary, report, state_history)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "ws-v6-canonical",
+            "v6 test?",
+            _serialize_papers_for_migration(),
+            "REPORTED",
+            "2026-08-28T00:00:00+00:00",
+            "2026-08-28T00:00:00+00:00",
+            json.dumps({"body": "v6 canonical body", "papers_used": []}),
+            "null",
+            "[]",
+        ),
+    )
+    conn.commit()
+    conn.close()

@@ -22,6 +22,8 @@ silently regress to the prefix style.
 """
 from __future__ import annotations
 
+import logging
+
 from app.domain.entities.author import Author
 from app.domain.entities.journal import Journal
 from app.domain.entities.paper import Paper
@@ -370,3 +372,157 @@ class TestReportGeneratorPromptEmptyBodyGuard:
         )
         assert "Plasma p-tau217 is a sensitive AD marker" in user
         assert "[paper:1]" in user
+class TestReportGeneratorPromptSanitisationHardening:
+    """Pin the defence-in-depth sanitisation + length warning
+    logic in ``LLMReportGenerator._build_prompt``.
+
+    These tests document a hardening pass: even though
+    ``SummarizePapersUseCase.execute`` already sanitises
+    the LLM's synthesis at ingest, this re-runs the same
+    sanitiser at the prompt boundary. A workspace restored
+    from a pre-sanitiser backup, or a malformed body that
+    somehow bypassed ingest-level sanitisation, would
+    otherwise leak invalid ``[paper:N]`` markers into the
+    report prompt.
+    """
+
+    def test_residual_out_of_range_markers_are_stripped(
+        self, caplog
+    ):
+        """If the body has ``[paper:99]`` markers past the
+        bibliography size, the prompt must NOT contain them
+        (the sanitiser drops them). The INFO log fires so
+        operators see when this defence-in-depth path is
+        exercised.
+        """
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+        with caplog.at_level(
+            logging.INFO,
+            logger="app.infrastructure.llm.report_generator",
+        ):
+            summary = Summary(
+                body=(
+                    "Plasma p-tau217 is a sensitive AD marker "
+                    "[paper:1]. Earlier work [paper:99] also "
+                    "covers tau phosphorylation."
+                ),
+                papers_used=[_paper("Only paper")],
+            )
+            user = (
+                LLMReportGenerator._build_prompt(
+                    ResearchQuestion(question="What is X?"),
+                    summary,
+                ).user or ""
+            )
+        # The in-range [paper:1] marker is preserved.
+        assert "[paper:1]" in user
+        # The out-of-range [paper:99] marker is stripped.
+        assert "[paper:99]" not in user
+        # An INFO log fires to surface the defence-in-depth
+        # path was exercised.
+        assert any(
+            "stripped residual out-of-range" in record.message
+            for record in caplog.records
+        ), (
+            "info log should fire when residual out-of-range "
+            "markers are stripped at the prompt boundary"
+        )
+
+    def test_clean_body_does_not_log(self, caplog):
+        """The clean common path (in-range markers, valid
+        bibliography) must NOT emit any sanitiser INFO log.
+        Operators reviewing logs would get a flood of
+        useless "stripped 0 markers" lines on the common
+        path.
+        """
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+        with caplog.at_level(
+            logging.INFO,
+            logger="app.infrastructure.llm.report_generator",
+        ):
+            summary = Summary(
+                body=(
+                    "Plasma p-tau217 is a sensitive AD marker "
+                    "[paper:1]."
+                ),
+                papers_used=[_paper("Only paper")],
+            )
+            LLMReportGenerator._build_prompt(
+                ResearchQuestion(question="What is X?"), summary,
+            )
+        stripped_records = [
+            r for r in caplog.records
+            if "stripped residual out-of-range" in r.message
+        ]
+        assert stripped_records == [], (
+            "clean body must NOT trigger the "
+            "'stripped residual out-of-range' info log"
+        )
+
+    def test_long_body_emits_warning(self, caplog):
+        """A body over the threshold must emit a WARNING log
+        so operators see they have a runaway synthesis on
+        their hands. The body is truncated by the LLM in
+        practice (the actual truncation is the API server's
+        job, not ours), but we surface the warning at the
+        boundary.
+        """
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+        # A body that's clearly over the 50k threshold.
+        long_body = "abc " * 15_000
+        with caplog.at_level(
+            logging.WARNING,
+            logger="app.infrastructure.llm.report_generator",
+        ):
+            summary = Summary(
+                body=long_body, papers_used=[_paper("Only paper")]
+            )
+            LLMReportGenerator._build_prompt(
+                ResearchQuestion(question="What is X?"), summary,
+            )
+        warning_records = [
+            r for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        length_warnings = [
+            r for r in warning_records
+            if "unusually long" in r.message
+        ]
+        assert length_warnings, (
+            "long body must emit a WARNING so operators see "
+            "the runaway synthesis"
+        )
+
+    def test_short_body_below_threshold_does_not_warn(self, caplog):
+        """Sanity check on the threshold: a normal-sized body
+        (~2k chars) must NOT trigger the length warning.
+        """
+        from app.domain.entities.summary import Summary
+        from app.domain.entities.research_question import (
+            ResearchQuestion,
+        )
+        summary = Summary(
+            body="Plasma p-tau217 is a marker [paper:1]. " * 30,
+            papers_used=[_paper("Only paper")],
+        )
+        with caplog.at_level(
+            logging.WARNING,
+            logger="app.infrastructure.llm.report_generator",
+        ):
+            LLMReportGenerator._build_prompt(
+                ResearchQuestion(question="What is X?"), summary,
+            )
+        length_warnings = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING
+            and "unusually long" in r.message
+        ]
+        assert length_warnings == []

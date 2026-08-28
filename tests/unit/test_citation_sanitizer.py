@@ -322,12 +322,14 @@ class TestSanitizeEdgeCaseBibliographies:
         warnings = [r for r in records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
 
-    def test_no_log_when_nothing_dropped(self):
-        """The cleanest case: every marker is in range, no log
-        output. Confirms we're not polluting the log on the
-        common path.
+    def test_no_warning_when_nothing_dropped(self):
+        """The cleanest case: every marker is in range, so no
+        WARNING fires (an INFO log does, per the per-call
+        telemetry design -- see citation_sanitizer.py).
+        WARNINGs are reserved for actual hallucination
+        events. This test pins that contract.
         """
-        log = logging.getLogger(f"test_no_log_{id(object())}")
+        log = logging.getLogger(f"test_no_warning_{id(object())}")
         log.handlers = [logging.NullHandler()]
         log.setLevel(logging.DEBUG)  # capture everything
         log.propagate = False
@@ -341,5 +343,212 @@ class TestSanitizeEdgeCaseBibliographies:
         sanitize_citation_markers(
             "[paper:1] [paper:2]", 5, logger_=log,
         )
-        # No warnings, no info -- the call is silent.
-        assert records == []
+        # No WARNING -- the cleanest case has nothing to warn
+        # about. INFO is fine (see test_info_log_per_call for
+        # that contract).
+        warning_records = [
+            r for r in records if r.levelno == logging.WARNING
+        ]
+        assert warning_records == [], (
+            "cleanest case must NOT emit a WARNING; the "
+            "WARNING level is reserved for actual "
+            "hallucination events"
+        )
+class TestCitationSanitizerTelemetry:
+    """Pin the in-process telemetry counters and the per-call
+    INFO log behaviour.
+
+    The sanitizer was previously silent on the common path.
+    Operators had no easy way to confirm whether the LLM was
+    hallucinating citation indices without grepping logs
+    post-hoc. The new telemetry adds:
+
+      - An INFO log on every call (per-call heartbeat).
+      - Counter bump for ``total_calls``, ``total_dropped``,
+        ``calls_with_drops`` (in-process aggregates).
+      - ``get_stats()`` / ``reset_stats()`` accessors for
+        health-check or test fixtures.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_stats(self):
+        """Each test in this class starts with a fresh
+        counter slate so per-call bumps don't leak across
+        tests. ``autouse=True`` means no test in the class
+        needs to opt in -- the fixture fires automatically.
+        """
+        from app.infrastructure.llm.citation_sanitizer import (
+            reset_stats,
+        )
+        reset_stats()
+        yield
+        reset_stats()
+
+    def test_total_calls_increments_on_clean_call(self):
+        from app.infrastructure.llm.citation_sanitizer import (
+            get_stats,
+            sanitize_citation_markers,
+        )
+        sanitize_citation_markers(
+            "see [paper:5]", 20, logger_=_silent_logger(),
+        )
+        stats = get_stats()
+        assert stats["total_calls"] == 1
+        assert stats["total_dropped"] == 0
+        assert stats["calls_with_drops"] == 0
+
+    def test_total_calls_and_drops_increment_on_hallucination(self):
+        from app.infrastructure.llm.citation_sanitizer import (
+            get_stats,
+            sanitize_citation_markers,
+        )
+        sanitize_citation_markers(
+            "[paper:99][paper:100][paper:88]", 20,
+            logger_=_silent_logger(),
+        )
+        stats = get_stats()
+        assert stats["total_calls"] == 1
+        assert stats["total_dropped"] == 3
+        assert stats["calls_with_drops"] == 1
+
+    def test_get_stats_returns_independent_copy(self):
+        """Mutating the returned dict must NOT mutate the
+        live counters. ``get_stats()`` is documented to
+        return a copy, and this test pins that contract.
+        """
+        from app.infrastructure.llm.citation_sanitizer import (
+            get_stats,
+            sanitize_citation_markers,
+        )
+        sanitize_citation_markers(
+            "[paper:5]", 20, logger_=_silent_logger(),
+        )
+        snapshot = get_stats()
+        snapshot["total_calls"] = 9999
+        # Live counters unchanged.
+        live = get_stats()
+        assert live["total_calls"] == 1
+
+    def test_reset_stats_zeros_counters(self):
+        from app.infrastructure.llm.citation_sanitizer import (
+            get_stats,
+            reset_stats,
+            sanitize_citation_markers,
+        )
+        # Dirty the counters.
+        sanitize_citation_markers(
+            "[paper:99]", 20, logger_=_silent_logger(),
+        )
+        assert get_stats()["total_dropped"] == 1
+        # Reset and re-check.
+        reset_stats()
+        stats = get_stats()
+        assert stats["total_calls"] == 0
+        assert stats["total_dropped"] == 0
+        assert stats["calls_with_drops"] == 0
+
+    def test_accumulates_across_calls(self):
+        """Pin the additive behaviour: multiple calls
+        accumulate into the same counter. Operators read
+        ``total_calls`` / ``total_dropped`` to see lifetime
+        hallucination volume since process start.
+        """
+        from app.infrastructure.llm.citation_sanitizer import (
+            get_stats,
+            sanitize_citation_markers,
+        )
+        sanitize_citation_markers(
+            "[paper:99]", 20, logger_=_silent_logger(),
+        )
+        sanitize_citation_markers(
+            "[paper:5]", 20, logger_=_silent_logger(),
+        )
+        sanitize_citation_markers(
+            "[paper:88, paper:99]", 20, logger_=_silent_logger(),
+        )
+        stats = get_stats()
+        assert stats["total_calls"] == 3
+        assert stats["total_dropped"] == 3
+        assert stats["calls_with_drops"] == 2
+
+    def test_info_log_per_call_with_no_drops(self, caplog):
+        """Per-call telemetry is the design intent: every
+        call emits exactly one INFO log, even when no
+        markers were dropped. This gives operators a
+        heartbeat: ``grep citation_sanitizer`` returns one
+        log line per request that reaches the sanitizer.
+
+        We pass the module logger explicitly here so the
+        INFO is routed through ``caplog``'s handler --
+        passing a custom ``logger_`` would bypass
+        propagation.
+        """
+        from app.infrastructure.llm import citation_sanitizer
+        from app.infrastructure.llm.citation_sanitizer import (
+            sanitize_citation_markers,
+        )
+        with caplog.at_level(
+            logging.INFO,
+            logger="app.infrastructure.llm.citation_sanitizer",
+        ):
+            sanitize_citation_markers(
+                "[paper:5]", 20, logger_=citation_sanitizer.logger,
+            )
+        info_records = [
+            r for r in caplog.records if r.levelno == logging.INFO
+        ]
+        assert len(info_records) == 1
+        msg = info_records[0].getMessage()
+        # The INFO log includes the running totals so an
+        # operator can grep and see "total=N" without
+        # needing to query the counters directly.
+        assert "total=" in msg
+        assert "dropped=0" in msg
+
+    def test_info_log_per_call_with_drops(self, caplog):
+        """When markers ARE dropped, the same INFO log
+        fires (still one per call) and the dropped count
+        appears in the message. A separate WARNING also
+        fires for visibility, but the INFO is the
+        per-call heartbeat.
+        """
+        from app.infrastructure.llm import citation_sanitizer
+        from app.infrastructure.llm.citation_sanitizer import (
+            sanitize_citation_markers,
+        )
+        with caplog.at_level(
+            logging.INFO,
+            logger="app.infrastructure.llm.citation_sanitizer",
+        ):
+            sanitize_citation_markers(
+                "[paper:99, paper:88]", 20,
+                logger_=citation_sanitizer.logger,
+            )
+        info_records = [
+            r for r in caplog.records if r.levelno == logging.INFO
+        ]
+        warning_records = [
+            r for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert len(info_records) == 1
+        assert len(warning_records) == 1
+        info_msg = info_records[0].getMessage()
+        assert "dropped=2" in info_msg
+
+    def test_empty_body_still_increments_total_calls(self):
+        """An empty body (the common "not yet generated" case)
+        must still register a call so operators can tell
+        the sanitizer was reached. INFO logging is
+        suppressed (would flood logs during normal
+        report-step flow) but the counter is incremented.
+        """
+        from app.infrastructure.llm.citation_sanitizer import (
+            get_stats,
+            sanitize_citation_markers,
+        )
+        sanitize_citation_markers(
+            "", 20, logger_=_silent_logger(),
+        )
+        stats = get_stats()
+        assert stats["total_calls"] == 1
+        assert stats["total_dropped"] == 0

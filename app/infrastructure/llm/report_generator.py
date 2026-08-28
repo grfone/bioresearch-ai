@@ -54,6 +54,8 @@ Guillermo Ramajo Fernández
 
 from __future__ import annotations
 
+import logging
+
 
 from app.domain.entities.research_question import ResearchQuestion
 from app.domain.entities.summary import Summary
@@ -76,6 +78,21 @@ from app.infrastructure.llm.citation_sanitizer import (
 from app.infrastructure.llm.report_mapper import (
     ReportMapper,
 )
+
+
+logger = logging.getLogger(__name__)
+
+
+# Maximum length of ``summary.body`` accepted by the report
+# prompt. Beyond this, the LLM context window can become
+# saturated: a long body truncates the LLM's ability to
+# reason about citation extraction, and the ``[paper:N]``
+# marker positions become unreliable once they span more
+# than ~10k tokens. 50k characters is roughly 12k tokens --
+# well below the typical context window limit (Anthropic
+# 200k, OpenAI 128k), and large enough to cover any
+# reasonable synthesis a real LLM produces.
+_MAX_BODY_LENGTH_FOR_PROMPT = 50_000
 
 
 class LLMReportGenerator(ReportGenerator):
@@ -250,16 +267,47 @@ class LLMReportGenerator(ReportGenerator):
         # as the string ``"None"`` via f-string interpolation,
         # so the ``or ```` is load-bearing.
         #
-        # We ask for four sections the report UI already renders:
-        # Title, Executive Summary, Limitations, Future Work.
-        # We deliberately do NOT ask for a confidence score: the LLM
-        # is generating the report FROM the papers the user supplied,
-        # so any self-evaluation ("I'm 85% confident") would be
-        # tautological. We surface the supporting papers and their
-        # bibliography instead -- that's the real evidence of
-        # credibility. See ADR-009 (planned) for the rationale.
+        # Defence-in-depth sanitisation: even though
+        # ``SummarizePapersUseCase.execute`` already calls
+        # ``sanitize_citation_markers`` on the LLM's synthesis
+        # before it lands here, a workspace restored from a
+        # backup made before that sanitiser shipped could
+        # carry legacy ``[paper:N]`` markers with N > the
+        # bibliography size. Re-running the sanitiser at
+        # this boundary is cheap (the sanitiser is
+        # stdlib-only regex) and the cost of NOT re-running
+        # is the LLM seeing invalid markers it could copy
+        # into its output. Idempotent.
         summary_text = summary.body or ""
         bibliography_size = len(list(summary.papers_used or []))
+        sanitised_text = sanitize_citation_markers(
+            summary_text,
+            bibliography_size,
+        )
+        if sanitised_text != summary_text:
+            logger.info(
+                "report_generator: stripped residual out-of-range "
+                "[paper:N] markers from summary.body before "
+                "prompting. This indicates the summary was "
+                "synthesised before the citation sanitiser was "
+                "wired in, OR a workspace was restored from a "
+                "pre-sanitiser backup. bibliography_size=%d.",
+                bibliography_size,
+            )
+        if (
+            summary_text
+            and len(sanitised_text) > _MAX_BODY_LENGTH_FOR_PROMPT
+        ):
+            logger.warning(
+                "report_generator: summary.body is unusually long "
+                "(%d chars after sanitisation; threshold %d). The "
+                "LLM's ability to reason about citation extraction "
+                "may be impaired. Consider regenerating the "
+                "summary or trimming the bibliography.",
+                len(sanitised_text),
+                _MAX_BODY_LENGTH_FOR_PROMPT,
+            )
+        summary_text = sanitised_text
         user_prompt = (
             "Create a structured biomedical research report "
             "for this research question:\n\n"

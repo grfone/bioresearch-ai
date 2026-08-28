@@ -159,7 +159,7 @@ def _rewrite_legacy_summary_in_blob(blob: dict) -> bool:
 # Schema constants
 # ---------------------------------------------------------------------------
 
-LATEST_SCHEMA_VERSION = 5
+LATEST_SCHEMA_VERSION = 6
 
 
 # Columns that were added in each schema version. The repository
@@ -217,6 +217,33 @@ _V4_COLUMNS = (
 _V5_COLUMNS = (
     ("last_error_at", "TEXT"),
 )
+# v6: ``Summary.text`` -> ``Summary.body`` data migration.
+#
+# Unlike v2-v5 (which are additive ``ALTER TABLE`` migrations),
+# v6 is an in-place data rewrite -- the on-disk Summary JSON
+# changed shape from ``{"text": "...", "papers_used": [...]}``
+# to ``{"body": "...", "papers_used": [...]}``. The column
+# itself (``summary TEXT``) is unchanged. The migration walks
+# every workspace row and rewrites legacy data via the
+# ``_rewrite_legacy_summary_in_blob`` helper, which handles
+# three on-disk shapes:
+#
+#   1. Standalone Summary (the ``summary`` column).
+#   2. Nested Summary as a dict (the ``report`` column).
+#   3. Nested Summary as a stringified JSON blob (the legacy
+#      ``report`` column shape -- the legacy serializer
+#      double-encoded the inner Summary as a string).
+#
+# Idempotency: the helper returns ``False`` for already-
+# migrated rows, so a v6 migration running on a v6 DB is a
+# no-op. The deserializer in ``_deserialize_summary`` still
+# accepts the legacy ``text`` key with a warning -- that
+# path serves the "operator restored a v5 backup after v6 is
+# deployed" case where the data needs to be re-migrated on
+# the next instantiation.
+_V6_DATA_MIGRATION = (
+    "summary_text_to_body",
+)
 
 
 class SqliteWorkspaceRepository(WorkspaceRepository):
@@ -239,14 +266,21 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
     def __init__(self, db_path: str = "bioresearch.db") -> None:
         self.db_path = db_path
         self._init_db()
-        # One-shot migration of the legacy Summary schema
-        # (``{"text": ...}`` -> ``{"body": ...}``). The legacy
-        # deserializer still tolerates the old shape, so this is
-        # a "best effort" normalisation -- a future operator
-        # rollback, restoring a backup made before the rename,
-        # will still load cleanly because the deserializer
-        # accepts both shapes.
-        migrated = self._migrate_legacy_summaries()
+        # v6 in-place data migration: rewrite every legacy
+        # Summary blob (``{"text": ...}``) to the new
+        # ``{"body": ...}`` shape. This is wired into the
+        # schema-version flow (``LATEST_SCHEMA_VERSION = 6``)
+        # so the schema-version pragma tracks whether data
+        # migration has run, not just whether columns are
+        # up to date.
+        #
+        # The legacy deserializer (``_deserialize_summary``)
+        # still tolerates the old shape with a warning, so a
+        # future rollback -- restoring a v5 backup after v6
+        # is deployed -- loads cleanly. The next repository
+        # instantiation re-runs the data migration and
+        # normalises the restored data.
+        migrated = self._migrate_v6_data(self.db_path)
         if migrated > 0:
             logger.info(
                 "workspace_repository: migrated %d legacy Summary "
@@ -350,8 +384,63 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     f"ALTER TABLE workspaces ADD COLUMN {column_name} {column_def}"
                 )
 
-        # Bump the schema version.
+        # Bump the schema version -- this happens BEFORE v6
+        # because v6 is a (potentially slow) data rewrite
+        # that could fail mid-loop. If the data migration
+        # raises, we'd rather the operator see ``user_version =
+        # 6`` with partial migration than get stuck on v5 with
+        # a half-rewritten database.
         cursor.execute(f"PRAGMA user_version = {LATEST_SCHEMA_VERSION}")
+
+    def _migrate_v6_data(self, db_path: str) -> int:
+        """
+        v6 in-place data migration: rewrite every legacy
+        ``Summary`` blob to the new ``body`` shape.
+
+        Separated from ``_migrate`` so the data rewrite runs
+        in its own connection (the column-migration connection
+        has committed by the time this is called).
+
+        See ``_V6_DATA_MIGRATION`` docstring above for the
+        three on-disk shapes this helper handles.
+
+        Returns
+        -------
+        int
+            Number of rows rewritten. Zero on an already-v6
+            database.
+        """
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, summary, report FROM workspaces"
+            )
+            rows = cursor.fetchall()
+            migrated_count = 0
+            for workspace_id, summary_json, report_json in rows:
+                for column, raw in (
+                    ("summary", summary_json),
+                    ("report", report_json),
+                ):
+                    if not raw or raw == "null":
+                        continue
+                    try:
+                        data = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if not _rewrite_legacy_summary_in_blob(data):
+                        continue
+                    new_raw = json.dumps(data, separators=(",", ":"))
+                    cursor.execute(
+                        f"UPDATE workspaces SET {column} = ? WHERE id = ?",
+                        (new_raw, workspace_id),
+                    )
+                    migrated_count += 1
+            conn.commit()
+            return migrated_count
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------
     # Repository interface
@@ -926,11 +1015,12 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             logger.warning(
                 "workspace_repository: loading Summary with legacy "
                 "'text' key -- this shape was renamed to 'body' "
-                "by the Summary rename refactor. The legacy "
+                "in the v6 schema migration. The legacy "
                 "deserializer still works for backwards "
-                "compatibility, but the migration helper "
-                "(_migrate_legacy_summaries) should be invoked "
-                "to normalise on-disk data."
+                "compatibility, but the v6 data migration "
+                "(_migrate_v6_data) should be re-run by "
+                "instantiating the repository to normalise "
+                "the on-disk data."
             )
             body_value = data["text"]
         else:
@@ -942,74 +1032,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             body=body_value,
             papers_used=papers_used,
         )
-
-    def _migrate_legacy_summaries(self) -> int:
-        """
-        One-shot migration: rewrite every workspace row whose
-        ``summary`` JSON has the legacy ``text`` key into the
-        new ``body`` key shape.
-
-        Why a separate migration (not just write the new shape
-        on next update)
-        --------------------------------------------
-        The on-disk Summary JSON is opaque to the rest of the
-        system -- only this repository reads and writes it.
-        The legacy deserializer still accepts the old shape,
-        so leaving rows alone is technically safe. But we
-        prefer to normalise the data eagerly so:
-
-          - Operators inspecting the DB see a single canonical
-            shape.
-          - The "legacy 'text' key" warning in
-            ``_deserialize_summary`` fires only when a backup
-            has been restored, not on the routine path.
-
-        The helper is idempotent: a row already in the new
-        shape (no ``text`` key) is skipped, so calling it
-        twice in a row is a no-op.
-
-        Returns
-        -------
-        int
-            Number of rows rewritten. Zero on a fresh
-            database or after the migration has already run.
-        """
-        conn = sqlite3.connect(self.db_path)
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, summary, report FROM workspaces"
-            )
-            rows = cursor.fetchall()
-            migrated_count = 0
-            for workspace_id, summary_json, report_json in rows:
-                for column, raw in (
-                    ("summary", summary_json),
-                    ("report", report_json),
-                ):
-                    if not raw or raw == "null":
-                        continue
-                    try:
-                        data = json.loads(raw)
-                    except json.JSONDecodeError:
-                        # Malformed payload -- leave it alone so
-                        # the operator can inspect the broken
-                        # row.
-                        continue
-                    if not _rewrite_legacy_summary_in_blob(data):
-                        # Already in the new shape (or not a
-                        # Summary blob at all).
-                        continue
-                    new_raw = json.dumps(data, separators=(",", ":"))
-                    cursor.execute(
-                        f"UPDATE workspaces SET {column} = ? WHERE id = ?",
-                        (new_raw, workspace_id),
-                    )
-                    migrated_count += 1
-            conn.commit()
-            return migrated_count
-        finally:
-            conn.close()
 
     def _deserialize_report(self, report_json: str) -> Optional[ResearchReport]:
         if not report_json or report_json == "null":

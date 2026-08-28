@@ -73,6 +73,76 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+# In-process telemetry counters. Operators can call
+# ``citation_sanitizer.get_stats()`` to retrieve these or
+# read the periodic ``citation_sanitizer:`` INFO logs
+# emitted from ``sanitize_citation_markers`` on every
+# invocation.
+#
+# The counters are intentionally coarse (whole-process
+# aggregates, not per-paper or per-workspace). The goal is
+# to surface whether the LLM is hallucinating citation
+# indices at all, not to diagnose a specific workspace.
+#
+# Threading: ``sanitize_citation_markers`` reads/writes
+# only plain Python objects; the dict mutations are not
+# atomic. This is acceptable because the counters are
+# observability (worst case: a couple of dropped events
+# during concurrent updates, off by 1 in either direction).
+# If tighter accuracy is needed in the future, wrap the
+# counter mutations in a ``threading.Lock``.
+_stats: dict[str, int] = {
+    "total_calls": 0,
+    "total_dropped": 0,
+    "calls_with_drops": 0,
+}
+
+
+def get_stats() -> dict[str, int]:
+    """
+    Snapshot of the in-process telemetry counters.
+
+    Returns
+    -------
+    dict[str, int]
+        A copy of the ``_stats`` dict at the moment of
+        the call. The copy means callers can't mutate
+        the live counters through this handle -- the
+        dict returned is a fresh ``dict``.
+
+    Keys:
+      - ``total_calls``: every call to
+        ``sanitize_citation_markers`` since process start.
+      - ``total_dropped``: sum of hallucinated markers
+        dropped across all calls.
+      - ``calls_with_drops``: count of calls where at least
+        one marker was dropped (the WARNING-firing path).
+
+    Use case: surface these in a ``/health`` endpoint or a
+    debug endpoint so operators can ask "is the LLM
+    currently hallucinating?" without grepping logs.
+
+    Returns
+    -------
+    dict[str, int]
+        A copy of the live counters.
+    """
+    return dict(_stats)
+
+
+def reset_stats() -> None:
+    """
+    Reset the in-process telemetry counters to zero.
+
+    Useful for tests that need a clean slate (the
+    ``test_citation_sanitizer.py`` tests use this fixture
+    so the counters don't leak between cases). Not
+    intended for production code.
+    """
+    for key in _stats:
+        _stats[key] = 0
+
+
 # Match a standalone ``[paper:N]`` marker. Requires a digit
 # sequence (one or more digits) followed by ``]`` so we don't
 # match the empty ``[paper:]`` form.
@@ -127,6 +197,14 @@ def sanitize_citation_markers(
     log = logger_ if logger_ is not None else logger
 
     if not text:
+        # Increment the call counter even when the body is
+        # empty so operators can tell from the ``total_calls``
+        # counter that the sanitiser was reached. An empty
+        # body is the common "Summary not yet generated"
+        # case during the report step, so it does NOT log
+        # an INFO line (would flood logs); only counter
+        # increments happen here.
+        _stats["total_calls"] += 1
         return text
 
     # Track how many hallucinated markers we stripped. We
@@ -156,7 +234,19 @@ def sanitize_citation_markers(
         sanitized,
     )
 
+    # Per-call telemetry: bump the counters and emit an
+    # INFO log on every call (not just on drops). Operators
+    # can grep ``citation_sanitizer:`` and see the rate of
+    # calls and drops over time. The log line is cheap
+    # (one entry per call, not per marker), so it doesn't
+    # flood logs on the common path. If this is too noisy
+    # in practice, the level can be demoted to DEBUG via
+    # the standard ``logging`` configuration -- the
+    # counter continues to update regardless of log level.
+    _stats["total_calls"] += 1
+    _stats["total_dropped"] += hallucinated_count
     if hallucinated_count > 0:
+        _stats["calls_with_drops"] += 1
         log.warning(
             "citation_sanitizer: dropped %d hallucinated citation "
             "marker(s) from LLM output (bibliography size=%d). The "
@@ -167,6 +257,15 @@ def sanitize_citation_markers(
             bibliography_size,
             bibliography_size,
         )
+    log.info(
+        "citation_sanitizer: call=%d (total=%d) dropped=%d "
+        "(total_dropped=%d) bibliography_size=%d",
+        1,  # call count delta is always 1 per call
+        _stats["total_calls"],
+        hallucinated_count,
+        _stats["total_dropped"],
+        bibliography_size,
+    )
 
     return sanitized
 
