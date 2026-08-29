@@ -70,7 +70,7 @@ import {
   linkifyCitationDoi,
   linkifyCitationMarkers,
 } from '../lib/citationLink';
-import { renderCitationWithDoiLink } from '../lib/citationRender';
+import { renderCitationWithDoiLink, renderItemWithCitationLinks } from '../lib/citationRender';
 import { FileText, RefreshCw, AlertCircle, Lightbulb, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -693,7 +693,9 @@ export const Report: React.FC = () => {
                           key={idx}
                           className="text-secondary text-sm leading-relaxed"
                       >
-                        {linkifyCitationMarkers(item, report.citations.length)}
+                        {renderItemWithCitationLinks(
+                          linkifyCitationMarkers(item, report.citations.length)
+                        )}
                       </li>
                   ))}
                 </ul>
@@ -714,7 +716,9 @@ export const Report: React.FC = () => {
                           key={idx}
                           className="text-secondary text-sm leading-relaxed"
                       >
-                        {linkifyCitationMarkers(item, report.citations.length)}
+                        {renderItemWithCitationLinks(
+                          linkifyCitationMarkers(item, report.citations.length)
+                        )}
                       </li>
                   ))}
                 </ul>

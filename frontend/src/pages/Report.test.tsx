@@ -1270,15 +1270,14 @@ describe('Report > Limitations / Future Work citation rendering', () => {
     });
     // The standalone ``[paper:8]`` in the second limitation
     // item must link (citation 8 exists). The link's
-    // accessible name is just ``8`` (ReactMarkdown parses
-    // ``[8](#citation-8)`` so the brackets are syntax, not
-    // text). Note: ``[paper:8]`` may also appear in the
-    // Executive Summary body, so we use ``getAllByRole`` to
-    // count the links rather than asserting there's only one.
+    // accessible name is just ``8``. Use ``getAllByRole``
+    // because the same citation may also be cited in the
+    // Executive Summary -- we want at least one link to
+    // citation-8, and ALL of them must point to the same
+    // anchor (the in-page ``#citation-8``).
     await waitFor(() => {
       const links = screen.getAllByRole('link', { name: '8' });
       expect(links.length).toBeGreaterThanOrEqual(1);
-      // Every link named ``8`` targets citation-8.
       for (const link of links) {
         expect(link.getAttribute('href')).toBe('#citation-8');
       }
@@ -1298,12 +1297,24 @@ describe('Report > Limitations / Future Work citation rendering', () => {
     });
     // The first Limitations item is
     // ``[paper:3, paper:13]`` -- both are valid (citations
-    // 3 and 13 exist). Two clickable links must be present.
+    // 3 and 13 exist). The grouped form was rendered as
+    // a comma-joined pair of clickable links by
+    // ``linkifyCitationMarkers``. Use ``getAllByRole``
+    // because the same citations may also appear in the
+    // Executive Summary body via ReactMarkdown -- we
+    // assert that AT LEAST one anchor of each name
+    // exists with the right ``#citation-N`` href.
     await waitFor(() => {
-      const link3 = screen.getByRole('link', { name: '3' });
-      const link13 = screen.getByRole('link', { name: '13' });
-      expect(link3.getAttribute('href')).toBe('#citation-3');
-      expect(link13.getAttribute('href')).toBe('#citation-13');
+      const link3s = screen.getAllByRole('link', { name: '3' });
+      const link13s = screen.getAllByRole('link', { name: '13' });
+      expect(link3s.length).toBeGreaterThanOrEqual(1);
+      expect(link13s.length).toBeGreaterThanOrEqual(1);
+      for (const link of link3s) {
+        expect(link.getAttribute('href')).toBe('#citation-3');
+      }
+      for (const link of link13s) {
+        expect(link.getAttribute('href')).toBe('#citation-13');
+      }
     });
     // The raw grouped form MUST be gone.
     expect(screen.queryByText('[paper:3, paper:13]')).toBeNull();
@@ -1318,41 +1329,39 @@ describe('Report > Limitations / Future Work citation rendering', () => {
     });
     // The first Future Work item is
     // ``[paper:5, paper:10, paper:19]`` -- all three are
-    // valid (citations 5, 10, 19 exist). Three clickable
-    // links must be present.
+    // valid (citations 5, 10, 19 exist). Each citation
+    // must produce AT LEAST one clickable anchor element
+    // (executive summary may produce duplicates).
     await waitFor(() => {
-      const link5 = screen.getByRole('link', { name: '5' });
-      const link10 = screen.getByRole('link', { name: '10' });
-      const link19 = screen.getByRole('link', { name: '19' });
-      expect(link5.getAttribute('href')).toBe('#citation-5');
-      expect(link10.getAttribute('href')).toBe('#citation-10');
-      expect(link19.getAttribute('href')).toBe('#citation-19');
+      for (const name of ['5', '10', '19']) {
+        const links = screen.getAllByRole('link', { name });
+        expect(links.length).toBeGreaterThanOrEqual(1);
+        for (const link of links) {
+          expect(link.getAttribute('href')).toBe(
+            `#citation-${name}`,
+          );
+        }
+      }
     });
     // Raw grouped form MUST be gone.
     expect(screen.queryByText('[paper:5, paper:10, paper:19]')).toBeNull();
   });
 
   it('silently drops out-of-range entries from a Limitations group (no visible raw text)', async () => {
-    // The third Limitations item is
-    // ``[paper:8, paper:11, paper:18]`` -- citation 18 is
-    // out of range (max=20 in our fixture, so 18 IS valid).
-    // Let me adjust the test to use a fixture where 18 is
-    // out of range by passing only 17 citations to the
-    // linkifier. But the page passes ``report.citations.length``
-    // which is the bibliography size -- so I can't fake the
-    // ``maxCitationIndex`` from the page. Instead, I'll use a
-    // marker past the bibliography size to verify the
-    // silent-drop policy.
+    // Future Work: ``Operationalise [paper:7, paper:20]``
+    // -- both are valid (20 citations). Both linkify.
     setupWithLimitationsAndFutureWork();
     const { Report } = await import('./Report');
     render(<Report />);
     await waitFor(() => {
       expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
     });
-    // Future Work: ``Operationalise [paper:7, paper:20]``
-    // -- both are valid (20 citations). Both linkify.
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: '20' })).toBeInTheDocument();
+      const links = screen.getAllByRole('link', { name: '20' });
+      expect(links.length).toBeGreaterThanOrEqual(1);
+      for (const link of links) {
+        expect(link.getAttribute('href')).toBe('#citation-20');
+      }
     });
     // No raw ``[paper:20]`` text (valid entry is fully
     // linkified).
