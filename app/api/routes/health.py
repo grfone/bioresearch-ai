@@ -84,3 +84,52 @@ def sanitizer_stats() -> dict[str, int]:
     )
 
     return get_stats()
+
+
+@router.get(
+    "/health/title-fallback",
+    summary="H1 title-fallback telemetry",
+)
+def title_fallback_stats() -> dict:
+    """
+    Snapshot the H1 title-fallback telemetry.
+
+    The title-fallback module (in
+    ``app.infrastructure.llm.title_fallback``) injects an
+    H1 heading into the synthesis body whenever the LLM
+    omits one. The endpoint exposes the rolling-window
+    rate of fallback injections so operators can monitor
+    whether the synthesis LLM is consistently skipping
+    the H1 directive (a degraded user prompt would
+    show up here as a high ``rate``).
+
+    Response keys:
+
+    - ``total_calls``: number of invocations recorded in
+      the rolling window.
+    - ``total_fallbacks``: subset that actually injected
+      a fallback.
+    - ``rate``: fraction of calls that injected a
+      fallback (0.0 to 1.0).
+    - ``window_size``: current size of the rolling window
+      (capped at ``_FALLBACK_RATE_WINDOW``).
+    - ``current_window``: list of 0/1 entries showing the
+      trailing calls. 1 = fallback injected, 0 = LLM
+      already had an H1. Useful for spot-checking recent
+      behaviour.
+
+    The endpoint is read-only -- it doesn't reset the
+    counters (use ``reset_fallback_stats`` in a Python
+    REPL for that, or restart the process).
+
+    Use case: pair with a Prometheus scrape or a simple
+    log-based alert. The module also emits a WARNING log
+    line when ``rate >= _FALLBACK_RATE_THRESHOLD`` over a
+    meaningful sample size, so the same data is available
+    via log scraping.
+    """
+    from app.infrastructure.llm.title_fallback import (
+        get_fallback_stats,
+    )
+
+    return get_fallback_stats()
