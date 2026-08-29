@@ -133,3 +133,140 @@ def title_fallback_stats() -> dict:
     )
 
     return get_fallback_stats()
+
+
+@router.get(
+    "/metrics",
+    summary="Prometheus metrics exposition",
+)
+def prometheus_metrics():
+    """
+    Prometheus exposition-format metrics endpoint.
+
+    Returns a plain-text body compatible with the
+    Prometheus exposition format
+    (https://prometheus.io/docs/instrumenting/exposition_formats/).
+    A scraper (Prometheus server, Grafana Agent, etc.) can
+    hit this endpoint on a regular interval to ingest
+    the metrics.
+
+    Metrics exposed
+    ---------------
+    Citation sanitizer (commit ``8cf20a3``):
+
+    - ``citation_sanitizer_calls_total`` (counter):
+      cumulative calls to
+      ``sanitize_citation_markers`` since process start.
+    - ``citation_sanitizer_dropped_total`` (counter):
+      cumulative hallucinated citation markers dropped.
+    - ``citation_sanitizer_calls_with_drops_total``
+      (counter): calls where at least one marker was
+      dropped.
+
+    H1 title-fallback (this commit):
+
+    - ``title_fallback_calls_total`` (counter):
+      cumulative calls to ``inject_h1_fallback``.
+    - ``title_fallback_injections_total`` (counter):
+      cumulative fallback injections.
+    - ``title_fallback_rate`` (gauge): current fallback
+      injection rate over the trailing window
+      (0.0 to 1.0).
+    - ``title_fallback_window_size`` (gauge): current
+      size of the trailing window (capped at
+      ``_FALLBACK_RATE_WINDOW``).
+
+    Use case
+    --------
+    Pair this endpoint with an alertmanager rule on
+    ``title_fallback_rate >= 0.5`` to convert the
+    in-process counter into a real PagerDuty / Slack
+    alert. The current implementation emits a WARNING
+    log line at the same threshold; this endpoint makes
+    the same data available to external monitoring
+    tools without log scraping.
+
+    Example alertmanager rule::
+
+        - alert: H1FallbackRateHigh
+          expr: title_fallback_rate > 0.5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: H1 title-fallback rate above 50%
+
+    No DB, no LLM, no external API -- the counters are
+    maintained in process memory by the telemetry
+    modules themselves, so this endpoint is safe to
+    call from healthcheck probes and load balancers.
+
+    Returns
+    -------
+    PlainTextResponse
+        Prometheus exposition-format text body.
+        ``Content-Type: text/plain; version=0.0.4`` (the
+        standard Prometheus content type).
+    """
+    from fastapi.responses import PlainTextResponse
+
+    from app.infrastructure.llm.citation_sanitizer import (
+        get_stats as get_sanitizer_stats,
+    )
+    from app.infrastructure.llm.title_fallback import (
+        get_fallback_stats,
+    )
+    from app.infrastructure.observability.prometheus_exposition import (
+        format_counter,
+        format_gauge,
+        render_metrics,
+    )
+
+    sanitizer_stats = get_sanitizer_stats()
+    fallback_stats = get_fallback_stats()
+
+    blocks = [
+        # Citation sanitizer (counters, monotonically
+        # increasing since process start).
+        format_counter(
+            "citation_sanitizer_calls_total",
+            "Total calls to sanitize_citation_markers.",
+            sanitizer_stats.get("total_calls", 0),
+        ),
+        format_counter(
+            "citation_sanitizer_dropped_total",
+            "Total hallucinated citation markers dropped.",
+            sanitizer_stats.get("total_dropped", 0),
+        ),
+        format_counter(
+            "citation_sanitizer_calls_with_drops_total",
+            "Calls that dropped at least one marker.",
+            sanitizer_stats.get("calls_with_drops", 0),
+        ),
+        # H1 title-fallback (counters + gauges).
+        format_counter(
+            "title_fallback_calls_total",
+            "Total calls to inject_h1_fallback.",
+            fallback_stats.get("total_calls", 0),
+        ),
+        format_counter(
+            "title_fallback_injections_total",
+            "Total fallback injections (LLM omitted the H1).",
+            fallback_stats.get("total_fallbacks", 0),
+        ),
+        format_gauge(
+            "title_fallback_rate",
+            "Current fallback injection rate over the trailing window (0.0 to 1.0).",
+            fallback_stats.get("rate", 0.0),
+        ),
+        format_gauge(
+            "title_fallback_window_size",
+            "Current size of the trailing window.",
+            fallback_stats.get("window_size", 0),
+        ),
+    ]
+
+    return PlainTextResponse(
+        content=render_metrics(blocks),
+        media_type="text/plain; version=0.0.4",
+    )

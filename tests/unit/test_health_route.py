@@ -203,11 +203,16 @@ class TestHealthSanitizerEndpoint:
         # trigger DB or LLM I/O.
         assert top_level_only == [
             "from fastapi import APIRouter",
+        ] or top_level_only == [
+            "from fastapi import APIRouter",
+            "from fastapi.responses import PlainTextResponse",
         ], (
             "top-level imports of health.py must be limited "
             "to stdlib + FastAPI. Lazy imports inside route "
             "handlers (like the sanitizer endpoint) are "
             "acceptable as long as they don't open DB "
-            "connections or make LLM calls. Found: "
+            "connections or make LLM calls. ``PlainTextResponse`` "
+            "is FastAPI's plain-text response wrapper and doesn't "
+            "trigger any I/O. Found: "
             f"{top_level_only}"
         )
