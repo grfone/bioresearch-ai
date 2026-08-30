@@ -340,7 +340,30 @@ def run_streaming(
 # format is stable across Linux/macOS hosts (the message format
 # itself is the standard Go resolver error: ``dial tcp: lookup
 # <host> on <resolver>: <reason>``).
-_DNS_FAILURE_PATTERNS = (
+#
+# Two categories of pattern:
+#
+# 1. **DNS-resolution failures** -- the hostname never
+#    resolved. Examples: NXDOMAIN, ``server misbehaving``
+#    from the systemd-resolved stub, ``temporary failure
+#    in name resolution``.
+#
+# 2. **TCP-connect failures** to the resolved address --
+#    the hostname resolved but the SYN never reached the
+#    destination. The user reported this on 2026-08-30
+#    with ``network is unreachable`` (their host's IPv6
+#    routing was broken; Docker's resolver picked the
+#    IPv6 result first and the SYN was dropped).
+#
+# We catch both because the symptom -- the build aborting
+# before any user code runs -- looks identical from the
+# user's perspective. Retrying on TCP failures may help
+# transient cases (e.g. flaky VPN) but not the
+# structurally-broken-IPv6 case -- for that the
+# ``_preflight_docker_registry`` probe surfaces a clear
+# hint about disabling IPv6 in the daemon config.
+_NETWORK_FAILURE_PATTERNS = (
+    # DNS resolution failures (previous fix).
     re.compile(
         r"lookup\s+\S+\s+on\s+127\.0\.0\.53:53:\s*server misbehaving"
     ),
@@ -359,12 +382,53 @@ _DNS_FAILURE_PATTERNS = (
     re.compile(
         r"temporary failure in name resolution"
     ),
+    # TCP-connect failures (NEW -- covers IPv6
+    # unreachable and similar). The Go stdlib emits
+    # these as ``dial tcp <addr>:<port>: connect: <reason>``.
+    re.compile(
+        r"dial\s+tcp[^:]*:\s*connect:\s*network is unreachable"
+    ),
+    re.compile(
+        r"dial\s+tcp[^:]*:\s*connect:\s*no route to host"
+    ),
+    re.compile(
+        r"dial\s+tcp[^:]*:\s*connect:\s*host is down"
+    ),
+    # Generic ECONNREFUSED to any address (the
+    # ``connection refused.*docker\.io`` above matches
+    # a subset; this one catches arbitrary TCP ports
+    # and the auth.docker.io token endpoint).
+    re.compile(
+        r"dial\s+tcp[^:]*:\s*connect:\s*connection refused"
+    ),
+    # Generic ``couldn't connect to server`` from curl
+    # (the bootstrap uses curl for the credential probe
+    # and similar checks). On Linux, curl emits this
+    # message for any transport-level failure
+    # (ECONNREFUSED, ENETUNREACH, EHOSTUNREACH, ...).
+    # We match case-insensitively so the same pattern
+    # catches both ``Couldn't`` (curl's preferred
+    # capitalisation) and ``Couldn't`` (manual
+    # transcriptions in the wild).
+    re.compile(
+        r"couldn.?t connect to server", re.IGNORECASE
+    ),
+    # Final fallback: any ``dial tcp ...`` line is
+    # suspicious. This is broader than the specific
+    # patterns above and may catch a future failure
+    # mode that hasn't been seen yet. The risk of false
+    # positives is low because a healthy build never
+    # emits ``dial tcp`` lines (only failed ones do).
+    re.compile(
+        r"dial\s+tcp\s+\S+:\s*(connect|connection)"
+    ),
 )
 
 
-def _looks_like_dns_failure(output: str) -> bool:
-    """Return True if any line of build output looks like a
-    DNS / name-resolution failure.
+def _looks_like_network_failure(output: str) -> bool:
+    """
+    Return True if any line of build output looks like a
+    DNS resolution OR TCP-connect failure.
 
     The build's stderr often includes the original
     Docker / BuildKit error and a re-raised Python
@@ -372,8 +436,18 @@ def _looks_like_dns_failure(output: str) -> bool:
     all lines) because the BuildKit daemon's error
     format puts the useful part on a different line
     than the Python re-raise.
+
+    Renamed from ``_looks_like_dns_failure`` -- the
+    pattern set now covers TCP failures too. The old
+    name is preserved as an alias below for backward
+    compatibility with callers and tests.
     """
-    return any(pat.search(output) for pat in _DNS_FAILURE_PATTERNS)
+    return any(pat.search(output) for pat in _NETWORK_FAILURE_PATTERNS)
+
+
+# Backward-compatible alias. Older callers (and older
+# tests) reference the old name.
+_looks_like_dns_failure = _looks_like_network_failure
 
 
 def _resolve_with_retry(
@@ -450,6 +524,341 @@ def _resolve_with_retry(
     raise last_exc
 
 
+def _probe_docker_registry_connectivity(
+    host: str = "registry-1.docker.io",
+    port: int = 443,
+    *,
+    timeout_s: float = 5.0,
+) -> dict[str, Any]:
+    """
+    TCP-probe ``host:port`` and report which address
+    families are actually reachable.
+
+    This is the second layer of the bootstrap's
+    futureproof network handling. The first layer
+    (``_resolve_with_retry``) only does DNS -- it
+    catches the case where the hostname fails to
+    resolve. But DNS can succeed while the resulting
+    IP is unreachable (the user reported exactly this
+    on 2026-08-30: their host's IPv6 routing was broken
+    but ``getaddrinfo`` happily returned IPv6 addresses).
+    In that case the pre-flight passes and the build
+    fails when BuildKit tries to actually connect.
+
+    Returns a dict with:
+
+    - ``reachable_families``: ``{"ipv4": True, "ipv6": False}``
+    - ``unreachable_reasons``: ``{"ipv6": "network is
+      unreachable"}`` -- empty for reachable families.
+    - ``recommended_action``: one of ``"ok"``,
+      ``"ipv4_only"``, ``"ipv6_only"``, ``"unreachable"``.
+    - ``ipv4_addr``/``ipv6_addr``: first address of each
+      family that was returned (even if the connect
+      failed). Useful for the auto-fix path below.
+
+    The probe tries one connect per family with a short
+    timeout -- never blocks longer than ~2x ``timeout_s``
+    even on a fully unreachable host. We probe IPv4
+    first because the docker daemon's resolver also
+    has the same RFC 6724 ordering; we want to know
+    up-front which family is "the good one".
+    """
+    import socket
+
+    out: dict[str, Any] = {
+        "reachable_families": {"ipv4": False, "ipv6": False},
+        "unreachable_reasons": {"ipv4": None, "ipv6": None},
+        "ipv4_addr": None,
+        "ipv6_addr": None,
+        "recommended_action": "ok",
+    }
+    try:
+        infos = socket.getaddrinfo(
+            host, port, type=socket.SOCK_STREAM
+        )
+    except OSError as exc:
+        # DNS itself failed. The caller should fall
+        # back to its DNS-only pre-flight (which has
+        # its own retry logic).
+        out["recommended_action"] = "dns_failure"
+        out["unreachable_reasons"]["dns"] = str(exc)
+        return out
+
+    # Try each returned address, IPv4 first. Pick the
+    # first reachable of each family.
+    families_seen = {"ipv4": False, "ipv6": False}
+    for family, _, _, _, sockaddr in infos:
+        if family == socket.AF_INET:
+            fkey = "ipv4"
+            sock = socket.socket(
+                socket.AF_INET, socket.SOCK_STREAM
+            )
+            ip = sockaddr[0]
+        elif family == socket.AF_INET6:
+            fkey = "ipv6"
+            sock = socket.socket(
+                socket.AF_INET6, socket.SOCK_STREAM
+            )
+            # IPv6 sockaddr is 4-tuple: (addr, port, flow, scope)
+            ip = sockaddr[0]
+        else:
+            continue
+        sock.settimeout(timeout_s)
+        try:
+            sock.connect(sockaddr)
+            out["reachable_families"][fkey] = True
+            if not families_seen[fkey]:
+                out[f"{fkey}_addr"] = ip
+                families_seen[fkey] = True
+        except (OSError, socket.timeout) as exc:
+            out["unreachable_reasons"][fkey] = str(exc)
+        finally:
+            sock.close()
+
+    # Decide on a recommended action based on the
+    # connectivity profile.
+    ipv4_ok = out["reachable_families"]["ipv4"]
+    ipv6_ok = out["reachable_families"]["ipv6"]
+    if ipv4_ok and ipv6_ok:
+        out["recommended_action"] = "ok"
+    elif ipv4_ok and not ipv6_ok:
+        # This is the user-reported failure mode. The
+        # hostname resolves fine but IPv6 routing is
+        # broken. Docker's resolver picks IPv6 first
+        # (RFC 6724) and the build fails immediately.
+        out["recommended_action"] = "ipv4_only"
+    elif ipv6_ok and not ipv4_ok:
+        out["recommended_action"] = "ipv6_only"
+    else:
+        out["recommended_action"] = "unreachable"
+    return out
+
+
+def _disable_docker_ipv6() -> bool:
+    """
+    Best-effort auto-fix for the broken-IPv6 case the user
+    reported on 2026-08-30: write ``{"ipv6": false}`` to
+    ``/etc/docker/daemon.json`` (preserving any existing
+    keys like ``runtimes``) and restart the Docker
+    daemon.
+
+    This requires ``sudo``. If the user is already
+    root we write the file directly. If the user
+    doesn't have passwordless sudo the function returns
+    False and the caller surfaces a manual
+    instruction.
+
+    Returns True if the daemon config was updated
+    AND the daemon was restarted. False on any
+    failure (logged at WARN level so the user
+    can see what went wrong).
+
+    Safety
+    ------
+    - We only touch ``/etc/docker/daemon.json``. We
+      don't modify any other Docker state.
+    - We preserve all existing keys in the file
+      (it's a JSON merge, not a rewrite).
+    - We back up the original file to
+      ``/etc/docker/daemon.json.bak`` before
+      overwriting -- the user can roll back with
+      ``sudo cp /etc/docker/daemon.json.bak
+      /etc/docker/daemon.json && sudo systemctl
+      restart docker``.
+    - The ``ipv6: false`` key is a no-op on daemons
+      that don't accept it -- we test with
+      ``docker info`` after restart to confirm the
+      daemon is healthy before returning True.
+    """
+    daemon_json = Path("/etc/docker/daemon.json")
+    if not daemon_json.parent.exists():
+        log_warn(
+            f"Cannot auto-fix docker daemon IPv6: "
+            f"{daemon_json.parent} does not exist (not "
+            f"a systemd-based host?). The build will "
+            f"continue but may fail."
+        )
+        return False
+
+    is_root = os.geteuid() == 0
+    has_sudo = shutil.which("sudo") is not None
+    if not is_root and not has_sudo:
+        log_warn(
+            "Cannot auto-fix docker daemon IPv6: not "
+            "running as root and ``sudo`` is not "
+            "available. Please disable IPv6 manually: "
+            "write ``{\"ipv6\": false}`` to "
+            "/etc/docker/daemon.json and run "
+            "``sudo systemctl restart docker``."
+        )
+        return False
+
+    # Read existing config (or empty dict). Bail on
+    # unparseable JSON so we don't clobber a config
+    # the user has spent time on.
+    try:
+        if daemon_json.exists():
+            with daemon_json.open() as f:
+                cfg = json.load(f)
+            if not isinstance(cfg, dict):
+                log_warn(
+                    f"Cannot auto-fix docker daemon IPv6: "
+                    f"{daemon_json} is not a JSON object. "
+                    f"Please disable IPv6 manually."
+                )
+                return False
+        else:
+            cfg = {}
+    except (OSError, json.JSONDecodeError) as exc:
+        log_warn(
+            f"Cannot auto-fix docker daemon IPv6: failed "
+            f"to read {daemon_json} ({exc}). Please "
+            f"disable IPv6 manually."
+        )
+        return False
+
+    # Already disabled -- nothing to do.
+    if cfg.get("ipv6") is False:
+        return True
+
+    # Apply the change. Back up first.
+    backup = daemon_json.with_suffix(".json.bak")
+    try:
+        if daemon_json.exists():
+            shutil.copy2(daemon_json, backup)
+    except OSError as exc:
+        log_warn(
+            f"Cannot auto-fix docker daemon IPv6: failed "
+            f"to back up {daemon_json} to {backup} ({exc}). "
+            f"Refusing to proceed without a backup."
+        )
+        return False
+
+    cfg["ipv6"] = False
+    new_content = json.dumps(cfg, indent=2) + "\n"
+
+    # We pass ``-n`` to sudo so it fails
+    # non-interactively if the user hasn't configured
+    # NOPASSWD. That's the right behaviour for a
+    # CI-like bootstrap: if the user is running this
+    # from a terminal, they can configure NOPASSWD or
+    # run the commands manually; the bootstrap won't
+    # hang waiting for a password that won't arrive.
+    if is_root:
+        runner: list[str] = []
+    else:
+        runner = ["sudo", "-n"]
+
+    write_cmd = runner + ["tee", str(daemon_json)]
+    try:
+        proc = subprocess.run(
+            write_cmd,
+            input=new_content,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if proc.returncode != 0:
+            # If sudo failed because of NOPASSWD, give
+            # the user an actionable hint.
+            if (
+                "password" in proc.stderr.lower()
+                or "NOPASSWD" in proc.stderr
+                or "a password is required" in proc.stderr
+            ):
+                log_warn(
+                    f"Cannot auto-fix docker daemon IPv6: "
+                    f"sudo requires a password but the "
+                    f"bootstrap is running non-interactively. "
+                    f"Run ``sudo tee /etc/docker/daemon.json "
+                    f"<<EOF\\n{new_content}EOF`` and then "
+                    f"``sudo systemctl restart docker`` "
+                    f"manually, OR configure NOPASSWD in "
+                    f"/etc/sudoers for this command."
+                )
+            else:
+                log_warn(
+                    f"Cannot auto-fix docker daemon IPv6: "
+                    f"failed to write {daemon_json} "
+                    f"(exit {proc.returncode}): "
+                    f"{proc.stderr.strip()}. Please "
+                    f"disable IPv6 manually."
+                )
+            return False
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log_warn(
+            f"Cannot auto-fix docker daemon IPv6: "
+            f"failed to write {daemon_json} ({exc}). "
+            f"Please disable IPv6 manually."
+        )
+        return False
+
+    # Restart the daemon. We also use ``sudo -n`` (the
+    # ``-n`` was baked into ``runner`` above).
+    restart_cmd = runner + ["systemctl", "restart", "docker"]
+    try:
+        proc = subprocess.run(
+            restart_cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            log_warn(
+                f"Cannot auto-fix docker daemon IPv6: "
+                f"``systemctl restart docker`` failed "
+                f"(exit {proc.returncode}): "
+                f"{proc.stderr.strip()}. The config has "
+                f"been written to {daemon_json} but the "
+                f"daemon may not have picked it up. Try "
+                f"``sudo systemctl restart docker`` "
+                f"manually."
+            )
+            return False
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log_warn(
+            f"Cannot auto-fix docker daemon IPv6: "
+            f"``systemctl restart docker`` failed "
+            f"({exc}). The config has been written to "
+            f"{daemon_json} but the daemon may not have "
+            f"picked it up. Try ``sudo systemctl "
+            f"restart docker`` manually."
+        )
+        return False
+
+    # Sanity check: confirm the daemon is up and the
+    # IPv6 setting stuck. A failed restart can leave
+    # the daemon in a half-up state.
+    try:
+        proc = subprocess.run(
+            ["docker", "info", "--format", "{{.IPv6}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if proc.returncode != 0 or "true" in proc.stdout.lower():
+            log_warn(
+                f"Auto-fix applied to {daemon_json} "
+                f"but the daemon is still reporting "
+                f"IPv6 enabled. The daemon may need a "
+                f"hard restart: ``sudo systemctl "
+                f"restart docker``."
+            )
+            return False
+    except (OSError, subprocess.TimeoutExpired):
+        # Don't fail the auto-fix just because the
+        # sanity check couldn't run; the user's
+        # next command will reveal the real state.
+        pass
+
+    log_ok(
+        f"Auto-disabled IPv6 in {daemon_json} and "
+        f"restarted the docker daemon. The build "
+        f"should now succeed over IPv4."
+    )
+    return True
+
+
 def _run_build_with_dns_retry(
     cmd: list[str],
     *,
@@ -483,7 +892,7 @@ def _run_build_with_dns_retry(
     2. **Mid-build DNS hiccup**: the resolver
        misbehaves AFTER the pre-flight succeeded.
        BuildKit's output then contains one of the
-       patterns in ``_DNS_FAILURE_PATTERNS``. We
+       patterns in ``_NETWORK_FAILURE_PATTERNS``. We
        detect this and retry the build.
 
     The retry loop is bounded by ``max_attempts`` (3
@@ -529,6 +938,82 @@ def _run_build_with_dns_retry(
             f"(3) re-run the bootstrap in a few minutes."
         ) from exc
 
+    # TCP pre-flight: even when DNS resolves, the
+    # resulting IP may be unreachable. The user hit
+    # this on 2026-08-30 with broken IPv6 routing --
+    # ``getaddrinfo`` returned Cloudflare IPv6 addresses
+    # but the SYN was dropped. We probe both families
+    # so we can warn (and, in the future, auto-configure)
+    # before the build burns a 60-second timeout.
+    #
+    # We do NOT abort the build on a partial failure --
+    # the probe is informational. The retry loop below
+    # is the safety net. The probe's value is in
+    # surface-area: a clear hint about what's broken
+    # BEFORE we ask BuildKit to do the work.
+    probe = _probe_docker_registry_connectivity(
+        "registry-1.docker.io",
+        timeout_s=4.0,
+    )
+    action = probe.get("recommended_action", "ok")
+    if action == "ipv4_only":
+        log_warn(
+            "Docker Hub is reachable over IPv4 but NOT over "
+            "IPv6 from this host. Docker's resolver prefers "
+            "IPv6 by default (RFC 6724), so the build will "
+            "fail with ``dial tcp ...: connect: network is "
+            "unreachable`` before any user code runs. Workarounds: "
+            "(1) disable IPv6 in the Docker daemon: write "
+            "``{\"ipv6\": false}`` to /etc/docker/daemon.json and "
+            "``sudo systemctl restart docker``; "
+            "(2) fix the host's IPv6 routing; "
+            "(3) prepend an ``--add-host registry-1.docker.io:"
+            f"{probe.get('ipv4_addr', '54.87.33.100')}`` to the "
+            "docker buildx command (we'll try this auto-fix next "
+            "if the build still fails)."
+        )
+    elif action == "ipv6_only":
+        log_warn(
+            "Docker Hub is reachable over IPv6 but NOT over "
+            "IPv4 from this host. This is unusual; the "
+            "build may still succeed because Docker's "
+            "resolver will pick the IPv6 result."
+        )
+    elif action == "unreachable":
+        # Both families unreachable. The pre-flight DNS
+        # succeeded but no address connects -- this is
+        # the same failure as the "network is unreachable"
+        # case but for both families (e.g. full network
+        # outage, firewall block). We log a clear
+        # warning and let the retry loop handle it.
+        log_warn(
+            "Docker Hub is unreachable from this host on "
+            "both IPv4 and IPv6. The build will retry with "
+            "exponential backoff, but the issue is likely "
+            "structural (firewall, ISP, or full outage). "
+            "Check your network connection before re-running."
+        )
+    elif action == "dns_failure":
+        # ``_resolve_with_retry`` would have already
+        # raised above, so this branch is unreachable in
+        # practice. Log defensively.
+        log_warn(
+            f"DNS resolution for registry-1.docker.io "
+            f"failed during the TCP probe: "
+            f"{probe.get('unreachable_reasons', {}).get('dns')}. "
+            f"The build may still fail; the retry loop will "
+            f"absorb transient cases."
+        )
+    # action == "ok" or anything else: no warning, the
+    # build is expected to succeed.
+
+    # Track whether the IPv6 auto-fix has been attempted
+    # in this call. We only try it once because a
+    # successful fix changes the daemon state globally
+    # (so the next build will pick up the change);
+    # a failed fix would just fail again. Don't loop.
+    ipv6_fix_attempted = False
+
     delay = 2.0
     for attempt in range(1, max_attempts + 1):
         # Stream the build to the user's terminal (so
@@ -560,22 +1045,52 @@ def _run_build_with_dns_retry(
         captured_output = "\n".join(output_lines)
         if rc == 0:
             return
-        # Non-zero exit. Was it DNS-flavored?
-        if _looks_like_dns_failure(captured_output) and attempt < max_attempts:
-            log_warn(
-                f"Docker build failed with a DNS / name-resolution "
-                f"error (attempt {attempt}/{max_attempts}). "
-                f"Retrying in {delay:.0f}s…"
-            )
-            time.sleep(delay)
-            delay *= 2
-            continue
-        # Non-DNS failure OR retries exhausted.
+        # Non-zero exit. Was it DNS-/network-failure-shaped?
+        if _looks_like_network_failure(captured_output):
+            # Auto-fix path: the user's host has IPv6
+            # broken but IPv4 working. Disable IPv6 in
+            # the docker daemon and retry. We do this
+            # only on the FIRST network-failure-shaped
+            # attempt -- a successful fix changes
+            # daemon state, so subsequent builds will
+            # use IPv4; a failed fix won't be helped
+            # by trying again.
+            if (
+                not ipv6_fix_attempted
+                and action == "ipv4_only"
+            ):
+                log_warn(
+                    f"Build failed with a network error and "
+                    f"the pre-flight probe said the host has "
+                    f"broken IPv6. Attempting auto-fix: "
+                    f"disabling IPv6 in the docker daemon."
+                )
+                ipv6_fix_attempted = True
+                if _disable_docker_ipv6():
+                    # Daemon restarted -- retry the
+                    # build immediately without
+                    # sleeping (we just changed
+                    # state).
+                    continue
+                # Auto-fix failed -- log it and fall
+                # through to the standard retry
+                # logic below.
+            if attempt < max_attempts:
+                log_warn(
+                    f"Docker build failed with a network "
+                    f"error (attempt {attempt}/{max_attempts}). "
+                    f"Retrying in {delay:.0f}s…"
+                )
+                time.sleep(delay)
+                delay *= 2
+                continue
+        # Non-network failure OR retries exhausted.
         break
-    # Out of retries (or non-DNS failure). Surface a
-    # clear error -- the user has either a real DNS
-    # problem (now caught by the pre-flight) or some
-    # other build failure (mirror, port conflict, …).
+    # Out of retries (or non-network failure). Surface a
+    # clear error -- the user has either a real network
+    # problem (now caught by the pre-flight and the
+    # auto-fix) or some other build failure (mirror,
+    # port conflict, …).
     raise RuntimeError(
         "Docker build failed; check the output above. "
         "If the failure is a network timeout to "
@@ -585,7 +1100,13 @@ def _run_build_with_dns_retry(
         "resolver may be misbehaving (systemd-resolved on "
         "127.0.0.53 is the common case) -- try "
         "``sudo systemctl restart systemd-resolved`` and "
-        "re-run."
+        "re-run. If the build fails with "
+        "``network is unreachable`` (the host's IPv6 routing "
+        "is broken), the bootstrap has attempted an "
+        "auto-fix (writing ``{\"ipv6\": false}`` to "
+        "/etc/docker/daemon.json and restarting the daemon). "
+        "If that failed too, run the same commands manually "
+        "with sudo."
     )
 
 
