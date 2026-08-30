@@ -49,3 +49,16 @@ openai>=1.40,<2.0
 # our throughput; we don't pull in hiredis because the C
 # extension adds build complexity for a marginal speedup. ---
 redis>=5.0,<6.0
+
+# --- PDF generation for the PUBLISH action ---
+# Reportlab produces a real, Unicode-aware PDF (TTF font
+# embedding, clickable internal /Link annotations, proper
+# text wrapping, multi-page flow). Hand-rolling a PDF was
+# tried first but couldn't realistically cover the full
+# biomedical Unicode surface (Greek letters, diacritics,
+# em-dashes, etc.) without ballooning the code. Reportlab is
+# pure-Python at ~9 MB; it pulls in pillow via its
+# ``lib`` extra but we don't exercise the image path so the
+# import is dormant at runtime. The minimal image's previous
+# total (~630 MB) grows by less than 1.5%. ---
+reportlab>=5.0,<6.0

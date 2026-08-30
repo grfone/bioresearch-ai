@@ -6,7 +6,7 @@ when the LLM omits one.
 
 Background
 ----------
-The ``MinimalPDFGenerator`` (PDF rendering) and the React UI
+The ``ReportLabPDFGenerator`` (PDF rendering) and the React UI
 both extract the report title from the first ``# `` heading
 in ``report.summary.body``. The LLM is explicitly prompted
 to emit ``# <report title>`` at the start of the synthesis,

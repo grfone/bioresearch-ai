@@ -99,6 +99,10 @@ export const Report: React.FC = () => {
   // a different user-visible problem from "the report generation
   // failed").
   const [pubError, setPubError] = useState<string | null>(null);
+  // Same idea for the LaTeX download button. The download
+  // can fail for reasons orthogonal to the PDF (network
+  // error on the GET endpoint, no report yet, etc.).
+  const [texError, setTexError] = useState<string | null>(null);
   // Phase label shown next to the spinner. Mirrors the
   // orchestrator's actual phases for the report action:
   //   1. ``Loading workspace...`` while ``fetchWorkspace``
@@ -236,11 +240,12 @@ export const Report: React.FC = () => {
    *   3. Advances REPORTED -> PUBLISHING -> COMPLETED
    *      (the audit trail is preserved).
    *
-   * After this call resolves the workspace's
-   * ``published_report_available`` flag flips to true and the
-   * "Download PDF" link in the action bar becomes a real
-   * browser navigation (the GET endpoint sets
-   * ``Content-Disposition: attachment``).
+   * After this call resolves, the workspace's
+   * ``published_report_available`` flag flips to true and we
+   * trigger a browser download of the PDF via a hidden
+   * ``<a download>`` click. The "Generate PDF" button
+   * generates AND downloads -- the user no longer needs a
+   * separate download step.
    */
   const handlePublish = async () => {
     if (!workspaceId) return;
@@ -261,6 +266,25 @@ export const Report: React.FC = () => {
       // internally, but an explicit refetch makes the data
       // flow obvious to anyone reading the code.
       await fetchWorkspace(workspaceId);
+      // Auto-download the PDF. The endpoint sets
+      // ``Content-Disposition: attachment`` so the browser
+      // saves the file rather than navigating. We use a
+      // temporary ``<a download>`` element rather than a
+      // window navigation so the user stays on the page
+      // (the click handler is in this same React tree).
+      const a = document.createElement('a');
+      a.href = api.getPublishedReportUrl(workspaceId);
+      a.download = `report-${workspaceId}.pdf`;
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      // Clean up the temporary element on the next tick.
+      // We don't ``removeChild`` synchronously because
+      // some browsers (Firefox) cancel the download if
+      // the link is removed before the download starts.
+      setTimeout(() => {
+        document.body.removeChild(a);
+      }, 0);
     } catch (err) {
       setPubError(
         err instanceof Error ? err.message : 'Failed to publish report.',
@@ -277,6 +301,38 @@ export const Report: React.FC = () => {
     // fallback for any state-flush edge case (see the comment
     // on the ``publishedAt`` state slot above).
     setPublishedAt((prev) => prev + 1);
+  };
+
+  /**
+   * Download the workspace's LaTeX source. The endpoint
+   * ``GET /workspaces/{id}/published-report.tex`` renders the
+   * LaTeX on demand (the workspace must already have a report;
+   * we don't require a prior PUBLISH because the rendering is
+   * cheap and the LaTeX is what some users want without ever
+   * needing the PDF).
+   *
+   * Same browser-side flow as the auto-download in
+   * ``handlePublish``: temporary ``<a download>`` element +
+   * click + cleanup on next tick.
+   */
+  const handleDownloadTex = async () => {
+    if (!workspaceId) return;
+    setTexError(null);
+    try {
+      const a = document.createElement('a');
+      a.href = api.getPublishedTexUrl(workspaceId);
+      a.download = `report-${workspaceId}.tex`;
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+      }, 0);
+    } catch (err) {
+      setTexError(
+        err instanceof Error ? err.message : 'Failed to download LaTeX.',
+      );
+    }
   };
 
   // Build the PDF download URL lazily. The endpoint sets
@@ -571,13 +627,13 @@ export const Report: React.FC = () => {
             </button>
 
             {/* PUBLISH action: renders a PDF on the server and
-                exposes it via the GET endpoint below. The button
-                is disabled during the in-flight call (visual
-                spinner via the disabled state) and shows a
-                separate error if it fails. Once the PDF exists,
-                the link below becomes a real download. We use
-                ``data-action="publish-pdf"`` for end-to-end
-                tests that grep the rendered DOM. */}
+                auto-downloads it (via a hidden ``<a>`` click
+                in ``handlePublish``). The button is disabled
+                during the in-flight call (visual spinner via
+                the disabled state) and shows a separate error
+                if it fails. ``data-action="publish-pdf"`` is
+                kept for end-to-end tests that grep the
+                rendered DOM. */}
             <button
                 className="btn btn-primary"
                 onClick={handlePublish}
@@ -589,22 +645,31 @@ export const Report: React.FC = () => {
               {publishing ? 'Generating…' : 'Generate PDF'}
             </button>
 
-            {downloadUrl && (
-              <a
-                className="btn btn-outline"
-                href={downloadUrl}
-                // The endpoint sets
-                // ``Content-Disposition: attachment``
-                // so the browser saves the file rather
-                // than navigating away. ``download`` is a
-                // hint to the browser; the disposition
-                // header is authoritative.
-                download={`report-${workspaceId}.pdf`}
-              >
-                <Download size={16}/>
-                Download PDF
-              </a>
-            )}
+            {/* LaTeX download: a separate button so users can
+                grab the editable source without going through
+                the PDF flow. The LaTeX endpoint renders on
+                demand (no FSM state change) and we trigger
+                the browser download via a hidden ``<a>``
+                click. Same pattern as the PDF auto-download.
+                The button is blue (btn-primary on a fresh
+                colour variant) -- visually distinct from the
+                PDF button so the user knows they're getting
+                different artefacts. We use the ``data-action``
+                attribute for end-to-end test selection. */}
+            <button
+                className="btn btn-secondary"
+                onClick={handleDownloadTex}
+                disabled={!report}
+                data-action="download-tex"
+                title={
+                  report
+                    ? 'Download the LaTeX source for this report'
+                    : 'Generate a report before downloading the LaTeX source'
+                }
+            >
+              <FileText size={16}/>
+              Generate TeX
+            </button>
 
             <button
                 className="btn btn-outline"
@@ -621,6 +686,16 @@ export const Report: React.FC = () => {
               data-testid="publish-error"
             >
               Failed to publish PDF: {pubError}
+            </div>
+          )}
+
+          {texError && (
+            <div
+              className="text-error text-sm mt-2"
+              role="alert"
+              data-testid="download-tex-error"
+            >
+              Failed to download LaTeX: {texError}
             </div>
           )}
         </header>

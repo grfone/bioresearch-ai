@@ -37,11 +37,13 @@ class PDFGenerator(ABC):
 
     Implementations
     ---------------
-    - :class:`app.infrastructure.pdf.minimal_generator.MinimalPDFGenerator`
-      (hand-rolled, no third-party dependency)
+    - :class:`app.infrastructure.pdf.reportlab_generator.ReportLabPDFGenerator`
+      (reportlab-based, embeds DejaVu Sans TTF for Unicode,
+      produces real PDF /Link annotations for clickable
+      citation references)
 
-    A future implementation might use ``reportlab`` or
-    ``weasyprint`` -- the interface stays the same.
+    A future implementation might use ``weasyprint`` or
+    ``fpdf2`` -- the interface stays the same.
 
     Contract
     --------

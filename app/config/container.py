@@ -95,8 +95,8 @@ from app.infrastructure.llm.report_generator import (
 from app.infrastructure.llm.report_mapper import (
     ReportMapper,
 )
-from app.infrastructure.pdf.minimal_generator import (
-    MinimalPDFGenerator,
+from app.infrastructure.pdf.reportlab_generator import (
+    ReportLabPDFGenerator,
 )
 from app.infrastructure.pubmed.client import PubMedClient
 from app.infrastructure.pubmed.abstract_enricher import (
@@ -265,11 +265,14 @@ class Container:
             comparison_mapper=comparison_mapper,
         )
 
-        # PDF generator for the PUBLISH action. No LLM, no
-        # network -- the minimal hand-rolled generator is
-        # deterministic and fast (a 20-paper report renders in
-        # single-digit milliseconds).
-        pdf_generator = MinimalPDFGenerator()
+        # PDF generator for the PUBLISH action. Uses
+        # reportlab with embedded DejaVu Sans for full
+        # Unicode coverage (Greek letters, diacritics,
+        # em-dashes) and clickable internal link
+        # annotations for citation references. A
+        # 20-paper report renders in tens of milliseconds
+        # (no LLM, no network).
+        pdf_generator = ReportLabPDFGenerator()
 
         workspace_repository = cls.get_workspace_repository()
 

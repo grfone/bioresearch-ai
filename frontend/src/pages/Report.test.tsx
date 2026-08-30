@@ -54,6 +54,13 @@ vi.mock('../api/client', () => ({
     getPublishedReportUrl: vi.fn((workspaceId: string) =>
       `http://test/workspaces/${workspaceId}/published-report.pdf`,
     ),
+    // Same shape for the LaTeX download URL. Used by the
+    // "Generate TeX" button which is independent of the
+    // publish flow (the LaTeX endpoint renders on demand
+    // without changing the FSM state).
+    getPublishedTexUrl: vi.fn((workspaceId: string) =>
+      `http://test/workspaces/${workspaceId}/published-report.tex`,
+    ),
   },
 }));
 
@@ -156,6 +163,7 @@ const mockApi = api as unknown as {
   fetchWorkspace: ReturnType<typeof vi.fn>;
   runPublishAction: ReturnType<typeof vi.fn>;
   getPublishedReportUrl: ReturnType<typeof vi.fn>;
+  getPublishedTexUrl: ReturnType<typeof vi.fn>;
 };
 
 describe('Report > loader phases', () => {
@@ -489,22 +497,29 @@ describe('Report > Generate PDF', () => {
     expect(button.getAttribute('data-action')).toBe('publish-pdf');
   });
 
-  it('does NOT render the "Download PDF" link before publish', async () => {
+  it('does NOT trigger a download before publish', async () => {
     setupReadyToPublish(false);
     const { Report } = await import('./Report');
     render(<Report />);
     await waitFor(() => {
       expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
     });
-    // Without a published PDF, the download link is hidden --
-    // clicking the (still-rendered) Publish button is the only
-    // way to get a PDF.
-    expect(
-      screen.queryByRole('link', { name: /Download PDF/i }),
-    ).not.toBeInTheDocument();
+    // No PDF has been generated yet -- the Generate PDF
+    // button is rendered but clicking it has no effect
+    // (no auto-download link yet).
+    const createElementSpy = vi.spyOn(document, 'createElement');
+    const publishBtn = await screen.findByRole('button', {
+      name: /Generate PDF/i,
+    });
+    expect(publishBtn).toBeInTheDocument();
+    // We don't click -- the user can't download a PDF
+    // before one exists. Just assert the spy didn't
+    // see any anchor creation yet.
+    expect(createElementSpy).not.toHaveBeenCalledWith('a');
+    createElementSpy.mockRestore();
   });
 
-  it('renders the "Download PDF" link AFTER publish (wire-format)', async () => {
+  it('auto-downloads the PDF on click (no separate download button)', async () => {
     setupReadyToPublish(false);  // starts unpublished
     const { Report } = await import('./Report');
     render(<Report />);
@@ -512,30 +527,122 @@ describe('Report > Generate PDF', () => {
       expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
     });
 
-    // Click Publish -- this calls runAction('publish').
+    // Click Publish -- this calls runAction('publish'),
+    // then auto-creates a temporary ``<a>`` and clicks
+    // it to trigger the browser download.
     const publishBtn = await screen.findByRole('button', {
       name: /Generate PDF/i,
     });
+    // Stub ``document.createElement`` so we can observe
+    // the auto-download without actually navigating.
+    // We delegate to the original implementation for
+    // non-anchor tags because happy-dom's internal
+    // machinery (e.g. text nodes) needs the real DOM
+    // factory for its own bookkeeping.
+    const realCreate = document.createElement.bind(document);
+    const fakeAnchor = realCreate('div');
+    let clickedHref: string | null = null;
+    let clickedDownload: string | null = null;
+    const createElementSpy = vi
+      .spyOn(document, 'createElement')
+      .mockImplementation((tag: string, options?: ElementCreationOptions) => {
+        if (tag === 'a') {
+          const real = realCreate(tag, options);
+          real.click = vi.fn(() => {
+            clickedHref = real.href;
+            clickedDownload = real.download;
+          });
+          return real;
+        }
+        return realCreate(tag, options);
+      });
     fireEvent.click(publishBtn);
-
-    // After the click resolves, the workspace is COMPLETED
-    // and ``published_report_available`` is true -- the
-    // download link should render. ``findByRole`` auto-retries
-    // until the link appears (or times out), so we don't need
-    // a manual ``waitFor`` loop. The implicit timeout gives
-    // ``setCurrentWorkspace`` time to fire and React to
-    // commit the re-render.
-    const link = await screen.findByRole('link', {
-      name: /Download PDF/i,
-    });
-    expect(link.getAttribute('href')).toBe(
-      'http://test/workspaces/ws-1/published-report.pdf',
+    // The click handler is async -- it awaits
+    // ``runAction('publish')`` and ``fetchWorkspace()``
+    // before triggering the auto-download. ``waitFor``
+    // polls until ``clickedHref`` is set (or times out).
+    await waitFor(
+      () => {
+        expect(clickedHref).not.toBeNull();
+      },
+      { timeout: 5000 },
     );
-    // The download attribute tells the browser to save
-    // the file rather than navigate. The endpoint sets
-    // ``Content-Disposition: attachment`` authoritatively;
-    // this hint just makes the UX faster.
-    expect(link.getAttribute('download')).toBe('report-ws-1.pdf');
+    // The anchor points at the PDF endpoint.
+    expect(clickedHref).toBe(
+      'http://test/workspaces/ws-1/published-report.pdf'
+    );
+    // The download attribute hints at the filename.
+    expect(clickedDownload).toBe('report-ws-1.pdf');
+    createElementSpy.mockRestore();
+  });
+
+  it('renders the Generate TeX button always (when a report exists)', async () => {
+    setupReadyToPublish(true);
+    const { Report } = await import('./Report');
+    render(<Report />);
+    // The page starts with ``inFlight=true`` and only
+    // renders the action buttons after the loader
+    // finishes. Wait for the loader to clear, then look
+    // for the buttons. We poll every 100ms for up to
+    // 5 seconds -- the loader should clear well within
+    // that window because ``mockFetchWorkspace`` and
+    // ``mockRunAction`` both resolve synchronously.
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Loading workspace/i),
+      ).not.toBeInTheDocument();
+    }, { timeout: 5000 });
+    // The TeX button should be present and enabled --
+    // it's enabled whenever a ``ReportResponse`` has
+    // been loaded into local state. We use
+    // ``getAllByRole`` + filter because ``findByRole``
+    // has been flaky in this test (the ``aria-busy``
+    // state on adjacent buttons interferes with
+    // accessible-name matching in happy-dom).
+    const allButtons = screen.getAllByRole('button');
+    const texBtn = allButtons.find((b) =>
+      /Generate TeX/.test(b.textContent || ''),
+    );
+    if (!texBtn) {
+      throw new Error(
+        `Generate TeX button not found. Available buttons: ${JSON.stringify(allButtons.map((b) => b.textContent))}`
+      );
+    }
+    expect(texBtn).toBeInTheDocument();
+    // Clicking it triggers an anchor download.
+    // Delegate to the real factory for non-anchor tags
+    // (see the same fix in the PDF auto-download test).
+    const realCreate = document.createElement.bind(document);
+    const fakeAnchor = realCreate('div');
+    let clickedHref: string | null = null;
+    let clickedDownload: string | null = null;
+    const createElementSpy = vi
+      .spyOn(document, 'createElement')
+      .mockImplementation((tag: string, options?: ElementCreationOptions) => {
+        if (tag === 'a') {
+          const real = realCreate(tag, options);
+          real.click = vi.fn(() => {
+            clickedHref = real.href;
+            clickedDownload = real.download;
+          });
+          return real;
+        }
+        return realCreate(tag, options);
+      });
+    fireEvent.click(texBtn);
+    // Same wait pattern as the PDF auto-download.
+    await waitFor(
+      () => {
+        expect(clickedHref).not.toBeNull();
+      },
+      { timeout: 5000 },
+    );
+    // The anchor points at the .tex endpoint.
+    expect(clickedHref).toBe(
+      'http://test/workspaces/ws-1/published-report.tex'
+    );
+    expect(clickedDownload).toBe('report-ws-1.tex');
+    createElementSpy.mockRestore();
   });
 
   it('routes through the FSM-aware PUBLISH endpoint (Layer-4 audit)', async () => {

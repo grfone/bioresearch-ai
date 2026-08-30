@@ -57,10 +57,24 @@ FROM python:3.12-slim AS backend-minimal
 # System packages we need beyond Python: curl for the credential
 # probes and healthcheck, and build-essential for any wheels that
 # need to compile (e.g. greenlet on some platforms).
+#
+# ``fonts-dejavu`` (NOT the smaller ``fonts-dejavu-core``) is
+# required by the reportlab-based PDF generator (see
+# ``app/infrastructure/pdf/reportlab_generator.py``). Reportlab
+# embeds the TrueType so the PDF can render Greek letters (β,
+# α, γ), Latin diacritics (Ş, é, ü), em-dashes, and other
+# non-Latin-1 glyphs. We need the full ``fonts-dejavu`` (not
+# ``-core``) so the italic and bold-italic faces are also
+# available -- the generator uses ``<b>`` and ``<i>`` tags
+# in the body text via ``registerFontFamily``. Without this
+# package the PDF generator raises ``TTFError: Can't open
+# file ... DejaVuSans-Oblique.ttf`` and the workspace
+# transitions to ERROR. ~10 MB on the image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
         curl \
+        fonts-dejavu \
         git \
     && rm -rf /var/lib/apt/lists/*
 

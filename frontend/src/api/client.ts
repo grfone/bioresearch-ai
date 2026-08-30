@@ -434,6 +434,22 @@ export const api = {
     return buildUrl(`/workspaces/${workspaceId}/published-report.pdf`);
   },
 
+  /**
+   * URL the browser hits to download the published LaTeX
+   * source. Companion to ``getPublishedReportUrl`` -- the
+   * TeX file is rendered on demand by the
+   * ``published-report.tex`` endpoint (the FSM state is
+   * the same as for the PDF: the workspace must have a
+   * report).
+   *
+   * The browser saves the file as
+   * ``report-<workspace_id>.tex`` via the
+   * ``Content-Disposition: attachment`` header.
+   */
+  getPublishedTexUrl: (workspaceId: string): string => {
+    return buildUrl(`/workspaces/${workspaceId}/published-report.tex`);
+  },
+
   /** Run the RETRY action on a workspace. */
   runRetryAction: (workspaceId: string): Promise<WorkspaceResponse> => {
     return fetchJson(

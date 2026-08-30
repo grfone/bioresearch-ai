@@ -648,6 +648,105 @@ def published_report_pdf(
     )
 
 
+@router.get(
+    "/{workspace_id}/published-report.tex",
+    summary="Download the published LaTeX source.",
+    responses={
+        200: {
+            "content": {"text/x-tex": {}},
+            "description": (
+                "The rendered LaTeX source produced by the "
+                "PUBLISH action. Compile with ``pdflatex "
+                "report.tex && pdflatex report.tex`` "
+                "(twice) to produce the final PDF."
+            ),
+        },
+        404: {
+            "description": (
+                "No report has been generated for this "
+                "workspace yet. Run the REPORT action first."
+            ),
+        },
+    },
+)
+def published_report_tex(
+    workspace_id: UUID,
+    orchestrator: WorkspaceOrchestrator = Depends(
+        get_workspace_orchestrator
+    ),
+) -> Response:
+    """
+    Serve the workspace's report as a LaTeX source file.
+
+    This endpoint is the LaTeX counterpart to
+    ``GET /workspaces/{id}/published-report.pdf``. It
+    renders the workspace's final report on demand -- no
+    FSM state change, no caching (the workspace's report
+    is small and the rendering is fast).
+
+    The output is a complete, self-contained ``.tex``
+    file with:
+
+    - ``\\documentclass[11pt,a4paper]{article}``
+    - ``\\usepackage[utf8]{inputenc}`` for Unicode
+      (β, é, etc.)
+    - ``\\usepackage{hyperref}`` so ``[N]`` references
+      are clickable in the compiled PDF
+    - ``\\begin{document}`` ... ``\\end{document}``
+
+    The user can edit the source in their favourite
+    LaTeX editor (Overleaf, TeXstudio, etc.) and
+    recompile.
+
+    Response shape
+    --------------
+    - HTTP 200 with ``Content-Type: text/x-tex`` and
+      ``filename="report-<workspace_id>.tex"``.
+    - HTTP 404 if the workspace has no report yet (the
+      REPORT action has not been run).
+
+    Caching
+    -------
+    ``Cache-Control: no-store`` because the LaTeX is
+    rendered on demand. (Unlike the PDF, we don't cache
+    the LaTeX -- the rendering is fast and the file is
+    text -- but no caching means the user always gets
+    the latest report version.)
+    """
+    workspace = orchestrator.get_workspace(workspace_id)
+    if workspace.report is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "No report has been generated for this "
+                "workspace yet. POST /workspaces/{id}/actions/report "
+                "first to generate the report."
+            ),
+        )
+
+    # Render the LaTeX on demand. The rendering is
+    # ~tens of milliseconds for typical reports; the
+    # workspace's report is small enough that no
+    # caching is needed.
+    from app.infrastructure.latex.latex_generator import (
+        LatexReportGenerator,
+    )
+    tex_source = LatexReportGenerator().generate(workspace.report)
+    tex_bytes = tex_source.encode("utf-8")
+
+    return Response(
+        content=tex_bytes,
+        media_type="text/x-tex; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="report-{workspace_id}.tex"'
+            ),
+            "Content-Length": str(len(tex_bytes)),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 # ----------------------------------------------------------------------
 # Paper management — manual upload and removal
 # ----------------------------------------------------------------------
