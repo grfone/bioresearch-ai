@@ -332,6 +332,263 @@ def run_streaming(
     return proc.returncode
 
 
+# Patterns that look like DNS / network-resolution failures
+# during a ``docker buildx build``. The list is conservative:
+# each pattern was observed in a real failure. The detection is
+# substring-based because BuildKit's userland-DNS errors come
+# through Go's stdlib ``net.LookupHost`` wrapper and the message
+# format is stable across Linux/macOS hosts (the message format
+# itself is the standard Go resolver error: ``dial tcp: lookup
+# <host> on <resolver>: <reason>``).
+_DNS_FAILURE_PATTERNS = (
+    re.compile(
+        r"lookup\s+\S+\s+on\s+127\.0\.0\.53:53:\s*server misbehaving"
+    ),
+    re.compile(
+        r"lookup\s+\S+\s+on\s+127\.0\.0\.1:53:\s*server misbehaving"
+    ),
+    re.compile(
+        r"no such host"
+    ),
+    re.compile(
+        r"connection refused.*docker\.io"
+    ),
+    re.compile(
+        r"i/o timeout"
+    ),
+    re.compile(
+        r"temporary failure in name resolution"
+    ),
+)
+
+
+def _looks_like_dns_failure(output: str) -> bool:
+    """Return True if any line of build output looks like a
+    DNS / name-resolution failure.
+
+    The build's stderr often includes the original
+    Docker / BuildKit error and a re-raised Python
+    exception. We scan the whole output (across
+    all lines) because the BuildKit daemon's error
+    format puts the useful part on a different line
+    than the Python re-raise.
+    """
+    return any(pat.search(output) for pat in _DNS_FAILURE_PATTERNS)
+
+
+def _resolve_with_retry(
+    host: str,
+    *,
+    port: int = 443,
+    max_attempts: int = 3,
+    initial_delay_s: float = 1.0,
+    backoff: float = 2.0,
+) -> None:
+    """Block until ``host`` resolves, retrying on
+    transient resolver failures.
+
+    The user's host may have a flaky stub resolver
+    (``systemd-resolved`` on 127.0.0.53 is the common
+    case) that occasionally returns SERVFAIL for a
+    single query. A pre-flight resolution check before
+    the build catches this and gives the resolver a
+    chance to recover before we hand off to BuildKit.
+
+    Parameters
+    ----------
+    host : str
+        Hostname to resolve (e.g. ``registry-1.docker.io``).
+    port : int
+        TCP port to test the resolved address against.
+        Default ``443`` -- the standard TLS port for
+        Docker Hub. The actual TCP connect isn't
+        attempted; we only confirm that ``getaddrinfo``
+        returns at least one ``(family, type, proto,
+        canonname, sockaddr)`` tuple whose sockaddr is
+        ``(host, port)``.
+    max_attempts : int
+        Cap the number of attempts. 3 attempts with
+        exponential backoff (1s, 2s, 4s) covers most
+        transient hiccups without a long user wait.
+    initial_delay_s : float
+        First-retry delay. Subsequent delays are
+        ``initial_delay_s * backoff ** (attempt - 1)``.
+    backoff : float
+        Backoff multiplier between attempts.
+
+    Raises
+    ------
+    OSError
+        The underlying ``getaddrinfo`` failure when all
+        attempts are exhausted. The caller is expected
+        to surface the error in a user-facing way.
+    """
+    import socket
+
+    delay = initial_delay_s
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            return
+        except OSError as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                log_warn(
+                    f"DNS pre-flight for {host!r} failed "
+                    f"(attempt {attempt}/{max_attempts}): {exc}. "
+                    f"Retrying in {delay:.1f}s…"
+                )
+                time.sleep(delay)
+                delay *= backoff
+    # All attempts exhausted -- re-raise the last OSError
+    # with a hint pointing the user at the bootstrap's
+    # ``--mirror`` flag (which only affects conda, but
+    # is the most common guidance the user has already
+    # been pointed at).
+    assert last_exc is not None
+    raise last_exc
+
+
+def _run_build_with_dns_retry(
+    cmd: list[str],
+    *,
+    cwd: Optional[Path] = None,
+    max_attempts: int = 3,
+) -> None:
+    """Run ``docker buildx build`` with a DNS-aware retry
+    loop.
+
+    Two failure modes the bootstrap has to absorb:
+
+    1. **Pre-build DNS hiccup**: the build starts
+       pulling the syntax-pragma image
+       (``docker.io/docker/dockerfile:1.6``). BuildKit
+       hands the hostname to the host's stub resolver
+       (typically ``127.0.0.53`` on systems running
+       ``systemd-resolved``). When the resolver returns
+       SERVFAIL for a single query, the build aborts
+       before any user code runs. This is the error the
+       user reported on 2026-08-30:
+
+           #2 ERROR: failed to do request: Head
+           "https://registry-1.docker.io/v2/.../manifests/1.6":
+           dial tcp: lookup registry-1.docker.io on
+           127.0.0.53:53: server misbehaving
+
+       The pre-flight ``_resolve_with_retry`` call
+       catches the failing case before BuildKit's TCP
+       attempt.
+
+    2. **Mid-build DNS hiccup**: the resolver
+       misbehaves AFTER the pre-flight succeeded.
+       BuildKit's output then contains one of the
+       patterns in ``_DNS_FAILURE_PATTERNS``. We
+       detect this and retry the build.
+
+    The retry loop is bounded by ``max_attempts`` (3
+    by default) and an exponential backoff between
+    attempts. Successful builds exit immediately. A
+    failure that's not DNS-flavored re-raises the
+    ``RuntimeError`` immediately -- the fix is targeted,
+    not a general "retry on any failure" wrapper.
+
+    Parameters
+    ----------
+    cmd : list[str]
+        The full ``docker buildx build ...`` command
+        (already built by ``_build_command``).
+    cwd : Optional[Path]
+        Working directory for the subprocess. The
+        default is the bootstrap's CWD.
+    max_attempts : int
+        Cap on the total number of attempts including
+        the first.
+    """
+    # Pre-flight: confirm ``registry-1.docker.io``
+    # resolves before we ask BuildKit to do it. The
+    # stub resolver at 127.0.0.53 is the usual culprit
+    # and ``_resolve_with_retry`` will wait + retry
+    # for the resolver to recover.
+    try:
+        _resolve_with_retry("registry-1.docker.io")
+    except OSError as exc:
+        # Pre-flight failure -> surface a clear error
+        # early. We don't retry the build (the build
+        # would also fail) -- the user has a real DNS
+        # problem and should fix it.
+        raise RuntimeError(
+            f"DNS pre-flight for registry-1.docker.io failed "
+            f"after retries: {exc}. The host's resolver is "
+            f"misbehaving (common with the systemd-resolved "
+            f"stub on 127.0.0.53). Try one of: "
+            f"(1) restart systemd-resolved: "
+            f"``sudo systemctl restart systemd-resolved``; "
+            f"(2) point /etc/resolv.conf at a public resolver "
+            f"temporarily (1.1.1.1 or 8.8.8.8); "
+            f"(3) re-run the bootstrap in a few minutes."
+        ) from exc
+
+    delay = 2.0
+    for attempt in range(1, max_attempts + 1):
+        # Stream the build to the user's terminal (so
+        # they see the same progress messages they did
+        # before) and also retain a copy for the
+        # DNS-error detector.
+        output_lines: list[str] = []
+
+        def _on_line(line: str) -> None:
+            print(line)
+            output_lines.append(line)
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=str(cwd) if cwd else None,
+        )
+        assert proc.stdout is not None
+        try:
+            for line in iter(proc.stdout.readline, ""):
+                _on_line(line.rstrip())
+            proc.wait()
+        except KeyboardInterrupt:
+            proc.kill()
+            raise
+        rc = proc.returncode
+        captured_output = "\n".join(output_lines)
+        if rc == 0:
+            return
+        # Non-zero exit. Was it DNS-flavored?
+        if _looks_like_dns_failure(captured_output) and attempt < max_attempts:
+            log_warn(
+                f"Docker build failed with a DNS / name-resolution "
+                f"error (attempt {attempt}/{max_attempts}). "
+                f"Retrying in {delay:.0f}s…"
+            )
+            time.sleep(delay)
+            delay *= 2
+            continue
+        # Non-DNS failure OR retries exhausted.
+        break
+    # Out of retries (or non-DNS failure). Surface a
+    # clear error -- the user has either a real DNS
+    # problem (now caught by the pre-flight) or some
+    # other build failure (mirror, port conflict, …).
+    raise RuntimeError(
+        "Docker build failed; check the output above. "
+        "If the failure is a network timeout to "
+        "conda.anaconda.org, re-run with --mirror <url> "
+        "(e.g. https://mirrors.tuna.tsinghua.edu.cn/conda-forge). "
+        "If it's a DNS / name-resolution error, your host's "
+        "resolver may be misbehaving (systemd-resolved on "
+        "127.0.0.53 is the common case) -- try "
+        "``sudo systemctl restart systemd-resolved`` and "
+        "re-run."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Phase 1 — Install Docker
 # ---------------------------------------------------------------------------
@@ -749,14 +1006,7 @@ def build_image(
             "legacy builder (deprecated). Install docker-buildx to "
             "suppress this warning."
         )
-    rc = run_streaming(cmd, cwd=REPO_ROOT, check=False)
-    if rc != 0:
-        raise RuntimeError(
-            "Docker build failed; check the output above. "
-            "If the failure is a network timeout to "
-            "conda.anaconda.org, re-run with --mirror <url> "
-            "(e.g. https://mirrors.tuna.tsinghua.edu.cn/conda-forge)."
-        )
+    _run_build_with_dns_retry(cmd, cwd=REPO_ROOT)
     log_ok("Image built")
 
 
