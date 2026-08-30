@@ -305,6 +305,15 @@ class TestRunBuildWithDnsRetry:
         with mock.patch.object(
             bootstrap, "_resolve_with_retry"
         ), mock.patch.object(
+            bootstrap, "_probe_docker_registry_connectivity",
+            return_value={
+                "reachable_families": {"ipv4": True, "ipv6": True},
+                "unreachable_reasons": {"ipv4": None, "ipv6": None},
+                "ipv4_addr": "1.2.3.4",
+                "ipv6_addr": "fe80::1",
+                "recommended_action": "ok",
+            },
+        ), mock.patch.object(
             bootstrap.subprocess, "Popen", side_effect=fake_popen
         ), mock.patch.object(
             bootstrap.time, "sleep"
@@ -334,6 +343,15 @@ class TestRunBuildWithDnsRetry:
 
         with mock.patch.object(
             bootstrap, "_resolve_with_retry"
+        ), mock.patch.object(
+            bootstrap, "_probe_docker_registry_connectivity",
+            return_value={
+                "reachable_families": {"ipv4": True, "ipv6": True},
+                "unreachable_reasons": {"ipv4": None, "ipv6": None},
+                "ipv4_addr": "1.2.3.4",
+                "ipv6_addr": "fe80::1",
+                "recommended_action": "ok",
+            },
         ), mock.patch.object(
             bootstrap.subprocess, "Popen", side_effect=fake_popen
         ), mock.patch.object(
@@ -366,6 +384,15 @@ class TestRunBuildWithDnsRetry:
 
         with mock.patch.object(
             bootstrap, "_resolve_with_retry"
+        ), mock.patch.object(
+            bootstrap, "_probe_docker_registry_connectivity",
+            return_value={
+                "reachable_families": {"ipv4": True, "ipv6": True},
+                "unreachable_reasons": {"ipv4": None, "ipv6": None},
+                "ipv4_addr": "1.2.3.4",
+                "ipv6_addr": "fe80::1",
+                "recommended_action": "ok",
+            },
         ), mock.patch.object(
             bootstrap.subprocess, "Popen", side_effect=fake_popen
         ):

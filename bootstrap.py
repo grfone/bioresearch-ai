@@ -792,6 +792,28 @@ def _disable_docker_ipv6() -> bool:
             f"Please disable IPv6 manually."
         )
         return False
+    except ValueError as exc:
+        # ``subprocess.run(..., input=...)`` can raise
+        # ``ValueError: not enough values to unpack``
+        # when the child process closes its stdin
+        # before reading all the input (e.g. ``tee``
+        # exits because of a permission error on the
+        # target file, then the pipe is broken and
+        # Python's ``_communicate`` can't unpack the
+        # expected 2-tuple from ``process.communicate``).
+        # This is a transient subprocess-level error
+        # -- not a real I/O failure -- but it does
+        # mean the write didn't happen.
+        log_warn(
+            f"Cannot auto-fix docker daemon IPv6: "
+            f"the write subprocess closed early ({exc}). "
+            f"Most likely the current user doesn't have "
+            f"permission to write to {daemon_json} even "
+            f"with sudo. Please run the auto-fix manually "
+            f"or configure NOPASSWD for this command in "
+            f"/etc/sudoers."
+        )
+        return False
 
     # Restart the daemon. We also use ``sudo -n`` (the
     # ``-n`` was baked into ``runner`` above).
@@ -825,6 +847,20 @@ def _disable_docker_ipv6() -> bool:
             f"restart docker`` manually."
         )
         return False
+    except ValueError as exc:
+        # Same ``subprocess.communicate`` failure as
+        # the write step. ``sudo -n`` may close stdin
+        # before communicate has flushed. Either way
+        # the restart didn't happen.
+        log_warn(
+            f"Cannot auto-fix docker daemon IPv6: "
+            f"the restart subprocess closed early "
+            f"({exc}). The config has been written to "
+            f"{daemon_json} but the daemon may not "
+            f"have restarted. Try ``sudo systemctl "
+            f"restart docker`` manually."
+        )
+        return False
 
     # Sanity check: confirm the daemon is up and the
     # IPv6 setting stuck. A failed restart can leave
@@ -845,7 +881,7 @@ def _disable_docker_ipv6() -> bool:
                 f"restart docker``."
             )
             return False
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         # Don't fail the auto-fix just because the
         # sanity check couldn't run; the user's
         # next command will reveal the real state.
