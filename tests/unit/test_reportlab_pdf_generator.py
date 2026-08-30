@@ -104,8 +104,16 @@ def _extract_text(pdf_bytes: bytes) -> str:
     ``pdftotext``. Required because reportlab
     flate-compresses content streams -- the raw
     bytes are not greppable. ``pdftotext`` is part
-    of the ``poppler-utils`` package; it's available
-    on the CI runner and most developer machines.
+    of the ``poppler-utils`` package; it's installed
+    on most developer machines and on the CI runner
+    via ``apt-get install poppler-utils``. If it's
+    missing (e.g. a minimal CI container without
+    poppler), we fall back to raw-bytes extraction
+    which is good enough for content-presence tests
+    of uncompressed PDF metadata strings (but NOT
+    for the flate-compressed body content). Tests
+    that need real text extraction should be
+    gated on ``poppler-utils`` being available.
     """
     try:
         out = subprocess.run(
@@ -117,14 +125,43 @@ def _extract_text(pdf_bytes: bytes) -> str:
         )
         return out.stdout.decode("utf-8", errors="replace")
     except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        # Fall back to raw-bytes extraction for
-        # environments without ``pdftotext`` (e.g.
-        # Alpine minimal containers). The raw bytes
-        # still contain a small amount of uncompressed
-        # metadata that's good enough to pin the
-        # magic-header contract but not content
-        # presence.
+        # Fall back to raw-bytes extraction. This
+        # works for the magic-header contract but
+        # NOT for body content (which is flate-
+        # compressed). Tests that need body content
+        # must skip when ``pdftotext`` is missing --
+        # see ``_extract_text_or_skip``.
         return ""
+
+
+def _extract_text_or_skip(pdf_bytes: bytes) -> str:
+    """
+    Like :func:`_extract_text` but ``pytest.skip`` when
+    ``pdftotext`` is unavailable so the test is
+    cleanly skipped on CI runners without poppler.
+
+    Use this for any test that asserts on PDF body
+    content (which is flate-compressed and only
+    decodable via ``pdftotext``). For tests that
+    only check the PDF magic header / raw bytes,
+    use :func:`_extract_text` directly (which
+    returns an empty string when poppler is
+    missing -- the magic-header assertions still
+    pass via direct byte inspection).
+    """
+    try:
+        out = subprocess.run(
+            ["pdftotext", "-", "-"],
+            input=pdf_bytes,
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        return out.stdout.decode("utf-8", errors="replace")
+    except FileNotFoundError:
+        pytest.skip("pdftotext not installed (apt install poppler-utils)")
+    except subprocess.CalledProcessError as exc:
+        pytest.fail(f"pdftotext failed: {exc}")
 
 
 def _extract_raw_text(pdf_bytes: bytes) -> str:
@@ -193,7 +230,7 @@ class TestPDFContentPresence:
         pdf = generator.generate(_report(
             body="# Tau Biomarkers in AD\n\nBody text.",
         ))
-        text = _extract_text(pdf)
+        text = _extract_text_or_skip(pdf)
         assert "Tau Biomarkers in AD" in text
 
     def test_duplicate_first_sentence_stripped(
@@ -213,7 +250,7 @@ class TestPDFContentPresence:
             "Plasma p-tau217 is the leading candidate.\n"
         )
         pdf = generator.generate(_report(body=body))
-        text = _extract_text(pdf)
+        text = _extract_text_or_skip(pdf)
         # Body version present, title version present.
         assert "Tau biomarkers are central to AD" in text
         # The duplicated opening sentence is NOT
@@ -227,7 +264,7 @@ class TestPDFContentPresence:
         self, generator: ReportLabPDFGenerator
     ) -> None:
         pdf = generator.generate(_report(body="# T\n\nBody."))
-        text = _extract_text(pdf)
+        text = _extract_text_or_skip(pdf)
         # The body is rendered without an "Executive
         # Summary" sub-heading because the user's body
         # itself supplies the H2 / H3 structure (we
@@ -242,7 +279,7 @@ class TestPDFContentPresence:
             body="# T\n\nBody.",
             limitations=["Limitation A.", "Limitation B."],
         ))
-        text = _extract_text(pdf)
+        text = _extract_text_or_skip(pdf)
         assert "Limitations" in text
         assert "Limitation A" in text
         assert "Limitation B" in text
@@ -254,7 +291,7 @@ class TestPDFContentPresence:
             body="# T\n\nBody.",
             future_work=["Direction 1.", "Direction 2."],
         ))
-        text = _extract_text(pdf)
+        text = _extract_text_or_skip(pdf)
         assert "Future Research Directions" in text
         assert "Direction 1" in text
         assert "Direction 2" in text
@@ -266,7 +303,7 @@ class TestPDFContentPresence:
             body="# T\n\nBody.",
             citations=[_paper("First paper"), _paper("Second paper")],
         ))
-        text = _extract_text(pdf)
+        text = _extract_text_or_skip(pdf)
         assert "Bibliography" in text
         # Citation titles make it into the PDF.
         assert "First paper" in text
@@ -302,7 +339,7 @@ class TestBugFixes:
         # must appear in the PDF stream (possibly
         # embedded in the font's ToUnicode CMap).
         # Reportlab encodes them via the embedded TTF.
-        text = _extract_text(pdf)
+        text = _extract_text_or_skip(pdf)
         assert "Aβ" in text
         assert "α-synuclein" in text
         # And no ``?`` substitutions.
@@ -323,7 +360,7 @@ class TestBugFixes:
             "biomarker."
         )
         pdf = generator.generate(_report(body=body))
-        text = _extract_text(pdf)
+        text = _extract_text_or_skip(pdf)
         # The asterisks are gone.
         assert "**Plasma phosphorylated tau**" not in text
         # The plain text appears.
@@ -351,7 +388,7 @@ class TestBugFixes:
                 _paper("Fifth paper"),
             ],
         ))
-        text = _extract_text(pdf)
+        text = _extract_text_or_skip(pdf)
         # Raw marker gone.
         assert "[paper:3]" not in text
         assert "[paper:5]" not in text
@@ -425,7 +462,7 @@ class TestBugFixes:
         assert pdf.rstrip().endswith(b"%%EOF")
         # And the limitation text must be present
         # somewhere in the rendered output.
-        text = _extract_text(pdf)
+        text = _extract_text_or_skip(pdf)
         assert "extremely long limitation" in text
 
     def test_out_of_range_markers_are_dropped(
@@ -444,7 +481,7 @@ class TestBugFixes:
             body=body,
             citations=[_paper("A"), _paper("B")],
         ))
-        text = _extract_text(pdf)
+        text = _extract_text_or_skip(pdf)
         # The bad marker is gone (no dangling ``99``).
         assert "[99]" not in text
 

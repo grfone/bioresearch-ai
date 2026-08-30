@@ -100,6 +100,13 @@ jobs:
           # only -- the fakeredis 2.x API is stable.
           pip install 'fakeredis>=2.20'
 
+      - name: Install poppler-utils (for PDF text extraction in tests)
+        # The PDF generator tests use ``pdftotext`` (from
+        # ``poppler-utils``) to extract text from the
+        # flate-compressed PDF content streams. Without
+        # this, those tests would skip on CI.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
+
       - name: Run pytest
         env:
           # Set the env vars our settings module requires
