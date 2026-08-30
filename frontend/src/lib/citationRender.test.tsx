@@ -192,4 +192,21 @@ describe("renderItemWithCitationLinks", () => {
     const link = screen.getByRole("link", { name: "3" });
     expect(link.className).toContain("text-primary");
   });
+
+  it("renders citation links bold AND underlined, matching the Executive Summary style", () => {
+    // The Executive Summary body uses ``prose`` Tailwind
+    // typography classes, which apply ``font-medium
+    // underline`` to all anchor links. The Limitations /
+    // Future Research items aren't wrapped in ReactMarkdown
+    // so they don't get ``prose`` for free. To match the
+    // Executive Summary's visual treatment, the in-page
+    // citation links here must be bold AND underlined
+    // explicitly. Pinned by this test so future refactors
+    // can't silently regress to the lighter styling.
+    const item = "Citation follows. [3](#citation-3)";
+    render(<li>{renderItemWithCitationLinks(item)}</li>);
+    const link = screen.getByRole("link", { name: "3" });
+    expect(link.className).toContain("font-bold");
+    expect(link.className).toContain("underline");
+  });
 });

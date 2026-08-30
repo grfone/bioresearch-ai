@@ -218,7 +218,7 @@ export function renderItemWithCitationLinks(
       <a
         key={`item-citation-${keyCounter++}`}
         href={`#citation-${anchorIndex}`}
-        className="text-primary hover:underline"
+        className="text-primary font-bold underline hover:opacity-80"
       >
         {label}
       </a>,
