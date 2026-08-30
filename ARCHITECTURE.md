@@ -142,17 +142,12 @@ Because the domain depends on abstractions instead of implementations, infrastru
 
 Implements all external integrations.
 
-Examples:
-
 ### Literature
 
-* PubMed
-
-Future:
-
-* Semantic Scholar
-* Europe PMC
-* arXiv
+* PubMed (NCBI canon)
+* OpenAlex (200M+ works, free)
+* Europe PMC (PubMed + preprints + many publishers)
+* bioRxiv (preprint server, opt-in via `BIORXIV_ENABLED=true`)
 
 ### Language Models
 
@@ -172,14 +167,21 @@ Future:
 
 ### Storage
 
-Future support includes:
+* **SQLite** (current default, in-process via `SQLiteWorkspaceRepository`)
+* **Redis** for the abstract-enricher cache (via `CacheProtocol` -- shared across workers, fixes the per-worker cache fragmentation documented in `docs/multi-worker-cache-investigation.md`)
+* Future support: PostgreSQL, vector databases
 
-* ChromaDB
-* PostgreSQL
-* Redis
-* Vector databases
+### Report export
 
-### Scientific Integrations
+* **PDF** via `app/infrastructure/pdf/reportlab_generator.py` — embeds DejaVu Sans (TTF, full Unicode coverage) and produces real clickable `/Dest` link annotations for numbered references.
+* **LaTeX** via `app/infrastructure/latex/latex_generator.py` — emits a complete `.tex` source the user can compile with `pdflatex report.tex && pdflatex report.tex`. Uses `hyperref` for clickable in-text references.
+
+### Observability
+
+* `/metrics` (Prometheus text format) — sanitizer counters, title-fallback rate, gauges
+* `/health/sanitizer` and `/health/title-fallback` (JSON) for ops dashboards
+
+### Scientific Integrations (planned)
 
 * UniProt
 * Ensembl
@@ -197,27 +199,37 @@ Infrastructure can be replaced without affecting business logic.
 app/
 
 ├── api/
-│
+
 ├── application/
-│   ├── agents/
 │   ├── services/
 │   ├── use_cases/
 │   └── workflows/
-│
+
 ├── domain/
 │   ├── entities/
+│   │   └── # Paper, Author, Citation, Journal,
+│   │      # Summary, ResearchQuestion, ResearchReport,
+│   │      # PublishedReport
 │   ├── interfaces/
+│   │   └── # LiteratureSearcher, LLMProvider,
+│   │      # PDFGenerator, CacheProtocol
 │   └── models/
-│
+
 ├── infrastructure/
-│   ├── llm/
+│   ├── cache/                # InMemoryLRUCache, RedisCache
+│   ├── latex/               # LatexReportGenerator (.tex export)
+│   ├── literature/          # PubMed, OpenAlex, Europe PMC, bioRxiv
+│   ├── llm/                 # OpenAI-compatible providers
+│   ├── observability/       # /metrics Prometheus exposition
+│   ├── pdf/                 # Reportlab-based PDF generator
 │   ├── pubmed/
-│   ├── storage/
+│   ├── storage/             # SQLiteWorkspaceRepository
 │   ├── mcp/
 │   └── a2a/
-│
-├── config/
-├── core/
+
+├── config/                  # DI container + Settings
+├── core/                     # Enums (WorkspaceState, WorkspaceAction),
+│                            # exceptions, FSM transition table
 └── tools/
 ```
 
@@ -287,6 +299,30 @@ Response
 ```
 
 Only the Infrastructure layer communicates with external APIs.
+
+---
+
+# Finite State Machine
+
+The workspace lifecycle is a deterministic finite state machine (FSM) — every transition is enumerated in `app/core/enums/workspace_state.py`. Illegal actions are rejected with HTTP 409 and the list of legal next actions. See [ADR-009](docs/adr/ADR-009-publishing-state.md) for the four-layer audit pattern used to add new actions.
+
+```
+CREATED ──search──▶ SEARCHING ──▶ PAPERS_RETRIEVED ──report──▶ REPORTING ──▶ REPORTED
+                                          │                                          │
+                                          ├─compare──▶ COMPARING ──▶ COMPARED ───────┘
+                                          │
+                                          └─summarize──▶ SUMMARIZING ──▶ SUMMARIZED ──report──▶ REPORTING ──▶ REPORTED
+
+REPORTED ──publish──▶ PUBLISHING ──(force_state)──▶ COMPLETED
+                                  │
+                                  └─ renders PDF (reportlab)
+                                  └─ persists on session (PublishedReport)
+                                  └─ serves via GET /workspaces/{id}/published-report.pdf
+```
+
+`PUBLISHING` is transient — added to `_TRANSIENT_STATES` so the workspace-status strip treats it like `SEARCHING` or `REPORTING`. The user only sees `COMPLETED` once the network round-trip resolves.
+
+Every state transition records a `StateTransition` with `(action, reason)` for the audit trail. The four-layer audit pattern (FSM table → orchestrator → structural → frontend wire-format) is the standing recipe for any new FSM action.
 
 ---
 
@@ -482,13 +518,16 @@ The same approach applies to:
 
 # Technology Stack
 
-| Layer          | Technologies                             |
-| -------------- | ---------------------------------------- |
-| Presentation   | FastAPI, CLI                             |
-| Application    | Python, LangGraph                        |
-| Domain         | Pure Python                              |
-| Infrastructure | OpenAI, Anthropic, Ollama, PubMed, MCP   |
-| Storage        | ChromaDB (planned), PostgreSQL (planned) |
+| Layer          | Technologies                                                    |
+| -------------- | --------------------------------------------------------------- |
+| Presentation   | FastAPI, CLI                                                    |
+| Application    | Python, LangGraph                                               |
+| Domain         | Pure Python                                                     |
+| Infrastructure | OpenAI-compatible providers, PubMed, OpenAlex, Europe PMC, bioRxiv |
+| Storage        | SQLite (default), Redis cache (multi-worker)                   |
+| Report export  | Reportlab (PDF) + custom LaTeX generator                         |
+| Observability  | Hand-rolled Prometheus exposition (`/metrics`), JSON health probes (`/health/sanitizer`, `/health/title-fallback`) |
+| Container      | Docker (built by `python3 bootstrap.py` with auto-recovering DNS + IPv6 handling) |
 
 ---
 

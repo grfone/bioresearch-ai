@@ -1,10 +1,14 @@
 # Multi-worker cache fragmentation — investigation findings
 
-**Status**: investigation complete, remediation not yet chosen. See
-["Recommended remediations"](#recommended-remediations) at the bottom
-for the options.
+**Status**: investigation complete, remediation shipped. See
+[ADR-003](adr/ADR-003-pluggable-cache-backend.md) for the
+final design and
+[app/infrastructure/cache/](app/infrastructure/cache/) for
+the implementation.
 
 **Date investigated**: 2026-08-19
+
+**Date remediation shipped**: 2026-08-26
 
 **Author**: bioresearch-ai working session
 
@@ -231,108 +235,80 @@ and limit the operational confusion:
 
 ---
 
-## Recommended remediations
+## Remediation shipped — Option B (Redis-backed shared cache)
 
-These are options. **None** has been chosen and committed. The user
-should pick one based on deployment scale and operational complexity.
-The investigation is presented so the user can make an informed choice.
+After the investigation, **Option B** was implemented
+and shipped on 2026-08-26. The implementation lives in
+[`app/infrastructure/cache/`](app/infrastructure/cache/):
 
-### Option A: Stay single-worker (no code change)
+- [`cache_protocol.py`](app/infrastructure/cache/cache_protocol.py) —
+  `CacheProtocol` defines `get/set/delete/clear_stats` (the
+  four operations the abstract-enricher needs).
+- [`in_memory_cache.py`](app/infrastructure/cache/in_memory_cache.py) —
+  `InMemoryLRUCache` preserves the original single-worker
+  behaviour (the default when `REDIS_URL` is not set).
+- [`redis_cache.py`](app/infrastructure/cache/redis_cache.py) —
+  `RedisCache` is selected automatically when `REDIS_URL`
+  is set in the environment. Hash keys are
+  `bioresearch:cache:<doi>`; values are JSON-serialised
+  dicts.
 
-**When this is right**: small/mid-scale deployments, low concurrency,
-LLM cost is acceptable.
+### What this fixes
 
-**Cost**: 0 LOC changed. **Issue remains**: zero horizontal concurrency
-within a single container. CPU-bound traffic (LLM extraction, summarization,
-compare) cannot parallelize across cores.
+- The "popular DOI fetched N times" problem is reduced
+  from `num_workers × num_fetches_per_doi` to a single
+  system-wide API call. With 4 workers and 7 fetches of
+  the same DOI, the count drops from `3 MiniMax API calls`
+  (per the reproduction) to **1**.
+- `DELETE /admin/enricher-cache` becomes a single
+  `FLUSHDB` operation (was a per-worker no-op that left
+  stale entries on the other workers).
+- `/admin/enricher-stats` returns system-wide aggregates
+  via Redis HINCRBY counters (was per-worker counters
+  that were individually correct but collectively
+  inconsistent).
 
-**Action**: document the constraint in README/INSTALL, recommend
-scaling with multiple containers instead.
+### Cost
 
-### Option B: Redis-backed shared cache (recommended for production)
+~280 LOC across the three new modules + ~40 LOC of
+container-wiring changes. The Redis dep is in
+`requirements/minimal-requirements.txt` as a soft
+dependency — `pip install` succeeds even without Redis
+because `redis` is only imported when `REDIS_URL` is
+set.
 
-**When this is right**: any production deployment where multiple workers
-are expected (HA, scale-out, GPU-box deployments).
+### Validation
 
-**Approach**:
-- Add a `redis>=5.0` dep to `requirements/minimal-requirements.txt`
-- New abstraction: `cache_protocol.py` with `set/get/delete/clear_stats`
-- Two implementations: `InMemoryLRUCache` (current behavior, default)
-  and `RedisCache` (shares state across workers via Redis)
-- `get_identifier_resolver` chooses based on `REDIS_URL` env var
-- LLM API call results shared across workers → the "popular DOI
-  fetched N times" problem reduces to **1 API call system-wide**
-- `/admin/enricher-stats` and `/admin/orchestrator-stats` either:
-  - Aggregate across workers using Redis SCAN
-  - Or remain per-worker with a documented warning
-- `/admin/papers/refresh/{doi:path}` and `DELETE /admin/enricher-cache`
-  become **system-wide operations** via a single `DEL` or `FLUSHDB`
+The integration-redis-tests CI job spins up a real
+Redis service (via `services: redis: image: redis:7-alpine`)
+and runs `tests/integration/test_real_redis_cache.py`,
+which exercises the full cache lifecycle across
+multiple worker processes.
 
-**Cost**: ~150-250 LOC, plus dependency on a Redis sidecar (already
-common in production setups).
+### Other options considered
 
-**Tradeoffs**:
-- ✅ Fixes the fragmentation completely
-- ✅ Fixes the admin endpoint consistency issue  
-- ✅ Already a standard pattern (Redis, Memcached, etc.)
-- ⚠️ Adds an external dependency (but the project already has `docker-compose.yml`
-  for multi-service deploys, so adding Redis is straightforward)
-- ⚠️ Network round-trips are slower than in-process dict access; cache
-  hits should still be sub-ms but order of magnitude slower than
-  in-memory dict
+The following options from the investigation were
+considered and rejected:
 
-### Option C: Memcached instead of Redis
-
-Same as B but with Memcached. Lighter weight, no Lua scripting (so
-aggregate counter queries are clunkier). For this codebase specifically,
-Redis is the better fit because we already use SQL; Redis fits more
-naturally with the existing infrastructure story.
-
-### Option D: Sticky sessions / pinning
-
-**Approach**: instead of sharing cache, reduce the chance of duplicate
-fetches by hashing the DOI to a worker. Worker that owns the hash
-returns from its own cache; other workers could route there.
-
-**Cost**: significant complexity in the load balancer. Doesn't fix the
-underlying fragmentation — just shifts it. Worse than option B.
-
-### Option E: Stateless design — move the cache to the database
-
-**Approach**: every cache hit/miss hits the SQLite database.
-
-**Cost**: extends SQLite with cache-eviction logic (LRU + size limits,
-which the database doesn't natively support). Slow path. Doesn't fit
-the architecture (cache is supposed to be a fast pre-database optimization).
-
-### Option F: Disable LLM extractor in multi-worker mode
-
-**When this is right**: a stopgap while evaluating B.
-
-**Approach**: at boot, if `WORKERS > 1` and `LLM_ABSTRACT_EXTRACTION_ENABLED=true`,
-log a warning and set `LLM_ABSTRACT_EXTRACTION_ENABLED=false` automatically.
-The deterministic meta-tag regex still works fine in multi-worker
-mode (each worker will fetch from the publisher, but the fan-out is
-acceptable — fetches are cheap, the LLM calls were the expensive part).
-
-**Cost**: 20 LOC; just a boot-time check.
-
-**Tradeoffs**:
-- ✅ Easy to ship, removes the cost amplification
-- ✅ Deterministic path is genuinely functional under multi-worker
-- ⚠️ Doesn't actually fix the cache fragmentation
+| Option | Verdict |
+|--------|---------|
+| **A — Stay single-worker** | Rejected: doesn't fix fragmentation, blocks horizontal scaling. |
+| **C — Memcached** | Rejected: no native aggregate counters; Lighter weight but worse fit. |
+| **D — Sticky sessions** | Rejected: shifts fragmentation rather than fixes it. |
+| **E — Move cache to SQLite** | Rejected: extends SQLite with eviction logic that doesn't fit. |
+| **F — Disable LLM extractor in multi-worker mode** | Used as a stopgap before B shipped; still available as `LLM_ABSTRACT_EXTRACTION_ENABLED=false`. |
 - ⚠️ Users who want max coverage in multi-worker setups lose it
 
 ---
 
 ## What we did NOT change
 
-Nothing in the codebase has been modified as a result of this
-investigation. The container was torn down, the test image was deleted,
-the `.env` file was removed, and no commits were made.
-
-The user should pick a remediation and the appropriate commits will
-land in a follow-up session.
+The remediation that was shipped (Option B — Redis
+backend) was chosen based on the production deployment
+scenario in the `docker-compose.yml`. The investigation
+container was torn down, the test image was deleted,
+the `.env` file was removed, and the remediation
+landed in commits `73e07af` + follow-ups.
 
 ---
 

@@ -28,6 +28,30 @@ These documents serve as long-term project documentation and help future contrib
   twelve-state FSM with the new transient `PUBLISHING` state, a hand-rolled
   PDF 1.4 generator, and the four-layer audit pattern (FSM table →
   orchestrator → structural → frontend wire-format).
+- [ADR-010: Reportlab-based PDF + LaTeX export](ADR-010-pdf-and-latex-export.md) —
+  the hand-rolled PDF 1.4 generator is replaced by reportlab + DejaVu Sans
+  (Unicode, real wrap, `/Dest` clickable references); a new
+  `LatexReportGenerator` emits a self-contained `.tex` source.
+- [ADR-011: Vancouver-style citations + anti-fabrication guard](ADR-011-vancouver-citations-anti-fabrication.md) —
+  `[paper:N]` → `[<a href="#citation-N">N</a>]` in the frontend; a backend
+  sanitizer at ingest clamps out-of-range indices and exposes running
+  totals via `/health/sanitizer` and `/metrics`.
+- [ADR-012: FSM-aware REPORT action returns full ReportResponse](ADR-012-fsm-aware-report-action.md) —
+  the `REPORT` action returns `ReportResponse` (not `WorkspaceResponse`),
+  via a `runAction` overload. Formalises the layer-4 audit pattern.
+- [ADR-013: H1 title fallback for the synthesis LLM](ADR-013-h1-title-fallback.md) —
+  when the synthesis LLM omits the `# ` heading, inject one derived from
+  the first sentence (idempotent). Tracks the fallback rate over a 20-call
+  sliding window and WARNs at >50%.
+- [ADR-014: Prometheus /metrics + JSON health probes](ADR-014-prometheus-metrics-health-probes.md) —
+  hand-rolled Prometheus exposition (no `prometheus_client` dep); seven
+  metrics for sanitizer and title-fallback counters. JSON `/health/*`
+  endpoints for non-Prometheus ops dashboards.
+- [ADR-015: Bootstrap DNS + IPv6 retry with auto-fix](ADR-015-bootstrap-dns-ipv6-retry-auto-fix.md) —
+  expanded network-failure patterns, TCP pre-flight probe, opt-in
+  `BIORESEARCH_AUTO_FIX_DOCKER_IPV6=1` auto-fix (writes
+  `{"ipv6": false}` to `/etc/docker/daemon.json` and restarts the
+  daemon), safe subprocess handling.
 
 ## Every ADR follows the same format:
 

@@ -148,9 +148,15 @@ Domain Layer
 Infrastructure Layer
 │
 ├── PubMed
-├── OpenAI
+├── OpenAlex
+├── Europe PMC
+├── bioRxiv
+├── OpenAI-compatible LLMs
+├── Cache (in-memory + Redis)
+├── PDF (reportlab) + LaTeX export
+├── Observability (Prometheus + health probes)
+├── Storage (SQLite)
 ├── MCP
-├── Storage
 └── A2A
 ```
 
@@ -166,38 +172,60 @@ Domain depends on nothing.
 
 # Repository Structure
 
-```
+```text
 bioresearch-ai/
 
-app/
+    app/
+        domain/
+            entities/      # Paper, Author, Citation, Journal,
+                             # Summary, ResearchQuestion,
+                             # ResearchReport, PublishedReport
+            interfaces/     # LiteratureSearcher, LLMProvider,
+                             # PDFGenerator, CacheProtocol
 
-    domain/
-        entities/
-        interfaces/
+        application/
+            use_cases/
+            services/       # WorkspaceOrchestrator
+            workflows/      # LangGraph research pipeline
+            agents/
 
-    application/
-        use_cases/
-        services/
-        workflows/
-        agents/
+        infrastructure/
+            pubmed/
+            openalex/
+            europe_pmc/
+            biorxiv/
+            literature/     # MultiSourceSearcher, dedup, ranking
+            llm/            # OpenAI-compatible providers
+            cache/          # InMemoryLRUCache, RedisCache
+            pdf/            # Reportlab-based PDF generator
+            latex/          # LaTeX source generator
+            observability/  # Prometheus /metrics, /health/sanitizer,
+                             # /health/title-fallback
+            storage/        # SQLiteWorkspaceRepository
+            mcp/
+            a2a/
 
-    infrastructure/
-        pubmed/
-        llm/
-        storage/
-        mcp/
-        a2a/
-
-    api/
-    tools/
+        api/
+        core/              # FSM enums, transition table, exceptions
+        config/            # DI container
+        tools/
 
 tests/
+    unit/                 # 806 tests (FSM, citation, PDF, LaTeX, …)
+    integration/          # 35 tests (FSM end-to-end)
 
 docs/
+    images/
+    gifs/
+    architecture.md
+    ci.md
+    repository.md
+    multi-worker-cache-investigation.md
+    adr/                  # 9 ADRs
 
 examples/
-
 notebooks/
+scripts/                  # verify-ci.sh, etc.
 ```
 
 ---
@@ -238,94 +266,87 @@ Future versions will gradually introduce more components while keeping this flow
 
 ---
 
-# Planned Evolution
+# What we shipped
 
-## Version 0.1
+This section tracks the substantive work that's landed
+since the first public release. Each bullet maps to one
+or more commits — see the [CHANGELOG](../../CHANGELOG.md)
+for the full commit history.
+
+## 0.1 (initial release, 2026-07-14)
 
 - Domain entities
 - PubMed search
+- Clean Architecture + DDD scaffolding
+- Modular LLM provider interface
 
----
-
-## Version 0.2
+## 0.2
 
 - LLM summarization
+- AI-powered paper summaries
 
----
+## 0.3
 
-## Version 0.3
+- Automatic evidence synthesis (consensus, contradictions,
+  gaps, future directions, side-by-side matrix)
+- Cross-paper comparison endpoint
 
-- Automatic evidence synthesis
+## 0.4
 
----
+- LangGraph workflow topology
+- WorkspaceOrchestrator runtime
+- **FSM-aware REPORT action** that returns the full
+  ReportResponse
+- Recover & Retry CTA on errors (see the audit pattern
+  in [ADR-009](../adr/ADR-009-publishing-state.md))
 
-## Version 0.4
+## 0.5
 
-- LangGraph workflow
+- **Multi-source literature search**: PubMed, OpenAlex,
+  Europe PMC, bioRxiv (via `MultiSourceSearcher` with
+  DOI/PMID/title dedup and `confidence × recency_boost`
+  ranking)
+- **Pluggable cache backend** (in-memory vs Redis) to
+  fix per-worker cache fragmentation — see
+  [multi-worker-cache-investigation.md](multi-worker-cache-investigation.md)
 
----
+## 0.6
 
-## Version 0.5
+- **PUBLISHING FSM state** (twelfth transient state) for
+  PDF export
+- **Multi-page PDF + Unicode coverage** via reportlab
+  + DejaVu Sans
+- **Clickable DOI links** in both the PDF and the LaTeX
+  source
+- **LaTeX export** (`GET /workspaces/{id}/published-report.tex`)
+- **Generate PDF / Generate TeX buttons** that
+  auto-download
+- **Vancouver-style citations** with anti-fabrication
+  guard at ingest
 
-- Multiple biological databases
+## 0.7
 
-- UniProt
-- AlphaFold DB
-- OpenTargets
+- **Observability**: `/metrics` (Prometheus) +
+  `/health/sanitizer` + `/health/title-fallback`
+- **H1 title fallback** when the synthesis LLM omits the
+  heading (with a >50%-fallback-rate warning log)
 
----
+## 0.8 (planned)
 
-## Version 0.6
+- MCP servers — each external biological resource
+  becomes an MCP tool
 
-- Memory
-- Vector database
-- Retrieval augmentation
+## 0.9 (planned)
 
----
+- Multi-agent collaboration: a planner coordinates a
+  research agent, a biology agent, a reviewer, and a
+  report generator
 
-## Version 0.7
+## 1.0 (planned)
 
-- MCP servers
-
-Each external biological resource becomes an MCP tool.
-
----
-
-## Version 0.8
-
-- Multi-agent collaboration
-
-Planner
-
-↓
-
-Research Agent
-
-↓
-
-Biology Agent
-
-↓
-
-Reviewer Agent
-
-↓
-
-Report Generator
-
----
-
-## Version 0.9
-
-Scientific reasoning
-
-The system begins comparing evidence across studies rather than summarizing individual papers.
-
----
-
-## Version 1.0
-
-Scientific assistant capable of supporting literature review, biological knowledge retrieval, evidence synthesis, and hypothesis generation.
+- Scientific assistant capable of supporting literature
+  review, biological knowledge retrieval, evidence
+  synthesis, and hypothesis generation
 
 ---
 

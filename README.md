@@ -124,9 +124,14 @@ See [ADR-008](docs/adr/ADR-008-one-click-report-from-papers-retrieved.md) for wh
 |----------|-------------|
 | 🔍 Literature Search | Search PubMed, OpenAlex, Europe PMC, and bioRxiv in parallel from a single natural-language query |
 | 📄 Paper Summaries | Generate concise AI summaries for each publication |
-| � Evidence Synthesis | Combine evidence from multiple studies |
-| 📚 Citation Awareness | Every report references the supporting papers |
+| 🧠 Evidence Synthesis | Combine evidence from multiple studies |
+| 📚 Citation Awareness | Every report references the supporting papers — and the link is *clickable* in the compiled PDF |
+| � Clickable DOI | Bibliography entries include real, linkified DOIs (in both the PDF and the LaTeX source) |
 | 📑 PDF Upload | Drop a PDF, the DOI/PMID on the first page is auto-extracted and resolved |
+| 📝 Generate PDF | One-click download — the button auto-saves `report-<id>.pdf` (no extra click) |
+| 📝 Generate TeX | One-click download — the button auto-saves `report-<id>.tex` for editing in Overleaf / TeXstudio |
+| 📊 Prometheus metrics | `/metrics` endpoint exports sanitizer counters, title-fallback rate, and gauges for scraping |
+| 🩺 Sanity telemetry | `/health/sanitizer` and `/health/title-fallback` endpoints report in-process LLM-safety counters |
 | ⚡ FastAPI Backend | REST API following Clean Architecture |
 | 🎨 React Frontend | Modern and responsive user interface |
 | 🧩 Modular LLM Providers | Easily switch between multiple AI providers |
@@ -169,8 +174,16 @@ A snapshot of the work since the first public release:
 - **Lab-bench UI** with state, progress, action availability, and transition history
 - **PDF upload** — drop a PDF, the DOI/PMID on the first page is auto-extracted and resolved (200 MB cap, configurable via `PDF_UPLOAD_MAX_BYTES`)
 - **Multi-worker ready** via a pluggable cache backend (in-memory by default, Redis for multi-worker deployments)
-- **One-click install** via `python3 bootstrap.py` (detects OS, installs Docker, builds the image, opens the running app)
-- **8 ADRs** documenting the architectural decisions (see [Design decisions](#design-decisions))
+- **One-click install** via `python3 bootstrap.py` (detects OS, installs Docker, builds the image, opens the running app). The bootstrap now also recovers automatically from DNS hiccups and broken IPv6 routing on the user's host.
+- **Vancouver-style citations** — `[paper:N]` markers in the body map to a numbered, hyperlinked bibliography; the anti-fabrication guard sanitises any LLM-hallucinated citation indices at ingest (see [ADR-009](docs/adr/ADR-009-publishing-state.md))
+- **PUBLISHING state** — the FSM gained an explicit `PUBLISHING → COMPLETED` transition with a dedicated endpoint, so users can see progress on long PDF renders (see [ADR-009](docs/adr/ADR-009-publishing-state.md))
+- **Multi-page PDF + Unicode coverage** — the published PDF uses DejaVu Sans (TTF-embedded via reportlab) so Greek letters, Latin diacritics, em-dashes, and bold sub-headings render correctly; numbered references are real clickable internal `/Dest` annotations
+- **Clickable DOI links** — bibliography entries include `https://doi.org/...` URLs that are clickable in both the PDF and the LaTeX source
+- **Generate PDF / Generate TeX buttons** — the report action auto-downloads the PDF on success, and a second blue button downloads the LaTeX source for editing in Overleaf / TeXstudio before recompiling
+- **Observability** — `/metrics` (Prometheus text format) and `/health/sanitizer` + `/health/title-fallback` endpoints expose in-process LLM-safety counters and the title-fallback rate (with a warning log when >50% over a 20-call window)
+- **H1 title fallback** — if the synthesis LLM omits the `# ` heading, we inject one from the first sentence (idempotent) so the report always has a real title (instead of "Untitled" or the body duplicated as the title)
+- **Anti-fabrication sanitizer telemetry** — every call to the citation marker sanitizer is logged + counted, so you can see the running total via `/health/sanitizer` and confirm the guard is doing its job
+- **9 ADRs** documenting the architectural decisions (see [Design decisions](#design-decisions))
 
 See the [Roadmap](#roadmap) below for what's left.
 
@@ -353,7 +366,7 @@ The frontend will start with hot reloading enabled.
 - ✅ FastAPI REST API
 - ✅ Modular LLM providers
 - ✅ Clean Architecture implementation
-- ✅ 441 backend + 200 frontend tests passing
+- ✅ 806 backend + 289 frontend tests passing
 - ✅ CI on every push (see [`docs/ci.md`](docs/ci.md))
 
 ---
@@ -372,13 +385,16 @@ The long-term vision is to build an AI platform capable of supporting the comple
 | ✅ | **Evidence Comparison** — cross-paper consensus, contradictions, gaps, and a side-by-side matrix |
 | ✅ | **LangGraph Workflows** — deterministic FSM topology + `WorkspaceOrchestrator` runtime |
 | ✅ | **Workspace Management** — lab-bench UI with state, allowed actions, progress, and history |
+| ✅ | **PDF Report Export** — multi-page, Unicode-correct, with clickable numbered refs and DOIs (rendered via reportlab + DejaVu Sans) |
+| ✅ | **LaTeX Report Export** — `GET /workspaces/{id}/published-report.tex` renders the same structured report as a `.tex` source the user can compile with `pdflatex` |
+| ✅ | **Observability** — `/metrics` (Prometheus), `/health/sanitizer`, `/health/title-fallback` |
+| ✅ | **Anti-fabrication guard telemetry** — every citation marker sanitizer call is counted + logged |
 | 🚧 | Biological Knowledge Integration |
 | 🔜 | Multi-Agent Collaboration |
 | 🔜 | Long-Term Memory |
 | 🔜 | MCP Integration |
 | 🔜 | Agent-to-Agent Communication |
 | 🔜 | Knowledge Graph Construction |
-| 🔜 | PDF Report Export |
 
 ---
 
@@ -390,13 +406,28 @@ bioresearch-ai/
 ├── app/
 │   ├── api/
 │   ├── application/
+│   │   ├── services/
+│   │   ├── use_cases/
+│   │   └── workflows/
 │   ├── config/
 │   ├── core/
+│   │   ├── enums/
+│   │   └── ...
 │   ├── domain/
+│   │   ├── entities/
+│   │   ├── interfaces/
+│   │   └── value_objects/
 │   ├── infrastructure/
-│   ├── presentation/
-│   └── tools/
-│
+│   │   ├── cache/
+│   │   ├── latex/           # NEW: LaTeX source export
+│   │   ├── literature/
+│   │   ├── llm/
+│   │   ├── observability/   # NEW: Prometheus /metrics
+│   │   ├── pdf/             # reportlab-based PDF generator
+│   │   ├── pubmed/
+│   │   └── storage/
+│   └── presentation/
+
 ├── frontend/
 
 ├── docs/
@@ -404,9 +435,13 @@ bioresearch-ai/
 │   ├── gifs/
 │   ├── architecture.md
 │   ├── ci.md
-│   └── adr/
-│
+│   ├── repository.md
+│   └── adr/                # 9 ADRs (see Design decisions)
+
 ├── tests/
+│   ├── unit/               # 806 tests
+│   └── integration/        # 35 tests (FSM end-to-end)
+
 ├── notebooks/
 ├── scripts/
 └── README.md
@@ -428,8 +463,15 @@ We capture every non-trivial architectural decision in an Architecture Decision 
 | [ADR-006](docs/adr/ADR-006-parallel-multi-source-search.md) | Parallel multi-source literature search | Accepted |
 | [ADR-007](docs/adr/ADR-007-configurable-pdf-upload-cap.md) | Configurable PDF upload size cap (200 MB default) | Accepted |
 | [ADR-008](docs/adr/ADR-008-one-click-report-from-papers-retrieved.md) | One-click report from PAPERS_RETRIEVED | Accepted |
+| [ADR-009](docs/adr/ADR-009-publishing-state.md) | `PUBLISHING` FSM state for PDF export + four-layer audit pattern | Accepted |
+| [ADR-010](docs/adr/ADR-010-pdf-and-latex-export.md) | Reportlab-based multi-page PDF + LaTeX export + clickable numbered references | Accepted |
+| [ADR-011](docs/adr/ADR-011-vancouver-citations-anti-fabrication.md) | Vancouver-style citations + anti-fabrication sanitizer at ingest | Accepted |
+| [ADR-012](docs/adr/ADR-012-fsm-aware-report-action.md) | FSM-aware REPORT action returns full `ReportResponse` (overload pattern) | Accepted |
+| [ADR-013](docs/adr/ADR-013-h1-title-fallback.md) | H1 title fallback when the synthesis LLM omits the heading | Accepted |
+| [ADR-014](docs/adr/ADR-014-prometheus-metrics-health-probes.md) | Prometheus `/metrics` exposition + JSON `/health/*` probes | Accepted |
+| [ADR-015](docs/adr/ADR-015-bootstrap-dns-ipv6-retry-auto-fix.md) | Bootstrap DNS + IPv6 retry with opt-in auto-fix | Accepted |
 
-Three ADRs are particularly worth reading for new contributors:
+Five ADRs are particularly worth reading for new contributors:
 
 - **[ADR-003](docs/adr/ADR-003-pluggable-cache-backend.md)** — the
   in-memory vs Redis cache split and the multi-worker
@@ -441,6 +483,10 @@ Three ADRs are particularly worth reading for new contributors:
   why the FSM gate from `PAPERS_RETRIEVED` to `REPORT`
   exists and how the orchestrator auto-summarises when
   needed.
+- **[ADR-009](docs/adr/ADR-009-publishing-state.md)** — the
+  four-layer audit pattern (FSM table → orchestrator →
+  structural → frontend wire-format) that is the standing
+  recipe for any new FSM action.
 
 ---
 

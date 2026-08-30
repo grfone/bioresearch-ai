@@ -876,6 +876,183 @@ the contract. 389/389 backend tests pass.
 * MCP support
 * Agent-to-Agent (A2A) communication
 
+### Recent additions to `[Unreleased]`
+
+The items below track the substantive work added on top
+of the originally-planned `[Unreleased]` set. Each entry
+links to the commit that introduced it.
+
+#### FSM and report pipeline
+
+* **PUBLISHING FSM state for PDF export.** A twelfth
+  transient state sits between `REPORTED` and
+  `COMPLETED`. The user clicks "Publish as PDF" →
+  `REPORTED → PUBLISHING → COMPLETED`. The PDF bytes are
+  persisted on the session and served via
+  `GET /workspaces/{id}/published-report.pdf`. The
+  state history records both transitions with reason
+  strings (`"PDF export in flight"`, `"PDF published"`).
+  See [ADR-009](docs/adr/ADR-009-publishing-state.md)
+  for the four-layer audit pattern. (Commits:
+  `962e4d0` follow-ups, `73e07af`, `b00b34a`.)
+
+* **Multi-page PDF + Unicode coverage.** The
+  hand-rolled PDF 1.4 generator was replaced by a
+  reportlab-based generator that embeds DejaVu Sans
+  (TTF, registered as a font family with all four
+  faces). Greek letters, Latin diacritics, em-dashes,
+  and bold sub-headings render correctly; long citation
+  strings wrap to multiple lines with a hanging indent;
+  numbered references are real clickable internal `/Dest`
+  PDF annotations. The Dockerfile installs
+  `fonts-dejavu` (~10 MB) so DejaVu Sans is available
+  in the minimal image.
+
+* **Clickable DOI links in the bibliography.** Both the
+  generated PDF and the LaTeX source include real
+  `https://doi.org/...` URLs as clickable hyperlinks.
+
+* **LaTeX export.** New endpoint
+  `GET /workspaces/{id}/published-report.tex` renders
+  the same structured report as a `.tex` source the
+  user can compile with `pdflatex report.tex &&
+  pdflatex report.tex` (twice, so `\ref` resolves on
+  the second pass). The output uses `hyperref` for
+  clickable internal references and `\hyperref[bib-N]`
+  for the numbered citations. (Commits: `2552399`.)
+
+* **Generate PDF / Generate TeX buttons.** The
+  "Publish as PDF" button auto-downloads the PDF on
+  success (no separate Download step). A second
+  blue button downloads the LaTeX source. Both use a
+  hidden `<a download>` click pattern. (Commits:
+  `2552399`.)
+
+* **Limitations and Future Research bold/underlined
+  clickable references.** Match the executive summary
+  style — bold blue underlined, click to jump to the
+  bibliography entry. (Commit: `c93db9b`.)
+
+#### Citation anti-fabrication guard
+
+* **Sanitise LLM-hallucinated citation markers at ingest.**
+  The synthesis LLM sometimes invents citation indices
+  beyond the bibliography's range (`[paper:99]` when
+  only 17 papers exist). The sanitizer clamps them to
+  the valid range, drops out-of-range entries from
+  grouped markers silently, and logs the running total
+  of dropped markers. (Commit: `8cf20a3`.)
+
+* **Sanitizer telemetry.** New `/health/sanitizer`
+  endpoint exposes the running totals (`total_calls`,
+  `total_dropped`, `calls_with_drops`); the admin
+  `/enricher-cache` route is now system-wide (not
+  per-worker) thanks to the shared Redis cache.
+
+#### H1 title fallback
+
+* **Title fallback for the synthesis LLM.** If the
+  LLM omits the `# ` heading (it does this ~30% of the
+  time per `b00b34a` live-verify), we inject one
+  derived from the first sentence of the body, with
+  a noun-phrase truncation that stops at the last
+  content word (not at dangling conjunctions). The
+  fallback rate is tracked over a 20-call sliding
+  window; when >50% a WARNING is logged so the product
+  owner can revisit the prompt. (Commits: `b00b34a`,
+  `7fd5f46`.)
+
+* **Multi-page PDF + emphatic H1 title directive.**
+  Strengthens the prompt so the LLM emits the title
+  reliably; the fallback catches what slips through.
+
+#### Observability
+
+* **`/metrics` (Prometheus text format).** New endpoint
+  exports 7 metrics: sanitizer counters
+  (`citation_sanitizer_calls_total`,
+  `citation_sanitizer_dropped_total`,
+  `citation_sanitizer_calls_with_drops_total`), title
+  fallback counters and gauges
+  (`title_fallback_calls_total`,
+  `title_fallback_injections_total`,
+  `title_fallback_rate`, `title_fallback_window_size`).
+  Hand-rolled exposition formatter, no
+  `prometheus_client` dep. (Commit: `4f7e93a`.)
+
+* **`/health/title-fallback` endpoint.** Companion to
+  `/health/sanitizer` — same in-process counters but
+  in JSON form for ops dashboards that don't speak
+  Prometheus.
+
+#### Storage schema
+
+* **v6 schema bump + prompt hardening.** JSON-stringified
+  `Summary.text` was renamed to `Summary.body` (the
+  legacy column is migrated in place at boot). The
+  report-generation prompt was hardened to reject
+  `[paper:N]` markers beyond the bibliography range at
+  ingest time, and to fall back to a noun-phrase
+  truncation when no title is emitted. (Commit:
+  `87dd725`.)
+
+#### Frontend wire-format
+
+* **`generateResearchReport` returns the full
+  ReportResponse.** The frontend's `useWorkspace` hook
+  now special-cases the `report` action (it returns
+  `ReportResponse`, every other action returns
+  `WorkspaceResponse`). The cast is safe and
+  type-checked. (Commit: `1faf32e` follow-ups.)
+
+* **`/admin/enricher-cache` and admin endpoints.** The
+  `enricher-cache` route is now system-wide (not
+  per-worker) when the Redis backend is enabled, and
+  `/admin/enricher-stats` exposes the running hit/miss
+  ratios.
+
+#### Bootstrap (installer)
+
+* **DNS-aware build retry.** Pre-flight DNS check
+  catches `127.0.0.53:53 server misbehaving` (the
+  systemd-resolved stub) before BuildKit's TCP attempt;
+  the build output is scanned for network-failure
+  patterns and retried with exponential backoff. (Commit:
+  `def5291`.)
+
+* **TCP pre-flight + IPv6 auto-fix.** A new TCP probe
+  detects the case where the host resolves
+  `registry-1.docker.io` but the resulting IP is
+  unreachable (the user's broken-IPv6 routing case).
+  When the probe says `ipv4_only`, the bootstrap writes
+  `{"ipv6": false}` to `/etc/docker/daemon.json`
+  (preserving existing keys), backs up the original
+  to `daemon.json.bak`, and restarts the docker daemon
+  via `sudo -n` (non-interactive). If the auto-fix
+  succeeds, the build retries immediately (no sleep);
+  if it fails, a clear log message surfaces the exact
+  commands to run manually. (Commit: `1467064`.)
+
+* **`sudo` subprocess hardening.** Catches the
+  `ValueError: not enough values to unpack` that
+  Python 3.12 raises when `sudo -n` closes stdin before
+  `subprocess.communicate` has flushed -- a real CI
+  failure that the previous code path triggered.
+  (Commit: `d6f226b`.)
+
+#### Tests
+
+* **1095 tests passing** (was 641 at v0.1.0):
+  - **806 backend tests** (was 441) covering FSM
+    transitions, citation sanitization, multi-page
+    PDF, LaTeX export, title fallback, Prometheus
+    exposition, sanitizer telemetry, DNS retry, and
+    TCP pre-flight.
+  - **289 frontend tests** (was 200) covering
+    Generate-PDF auto-download, Generate-TeX, bold/
+    underlined Limitations and Future Research links,
+    and the four-layer audit for the new actions.
+
 ---
 
 ## [0.1.0] - 2026-07-14

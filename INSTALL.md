@@ -26,14 +26,15 @@ file is missing.
 |------|--------------|
 | 1. Detect OS / hardware | Reads `platform.system()`, sizes RAM, looks for an NVIDIA GPU via `nvidia-smi`. |
 | 2. Install Docker | Uses the OS package manager (`apt-get`, `dnf`, `pacman`, or Homebrew on macOS). Prints a clear error on Windows without WSL2. |
-| 3. Build the image | Runs `docker build -t bioresearch-ai:latest .` once (~5 minutes cold). |
-| 4. Open the GUI | A Tkinter window asks for `LLM provider`, `API key`, `Base URL`, `Model`, `PubMed email`, and `PubMed API key`. Choosing `local` pulls a quantized DeepSeek model sized for your hardware. |
-| 5. Probe credentials | A background thread calls `scripts/probe_credentials.py` to verify each key before saving. Failures produce actionable hints (e.g. *“Your OpenAI key looks invalid — check the value and try again.”*). |
-| 6. Save `.env` | Writes the values to `.env` (chmod 600, owner-only) so the next run is silent. |
-| 7. Pull the local model | When `local` is chosen, `docker exec ollama ollama pull <model>` runs. |
-| 8. Start containers | `docker compose up -d --build`. |
-| 9. Wait for backend | Polls `http://localhost:8000/api` until 200. |
-| 10. Open browser | `http://localhost:8000` is opened in the default browser. |
+| 3. **TCP pre-flight probe** | Before the build, probes `registry-1.docker.io:443` over IPv4 AND IPv6. If your host can only reach Docker Hub over IPv4 (broken IPv6 routing is the most common cause of "network is unreachable" failures), logs a clear warning with three workarounds. See [ADR-015](docs/adr/ADR-015-bootstrap-dns-ipv6-retry-auto-fix.md). |
+| 4. Build the image | Runs `docker buildx build --target backend-minimal -t bioresearch-ai:minimal .`. The build is **DNS-aware** — `_run_build_with_dns_retry` retries on transient `lookup ... server misbehaving` failures with exponential backoff. On persistent failures with an `ipv4_only` probe result AND `BIORESEARCH_AUTO_FIX_DOCKER_IPV6=1` set, writes `{"ipv6": false}` to `/etc/docker/daemon.json` and restarts the daemon before retrying. |
+| 5. Open the GUI | A Tkinter window asks for `LLM provider`, `API key`, `Base URL`, `Model`, `PubMed email`, and `PubMed API key`. Choosing `local` pulls a quantized DeepSeek model sized for your hardware. |
+| 6. Probe credentials | A background thread calls `scripts/probe_credentials.py` to verify each key before saving. Failures produce actionable hints (e.g. *“Your OpenAI key looks invalid — check the value and try again.”*). |
+| 7. Save `.env` | Writes the values to `.env` (chmod 600, owner-only) so the next run is silent. |
+| 8. Pull the local model | When `local` is chosen, `docker exec ollama ollama pull <model>` runs. |
+| 9. Start containers | `docker compose up -d --build`. |
+| 10. Wait for backend | Polls `http://localhost:8000/api` until 200. |
+| 11. Open browser | `http://localhost:8000` is opened in the default browser. |
 
 ---
 
@@ -157,7 +158,7 @@ brew install python-tk
 
 ### The build fails with a conda timeout
 
-The default channel is `https://conda-forge.org/conda-forge`. If
+The default channel is `https://conda.anaconda.org/conda-forge`. If
 your network is slow or blocks that host, the build will retry
 three times before giving up. If retries are not enough, point
 the bootstrap at a mirror:
@@ -166,15 +167,89 @@ the bootstrap at a mirror:
 python3 bootstrap.py --mirror https://mirrors.tuna.tsinghua.edu.cn/conda-forge
 ```
 
+### The build fails with "network is unreachable"
+
+If the build aborts with an error like:
+
+```
+ERROR: failed to authorize: failed to fetch anonymous token:
+Get "https://auth.docker.io/token?...":
+dial tcp [2606:4700:4403::ac40:904e]:443: connect: network is unreachable
+```
+
+…your host has broken IPv6 routing (this is the most common
+cause since Docker's Go resolver prefers IPv6 over IPv4 per
+RFC 6724, and the SYN to the IPv6 address is dropped silently).
+
+The bootstrap now detects this with a **TCP pre-flight probe**
+and offers three workarounds in the log output. The fastest fix
+is to disable IPv6 in the Docker daemon and restart:
+
+```bash
+# Add this to /etc/docker/daemon.json (the bootstrap writes it
+# automatically when BIORESEARCH_AUTO_FIX_DOCKER_IPV6=1):
+{
+  "ipv6": false
+}
+
+# Restart dockerd (the bootstrap does this automatically):
+sudo systemctl restart docker
+```
+
+To enable the **fully automatic** fix on every `python3
+bootstrap.py` invocation:
+
+```bash
+# 1. Configure passwordless sudo for the two commands
+sudo tee /etc/sudoers.d/bioresearch-bootstrap <<'EOF'
+YOUR_USERNAME ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/docker/daemon.json, /usr/bin/systemctl restart docker
+EOF
+sudo chmod 440 /etc/sudoers.d/bioresearch-bootstrap
+
+# 2. Opt in to the auto-fix in the bootstrap environment
+export BIORESEARCH_AUTO_FIX_DOCKER_IPV6=1
+```
+
+The bootstrap will detect the IPv4-only situation, write
+`{"ipv6": false}` to `daemon.json`, restart dockerd, and retry
+the build — no further user intervention required.
+
+See [ADR-015](docs/adr/ADR-015-bootstrap-dns-ipv6-retry-auto-fix.md)
+for the full design rationale.
+
+### The build fails with "lookup ... server misbehaving"
+
+If the build aborts with a DNS error like:
+
+```
+dial tcp: lookup registry-1.docker.io on 127.0.0.53:53: server misbehaving
+```
+
+…your host's systemd-resolved stub resolver is returning
+`SERVFAIL` transiently. The bootstrap **retries automatically**
+with exponential backoff (1s, 2s, 4s) up to three attempts. If
+retries are not enough:
+
+```bash
+sudo systemctl restart systemd-resolved
+python3 bootstrap.py
+```
+
+See [ADR-015](docs/adr/ADR-015-bootstrap-dns-ipv6-retry-auto-fix.md)
+for the full design rationale.
+
 ## Build profiles
 
 The Docker image ships in two flavours:
 
-- **Slim (default)** — `bioresearch-ai:latest` is a Python-only image
+- **Slim (default)** — `bioresearch-ai:minimal` is a Python-only image
   built atop `python:3.12-slim`. It contains the FastAPI backend
   and the prebuilt React frontend. No conda, no Node.js, no
-  ML libraries. ~250 MB. This is the default for users who pick
-  any cloud LLM (OpenAI, Anthropic, DeepSeek, etc.).
+  ML libraries. **~261 MB** (includes `fonts-dejavu` ~10 MB for
+  the reportlab PDF generator's Unicode coverage; see
+  [ADR-010](docs/adr/ADR-010-pdf-and-latex-export.md)). This is
+  the default for users who pick any cloud LLM (OpenAI,
+  Anthropic, DeepSeek, etc.).
 - **Local** — `bioresearch-ai:local` includes the full ML stack
   (torch, transformers, scikit-learn, rdkit, pandas, scipy, etc.)
   installed via conda. ~3 GB. Required for users who want to run

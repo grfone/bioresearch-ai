@@ -31,11 +31,23 @@ Deliverables
 * Retrieve abstracts
 * Structured paper objects
 
+### Bonus (added during Phase 1)
+
+* **OpenAlex, Europe PMC, bioRxiv** multi-source
+  search (PubMed is no longer the only source — see
+  `app/infrastructure/literature/multi_source.py`)
+* **DOI / PMID / title dedup** across sources
+  (`confidence × recency_boost` ranking)
+* **Section-based abstract extraction** with
+  `<section id="Abs[0-9]+">` preferred over
+  `<meta name="description">` (ADR-004)
+* **Multi-identity paper deduplication** (ADR-005)
+
 ---
 
 # Phase 2 — Paper Summarization
 
-**Status:** In Progress
+**Status:** ✅ Completed (2026-08-15)
 
 ## Goals
 
@@ -52,6 +64,8 @@ Deliverables
 ---
 
 # Phase 3 — Evidence Synthesis
+
+**Status:** ✅ Completed (2026-08-18)
 
 ## Goals
 
@@ -72,6 +86,8 @@ Deliverables
 ---
 
 # Phase 4 — LangGraph Scientific Workflows
+
+**Status:** ✅ Completed (2026-08-22)
 
 ## Goals
 
@@ -105,14 +121,28 @@ Validate Citations
 
 Deliverables
 
-* Stateful workflows
-* Retry logic
-* Validation
-* Human review support
+* Stateful workflows (FSM with 12 stable/transient
+  states — see `app/core/enums/workspace_state.py`
+  and [ADR-009](docs/adr/ADR-009-publishing-state.md))
+* Retry logic (`RETRY` action from `ERROR`)
+* Validation (citation anti-fabrication guard at
+  ingest — see
+  [ADR-011](docs/adr/ADR-011-vancouver-citations-anti-fabrication.md))
+* Human review support (Recover & Retry CTA on
+  errors)
+
+### Bonus (added during Phase 4)
+
+* **`PUBLISHING` FSM state** (ADR-009) for PDF
+  export with full audit trail
+* **Four-layer audit pattern** (ADR-009) for adding
+  new FSM actions safely
 
 ---
 
 # Phase 5 — Multi-Agent Research System
+
+**Status:** 🚧 In progress (single-agent today)
 
 Specialized AI agents collaborate on scientific tasks.
 
@@ -131,9 +161,14 @@ Goals
 * Quality assurance
 * Improved report generation
 
+The LangGraph workflow topology is in place; the
+multi-agent coordinator is the next milestone.
+
 ---
 
 # Phase 6 — Biological Knowledge Integration
+
+**Status:** ⏳ Planned
 
 Expand beyond scientific papers.
 
@@ -158,6 +193,8 @@ Goals
 
 # Phase 7 — Long-Term Memory
 
+**Status:** ✅ Substantially shipped (2026-08-26)
+
 Introduce persistent knowledge.
 
 Capabilities
@@ -168,15 +205,25 @@ Capabilities
 * Research sessions
 * User workspaces
 
-Possible technologies
+Implemented via
 
-* ChromaDB
-* PostgreSQL
-* Redis
+* **Redis-backed abstract-enricher cache**
+  (ADR-003,
+  `app/infrastructure/cache/redis_cache.py`) — shares
+  state across worker processes
+* **In-memory LRU cache** as the single-worker
+  default
+* **SQLite** as the workspace storage
+  (`app/infrastructure/storage/sqlite_workspace_repository.py`)
+* See [multi-worker-cache-investigation.md](docs/multi-worker-cache-investigation.md)
+  for the cache-fragmentation problem and the
+  remediation that was shipped.
 
 ---
 
 # Phase 8 — MCP Integration
+
+**Status:** 🚧 Scaffolded (skeleton in `app/infrastructure/mcp/`)
 
 Expose biological resources through Model Context Protocol.
 
@@ -197,6 +244,8 @@ Goals
 
 # Phase 9 — Agent-to-Agent Collaboration
 
+**Status:** ⏳ Planned
+
 Support distributed AI systems.
 
 Capabilities
@@ -210,6 +259,8 @@ Capabilities
 
 # Phase 10 — Research Assistant
 
+**Status:** ⏳ Planned (long-term)
+
 Long-term vision
 
 An AI assistant capable of:
@@ -221,6 +272,55 @@ An AI assistant capable of:
 * Report writing
 * Citation validation
 * Research planning
+
+---
+
+# Phase 0.6 — Report Export (added 2026-08-30)
+
+**Status:** ✅ Completed
+
+This phase was added out-of-order when the
+`PUBLISHING` FSM state was introduced.
+
+Deliverables
+
+* **Multi-page reportlab-based PDF generator** with
+  embedded DejaVu Sans (Unicode coverage for Greek
+  letters, diacritics, em-dashes)
+* **Clickable numbered references** (Vancouver
+  style) — both in the PDF (`/Dest` annotations)
+  and in the LaTeX source (`\hyperref`)
+* **LaTeX export** via
+  `GET /workspaces/{id}/published-report.tex`
+* **Generate PDF / Generate TeX buttons** that
+  auto-download
+* **Bold + underlined Limitations and Future Research
+  citation links** matching the executive-summary
+  style
+
+See [ADR-010](docs/adr/ADR-010-pdf-and-latex-export.md).
+
+---
+
+# Phase 0.7 — Observability (added 2026-08-30)
+
+**Status:** ✅ Completed
+
+This phase was added when the operator needed
+visibility into the in-process LLM-safety counters.
+
+Deliverables
+
+* **`/metrics` Prometheus exposition** — sanitizer
+  and title-fallback counters and gauges (hand-rolled,
+  no `prometheus_client` dep)
+* **`/health/sanitizer` JSON probe** — running totals
+  for dropped citation markers
+* **`/health/title-fallback` JSON probe** — fallback
+  rate over a sliding 20-call window with WARN at
+  >50%
+
+See [ADR-014](docs/adr/ADR-014-prometheus-metrics-health-probes.md).
 
 ---
 
@@ -246,7 +346,8 @@ BioResearch AI succeeds when researchers can:
 
 * Find evidence faster
 * Understand literature more efficiently
-* Generate higher-quality reports
+* Generate higher-quality reports (✅ — see
+  [ADR-010](docs/adr/ADR-010-pdf-and-latex-export.md))
 * Explore biological knowledge seamlessly
 * Collaborate with trustworthy AI systems
 
@@ -259,5 +360,6 @@ Every new feature should be:
 * Modular
 * Replaceable
 * Testable
-* Well documented
+* Well documented (ADRs required for new
+  architecture patterns)
 * Backward compatible whenever practical
