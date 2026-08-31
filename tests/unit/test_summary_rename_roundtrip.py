@@ -490,11 +490,11 @@ class TestRepositoryV6SchemaMigration:
         from app.infrastructure.storage.sqlite_workspace_repository import (
             LATEST_SCHEMA_VERSION,
         )
-        assert LATEST_SCHEMA_VERSION == 7
+        assert LATEST_SCHEMA_VERSION == 8
 
     def test_fresh_database_has_user_version_six(self, tmp_path):
         """A brand-new database (no legacy rows) should have
-        ``PRAGMA user_version = 6`` after the repository is
+        ``PRAGMA user_version = 8`` after the repository is
         instantiated. The migration walks zero rows but still
         bumps the version pragma via the v6 data step.
         """
@@ -503,7 +503,7 @@ class TestRepositoryV6SchemaMigration:
         conn = sqlite3.connect(db_path)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.close()
-        assert version == 7
+        assert version == 8
 
     def test_v5_database_with_legacy_rows_upgrades_to_v6(
         self, tmp_path
@@ -583,7 +583,7 @@ class TestRepositoryV6SchemaMigration:
         )
         row = cursor.fetchone()
         conn.close()
-        assert version == 7
+        assert version == 8
         assert row is not None
         data = json.loads(row[0])
         assert "body" in data
@@ -616,12 +616,12 @@ class TestRepositoryV6SchemaMigration:
         )
         row = cursor.fetchone()
         conn.close()
-        assert version == 7
+        assert version == 8
         data = json.loads(row[0])
         assert "body" in data
         assert "text" not in data
 
-    def test_v6_version_constant_module_attribute(self):
+    def test_v8_version_constant_module_attribute(self):
         """The version constant must be importable as a
         module attribute (not a class attribute) so other
         modules can read it without instantiating the
@@ -632,7 +632,7 @@ class TestRepositoryV6SchemaMigration:
             sqlite_workspace_repository,
         )
         assert hasattr(sqlite_workspace_repository, "LATEST_SCHEMA_VERSION")
-        assert sqlite_workspace_repository.LATEST_SCHEMA_VERSION == 7
+        assert sqlite_workspace_repository.LATEST_SCHEMA_VERSION == 8
 
 
 def _serialize_papers_for_migration() -> str:

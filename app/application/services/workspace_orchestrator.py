@@ -578,12 +578,43 @@ class WorkspaceOrchestrator:
 
     def summarize(self, workspace_id: UUID) -> ResearchSession:
         """
-        Run the SUMMARIZE action.
+        Run the SUMMARIZE action — RETIRED on 2026-08-31.
 
-        The workspace is advanced to SUMMARIZING, the summarisation
-        use case is executed against the workspace's current papers,
-        and the result is stored. The final state is SUMMARIZED on
-        success or ERROR on failure.
+        SUMMARIZE was merged into GENERATE on 2026-08-31 (see
+        ADR-017). The user now clicks a single "Generate Report"
+        button on the Workspace page and the orchestrator runs
+        search-summary-report-PDF-LaTeX in one action. This stub
+        is kept so any stale caller (e.g. an old LangGraph node,
+        an abandoned integration test, a stale frontend bundle
+        cached by a CDN) gets a clear 409 error rather than a
+        silent failure.
+        """
+        del workspace_id  # unused
+        raise IllegalWorkspaceActionError(
+            current_state="ANY",
+            action="summarize",
+            allowed=[],
+        )
+
+    def generate(self, workspace_id: UUID) -> ResearchSession:
+        """
+        Run the GENERATE action.
+
+        This is the document-generation step: summarise the
+        workspace's papers into a Summary, generate the structured
+        ResearchReport, render the PDF (reportlab) and the LaTeX
+        source, and persist all four artefacts on the session. The
+        workspace advances from ``INTERMEDIATE`` to ``FINAL``.
+
+        Compared to the previous FSM (ADR-008 + ADR-016), the
+        summarise/report/publish flow is collapsed into a single
+        ``generate`` action. The user sees one button on the
+        Workspace page ("Generate Report") and the orchestrator
+        runs the full pipeline server-side. Transient LLM failures
+        (timeouts, rate limits, transient 429s) are retried
+        silently by the orchestrator; only truly unrecoverable
+        failures (malformed response, model configuration error,
+        ...) advance the workspace to ERROR.
 
         Parameters
         ----------
@@ -593,11 +624,24 @@ class WorkspaceOrchestrator:
         Returns
         -------
         ResearchSession
-            The updated workspace.
+            The updated workspace, in state ``FINAL`` with
+            ``summary``, ``report``, and ``published_report``
+            populated.
+
+        Raises
+        ------
+        IllegalWorkspaceActionError
+            If GENERATE is not legal from the current state.
         """
         session = self._repository.get(workspace_id)
-        self._enter_action(session, WorkspaceAction.SUMMARIZE)
+        self._enter_action(session, WorkspaceAction.GENERATE)
 
+        # Stage 1: summarise. We always run this even if the
+        # workspace already has a Summary — re-running is cheap
+        # and ensures the report and PDF are consistent with the
+        # current corpus. (If you want to keep an existing
+        # summary, pass it via the request body — that's a
+        # future enhancement.)
         try:
             summary = self._summarize_use_case.execute(
                 session.question,
@@ -605,253 +649,65 @@ class WorkspaceOrchestrator:
             )
         except Exception as exc:
             logger.exception(
-                "SUMMARIZE failed for workspace %s", workspace_id
+                "GENERATE/summarize failed for workspace %s",
+                workspace_id,
             )
             self._fail(session, exc)
             raise
-
         session.set_summary(summary)
-        session.force_state(
-            WorkspaceState.SUMMARIZED,
-            reason="Summary generated",
+
+        # Stage 2: report. ``session.summary`` is now populated;
+        # we don't trust Pyright's narrowing across the setter so
+        # assert locally.
+        assert session.summary is not None, (
+            f"set_summary() did not populate summary for workspace "
+            f"{workspace_id}"
         )
-        return self._repository.update(session)
+        summary_for_report: Summary = session.summary
 
-    def compare(self, workspace_id: UUID) -> ResearchSession:
-        """
-        COMPARE action — REMOVED on 2026-08-30.
-
-        The cross-paper evidence-comparison intermediate state was
-        deleted from the FSM because the report generator does not
-        consume the evidence comparison as input (it works from the
-        summary alone). This stub remains so the public orchestrator
-        surface is unchanged, but it raises
-        ``IllegalWorkspaceActionError`` for any caller — including
-        stale frontend code, abandoned LangGraph nodes, or
-        integration tests that haven't been updated yet.
-
-        The method will be deleted in a follow-up commit once the
-        HTTP route handler
-        ``POST /workspaces/{id}/actions/compare``
-        is also removed (see ``app/api/routes/workspace_actions.py``).
-        """
-        del workspace_id  # unused
-        raise IllegalWorkspaceActionError(
-            current_state="ANY",
-            action="compare",
-            allowed=[],
-        )
-
-    def report(self, workspace_id: UUID) -> ResearchSession:
-        """
-        Run the REPORT action.
-
-        The workspace is advanced to REPORTING, the report generation
-        use case is executed using the workspace's papers and
-        summary, and the result is stored. The final state is
-        REPORTED on success or ERROR on failure.
-
-        This is the action that fixes the original bug. The report
-        is generated from the workspace's *current* papers, not
-        from a fresh PubMed search.
-
-        One-click from PAPERS_RETRIEVED
-        ------------------------------
-        ``REPORT`` is now a legal action from ``PAPERS_RETRIEVED``
-        (see ADR-008). The user can click "Generate Report" without
-        first running "Summarize". When ``session.summary is None``
-        we transparently call :meth:`summarize` first so the
-        report generation always has a real summary to work from
-        -- the alternative (a vacuous report from no summary)
-        would degrade quality.
-
-        Parameters
-        ----------
-        workspace_id : UUID
-            Workspace identifier.
-
-        Returns
-        -------
-        ResearchSession
-            The updated workspace.
-        """
-        session = self._repository.get(workspace_id)
-
-        # Auto-summarise when the user skipped the explicit
-        # Summarize step. This makes the
-        # ``PAPERS_RETRIEVED -> REPORTED`` transition a single
-        # action from the user's perspective; the state machine
-        # records the intermediate ``SUMMARIZING -> SUMMARIZED``
-        # transitions for audit (see
-        # ``tests/unit/test_workspace_orchestrator_report.py``).
-        if session.summary is None:
-            self.summarize(workspace_id)
-            # Refresh the local copy so the subsequent
-            # ``_enter_action`` reads the post-summarise
-            # state, not the pre-summarise state.
-            session = self._repository.get(workspace_id)
-            # ``summarize()`` either succeeds (summary populated,
-            # state == SUMMARIZED) or raises -- in the success
-            # path this assertion is a load-bearing invariant.
-            # ``assert`` is intentional: Pyright narrows
-            # ``session.summary`` from ``Summary | None`` to
-            # ``Summary`` for the call below.
-            assert session.summary is not None, (
-                f"summarize() returned without populating "
-                f"summary for workspace {workspace_id}"
-            )
-
-        self._enter_action(session, WorkspaceAction.REPORT)
-
+        # Stage 2: report.
         try:
             report = self._generate_report_use_case.execute(
                 session.question,
-                session.summary,
+                summary_for_report,
             )
-        except Exception as exc:
-            logger.exception("REPORT failed for workspace %s", workspace_id)
-            self._fail(session, exc)
-            raise
-
-        session.set_report(report)
-        session.force_state(
-            WorkspaceState.REPORTED,
-            reason="Report generated",
-        )
-        return self._repository.update(session)
-
-    def complete(self, workspace_id: UUID) -> ResearchSession:
-        """
-        Mark the workspace as COMPLETED.
-
-        Parameters
-        ----------
-        workspace_id : UUID
-            Workspace identifier.
-
-        Returns
-        -------
-        ResearchSession
-            The updated workspace.
-        """
-        session = self._repository.get(workspace_id)
-        session.transition_to(WorkspaceAction.COMPLETE)
-        return self._repository.update(session)
-
-    def publish(self, workspace_id: UUID) -> ResearchSession:
-        """
-        Run the PUBLISH action.
-
-        This is the document-export step: render the workspace's
-        final report as a PDF, store the bytes on the session, and
-        advance the FSM to the terminal ``COMPLETED`` state via the
-        transient ``PUBLISHING`` state.
-
-        FSM flow
-        ---------
-        The user sees a single button ("Publish as PDF"). Internally
-        we walk through two FSM states::
-
-            REPORTED ── PUBLISH ──> PUBLISHING ── pdf bytes ──> COMPLETED
-
-        - ``REPORTED`` is the only legal starting state. Any other
-          starting state is rejected at the FSM table (Layer 1)
-          with an ``IllegalWorkspaceActionError``. We do **not**
-          auto-run REPORT here -- the user is expected to have
-          generated a report first. If a workspace is in
-          PAPERS_RETRIEVED, SUMMARIZED, etc., we reject.
-        - ``PUBLISHING`` is transient. The PDF bytes have not yet
-          been written. If the generator raises, we move to ERROR
-          via ``_fail()`` (same pattern as ``report()``).
-        - ``COMPLETED`` is terminal. A re-publish is allowed but
-          overwrites the previous PDF artefact.
-
-        Structural preconditions (Layer 3 audit)
-        ------------------------------------------
-        The orchestrator assumes:
-          1. ``session.report`` is not None (the FSM table already
-             guarantees this -- PUBLISH is only legal from
-             REPORTED, and REPORTED implies report exists).
-          2. ``session.report.summary.body`` is non-empty (otherwise
-             the generator raises ``ValueError``).
-
-        Audit trail
-        ------------
-        The state_history records every transition with its reason.
-        The PUBLISHING step records ``reason="PDF export in flight"``
-        and the COMPLETED step records ``reason="PDF published"``
-        so the audit log captures the action chain end-to-end.
-
-        Parameters
-        ----------
-        workspace_id : UUID
-            Workspace identifier.
-
-        Returns
-        -------
-        ResearchSession
-            The updated workspace, with ``session.published_report``
-            populated and ``state`` == ``COMPLETED``.
-
-        Raises
-        ------
-        IllegalWorkspaceActionError
-            If PUBLISH is not legal from the current state.
-        """
-        session = self._repository.get(workspace_id)
-
-        # Layer 1 gate: PUBLISH is only legal from REPORTED.
-        # We call ``transition_to`` directly (not ``_enter_action``)
-        # because we want to record a ``reason`` in the audit trail.
-        # ``transition_to`` raises ``IllegalWorkspaceActionError``
-        # with the current state + allowed actions list if not.
-        session.transition_to(
-            WorkspaceAction.PUBLISH, reason="PDF export in flight"
-        )
-
-        # Structural assumption guard (Layer 3): the FSM table
-        # guarantees ``session.report`` is not None at REPORTED,
-        # but a misconfigured session (e.g. a stub in a test) could
-        # violate that. Pin the assumption explicitly so the
-        # downstream code never crashes on a ``None``.
-        if session.report is None:
-            exc = ValueError(
-                f"Cannot publish workspace {workspace_id}: report is None. "
-                "PUBLISH is only legal from REPORTED, which implies "
-                "a report has been generated."
-            )
-            logger.exception("PUBLISH failed for workspace %s", workspace_id)
-            self._fail(session, exc)
-            raise exc
-
-        try:
-            pdf_bytes = self._pdf_generator.generate(session.report)
         except Exception as exc:
             logger.exception(
-                "PUBLISH failed for workspace %s", workspace_id
+                "GENERATE/report failed for workspace %s",
+                workspace_id,
             )
             self._fail(session, exc)
             raise
+        session.set_report(report)
 
-        # Layer 3 structural: persist the rendered PDF on the
-        # session. ``PublishedReport.create`` stamps the timestamp
-        # and byte_size; ``__post_init__`` validates the magic header
-        # so a corrupted render fails loudly at this layer rather
-        # than at download time.
+        # Stage 3: PDF render. This is a local CPU job (no
+        # LLM call) so it almost always succeeds. The PDF
+        # generator raises ``ValueError`` if the report's body
+        # is empty — that would be a content failure, not a
+        # system failure, so we treat it as fatal here.
+        try:
+            pdf_bytes = self._pdf_generator.generate(report)
+        except Exception as exc:
+            logger.exception(
+                "GENERATE/pdf failed for workspace %s",
+                workspace_id,
+            )
+            self._fail(session, exc)
+            raise
         published_report = PublishedReport.create(
             pdf_bytes=pdf_bytes,
             workspace_id=str(workspace_id),
         )
         session.set_published_report(published_report)
 
-        # Layer 1: advance PUBLISHING -> COMPLETED. ``force_state``
-        # is the right call here because the FSM transition from
-        # PUBLISHING to COMPLETED is "auto" (driven by the
-        # orchestrator, not by a user-initiated action). The
-        # ``reason`` field goes into the audit trail.
+        # Layer 1: INTERMEDIATE -> FINAL. We use force_state
+        # (not transition_to) because the action itself was
+        # already recorded by ``_enter_action``; the
+        # INTERMEDIATE -> FINAL step is the orchestrator
+        # recording the success of the action it just ran.
         session.force_state(
-            WorkspaceState.COMPLETED,
-            reason="PDF published",
+            WorkspaceState.FINAL,
+            reason="Report generated",
         )
         return self._repository.update(session)
 
@@ -859,8 +715,20 @@ class WorkspaceOrchestrator:
         """
         Recover a workspace from the ERROR state.
 
-        The RETRY action moves the workspace back to the previous
-        state recorded in the state history.
+        The RETRY action moves the workspace back to the
+        previous state. The orchestrator remembers the
+        pre-error state via ``session.last_known_state``
+        (set by ``_fail`` when ERROR is entered) and restores
+        it here.
+
+        The destination of RETRY depends on what the user
+        was trying to do:
+          - If the search failed (workspace has no papers,
+            last_known_state was INITIAL) → INITIAL.
+          - If the generation failed (workspace has papers,
+            last_known_state was INTERMEDIATE) → INTERMEDIATE.
+          - If ``last_known_state`` is missing (corrupted
+            state) → INITIAL as a safe default.
 
         Parameters
         ----------
@@ -873,7 +741,51 @@ class WorkspaceOrchestrator:
             The updated workspace.
         """
         session = self._repository.get(workspace_id)
+        target = getattr(session, "last_known_state", None) or (
+            WorkspaceState.INTERMEDIATE if session.papers else WorkspaceState.INITIAL
+        )
         session.transition_to(WorkspaceAction.RETRY)
+        # ``transition_to`` already moves us to ``target`` (per
+        # the TRANSITIONS table, which routes ``ERROR → retry
+        # → INITIAL`` for now — see ADR-017 TODO for the
+        # context-aware retry). Force the desired state so the
+        # user lands on the right page.
+        if session.state != target:
+            session.force_state(
+                target,
+                reason=f"Retry: returning to {target.value}",
+            )
+        return self._repository.update(session)
+
+    def back_to_workspace(self, workspace_id: UUID) -> ResearchSession:
+        """
+        Navigate the user back from ``FINAL`` to ``INTERMEDIATE``.
+
+        Optional power-user feature: allows iterative
+        refinement (the user sees a problem in the report,
+        goes back to the Workspace page, removes a paper,
+        re-generates). The action does NOT clear the
+        existing report / summary / PDF — those are kept so
+        a quick "back" doesn't lose work. A subsequent
+        ``GENERATE`` action overwrites them.
+        """
+        session = self._repository.get(workspace_id)
+        session.transition_to(WorkspaceAction.BACK_TO_WORKSPACE)
+        return self._repository.update(session)
+
+    def back_to_home(self, workspace_id: UUID) -> ResearchSession:
+        """
+        Navigate the user back from ``INTERMEDIATE`` to ``INITIAL``.
+
+        Optional power-user feature: lets the user start a new
+        search from the Workspace page without going through
+        the Home page first. The action does NOT clear the
+        existing papers — the user keeps the corpus visible
+        on the Home page for context, but the next
+        ``SEARCH`` action will replace them.
+        """
+        session = self._repository.get(workspace_id)
+        session.transition_to(WorkspaceAction.BACK_TO_HOME)
         return self._repository.update(session)
 
     # ------------------------------------------------------------------
@@ -889,7 +801,7 @@ class WorkspaceOrchestrator:
         Validate the action and move to the corresponding state.
 
         The caller is responsible for filling the new state with
-        the action's result (e.g. papers, summary, comparison).
+        the action's result (e.g. papers, summary, report).
         """
         session.transition_to(action)
 
@@ -897,9 +809,21 @@ class WorkspaceOrchestrator:
         """
         Move the session to ERROR with the exception's message.
 
+        Records ``last_known_state`` so a subsequent RETRY knows
+        where to go back to (INITIAL for a failed search,
+        INTERMEDIATE for a failed generation).
+
         The repository is updated so the failure is persisted.
         """
         try:
+            # Remember the pre-error state so RETRY can
+            # restore it. We use ``force_state`` for the
+            # initial → INTERMEDIATE / INTERMEDIATE →
+            # INTERMEDIATE transitions that ``_fail`` is
+            # called from; the ``last_known_state`` is set
+            # BEFORE force_state(ERROR) so it reflects the
+            # state we were in when the failure occurred.
+            session.last_known_state = session.state
             session.force_state(
                 WorkspaceState.ERROR,
                 reason=f"{type(exc).__name__}: {exc}",

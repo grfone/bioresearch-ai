@@ -428,7 +428,7 @@ describe('AddPapersPanel', () => {
       const serverWorkspace = {
         workspace_id: 'ws-1',
         question: 'x',
-        state: 'PAPERS_RETRIEVED',
+        state: 'INTERMEDIATE',
         papers: [resolvedPaper],
         total_papers: 1,
         allowed_actions: ['report', 'summarize', 'search'],
@@ -568,7 +568,7 @@ describe('AddPapersPanel', () => {
       const serverWorkspace = {
         workspace_id: 'ws-1',
         question: 'x',
-        state: 'PAPERS_RETRIEVED',
+        state: 'INTERMEDIATE',
         papers: [
           { title: 'From PDF', doi: '10.1038/nature12373', pmid: null },
         ],
@@ -979,7 +979,7 @@ describe('AddPapersPanel', () => {
       const serverWorkspace = {
         workspace_id: 'ws-1',
         question: 'x',
-        state: 'PAPERS_RETRIEVED',
+        state: 'INTERMEDIATE',
         papers: [
           {
             title: 'amyloid cascade 2025',

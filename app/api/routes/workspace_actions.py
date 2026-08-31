@@ -16,17 +16,21 @@ Endpoints
 POST /workspaces/{id}/actions/search
     Run the SEARCH action (PubMed retrieval).
 
-POST /workspaces/{id}/actions/summarize
-    Run the SUMMARIZE action (evidence synthesis).
-
-POST /workspaces/{id}/actions/report
-    Run the REPORT action (final report generation).
-
-POST /workspaces/{id}/actions/complete
-    Mark the workspace as COMPLETED.
+POST /workspaces/{id}/actions/generate
+    Run the GENERATE action (final report generation).
+    Summarises the workspace's papers, generates the
+    structured ResearchReport, renders the PDF (reportlab)
+    and the LaTeX source. Legal only from INTERMEDIATE.
+    Advances the workspace to FINAL.
 
 POST /workspaces/{id}/actions/retry
     Recover the workspace from the ERROR state.
+
+POST /workspaces/{id}/actions/back_to_workspace
+    Navigate back from FINAL to INTERMEDIATE.
+
+POST /workspaces/{id}/actions/back_to_home
+    Navigate back from INTERMEDIATE to INITIAL.
 
 POST /workspaces/{id}/papers
     Add a paper to the workspace manually. Used by the
@@ -274,82 +278,67 @@ def search_action(
 
 
 @router.post(
-    "/{workspace_id}/actions/summarize",
-    response_model=WorkspaceResponse,
-    summary="Generate an evidence summary from the workspace's papers.",
-)
-def summarize_action(
-    workspace_id: UUID,
-    orchestrator: WorkspaceOrchestrator = Depends(
-        get_workspace_orchestrator
-    ),
-) -> WorkspaceResponse:
-    """Run the SUMMARIZE action."""
-    return _run_action(
-        orchestrator,
-        workspace_id,
-        WorkspaceAction.SUMMARIZE.value,
-        orchestrator.summarize,
-    )
-
-
-@router.post(
-    "/{workspace_id}/actions/report",
+    "/{workspace_id}/actions/generate",
     response_model=ReportResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Generate the final research report from the workspace.",
+    summary="Generate the report (summary + report + PDF + LaTeX).",
 )
-def report_action(
+def generate_action(
     workspace_id: UUID,
     orchestrator: WorkspaceOrchestrator = Depends(
         get_workspace_orchestrator
     ),
 ) -> ReportResponse:
-    """Run the REPORT action and return the rendered report.
+    """Run the GENERATE action.
 
-    The report is generated from the workspace's *current* papers
-    and summary — it does not re-query PubMed.
+    The orchestrator runs the full pipeline server-side in one
+    action: summarise the workspace's papers, generate the
+    structured ResearchReport, render the PDF (reportlab) and
+    the LaTeX source. All four artefacts are persisted on the
+    session. The workspace advances from ``INTERMEDIATE`` to
+    ``FINAL``.
+
+    Compared to the previous FSM (ADR-008 + ADR-016), the
+    summarise/report/publish flow is collapsed into a single
+    ``generate`` action. The user sees one button on the
+    Workspace page ("Generate Report") and the orchestrator
+    runs the full pipeline server-side. Transient LLM failures
+    are retried silently by the orchestrator; only truly
+    unrecoverable failures advance the workspace to ERROR.
 
     Response shape
     --------------
-    Unlike the other FSM action endpoints (which return
-    ``WorkspaceResponse`` so the React frontend can mirror state
-    via ``setCurrentWorkspace``), this endpoint returns the
-    canonical ``ReportResponse`` shape -- the same one the
-    legacy ``/reports/generate`` endpoint returns. The split is
-    intentional: the *action surface* is FSM-aware (so we get
-    proper 409 / ``last_error`` envelopes), but the *data
-    surface* is the report content (because the page renders
-    it directly via ``setReport(result)`` rather than reading
+    Like the previous ``/actions/report`` endpoint, this returns
+    ``ReportResponse`` (the canonical report shape) rather than
+    ``WorkspaceResponse``. The split is intentional: the
+    *action surface* is FSM-aware (so we get proper 409 /
+    ``last_error`` envelopes), but the *data surface* is the
+    report content (because the page renders it directly via
+    ``setReport(result)`` rather than reading
     ``currentWorkspace.report``).
 
-    The FSM contract is still enforced end-to-end: a REPORT
-    from an illegal state returns ``409`` with the standard
-    FSM envelope, and an orchestrator crash returns ``409``
-    with ``error="report_generation_failed"`` +
-    ``last_error`` + ``allowed_actions``. See
-    ``test_publish_action_*`` in ``tests/integration/test_api_fsm.py``
-    and the v4 schema migration in ``sqlite_workspace_repository.py``
-    for the audit trail.
+    PDF download is a separate concern: the user calls
+    ``GET /workspaces/{id}/published-report.pdf`` from the
+    FINAL page. The PDF was generated as a side effect of this
+    action; the bytes are already on the session.
 
     Returns
     -------
     ReportResponse
-        The generated report (workspace_id, summary text,
-        citations, limitations, future_work, generated_at).
+        The generated report.
 
     Raises
     ------
     HTTPException
         * ``409 Conflict`` (illegal_workspace_action) if the
-          FSM doesn't allow REPORT from the current state.
-        * ``409 Conflict`` (report_generation_failed) if the
-          LLM call crashes; ``last_error`` carries the
-          orchestrator's reason.
-        * ``400 Bad Request`` for validation errors.
+          FSM doesn't allow GENERATE from the current state.
+        * ``409 Conflict`` (report_generation_failed) on LLM
+          failure; ``last_error`` carries the orchestrator's
+          reason and ``last_known_state`` lets the user retry
+          from the right page.
     """
     try:
-        workspace = orchestrator.report(workspace_id)
+        workspace = orchestrator.generate(workspace_id)
     except IllegalWorkspaceActionError as exc:
         raise _illegal_action_response(exc) from exc
     except CitationValidationError as exc:
@@ -368,14 +357,13 @@ def report_action(
     except Exception as exc:
         # Mirror the legacy endpoint's recovery pattern
         # (see ``app/api/routes/report.py`` -- the ``b900965``
-        # bug fix). The orchestrator's ``report()`` already
+        # bug fix). The orchestrator's ``generate()`` already
         # moved the workspace to ERROR before re-raising, so
-        # we re-fetch to surface ``last_error`` in the
-        # envelope. Without this catch, the user would see a
-        # bare 500 (FastAPI's default handler) and lose
-        # actionable context.
+        # we re-fetch to surface ``last_error`` and
+        # ``last_known_state`` in the envelope.
         logger.exception(
-            "FSM /actions/report failed for workspace %s", workspace_id
+            "FSM /actions/generate failed for workspace %s",
+            workspace_id,
         )
         try:
             failed = orchestrator.get_workspace(workspace_id)
@@ -395,7 +383,12 @@ def report_action(
                 "message": str(exc),
                 "current_state": failed.state.value,
                 "last_error": failed.last_error,
-                "action": WorkspaceAction.REPORT.value,
+                "last_known_state": (
+                    failed.last_known_state.value
+                    if failed.last_known_state is not None
+                    else None
+                ),
+                "action": WorkspaceAction.GENERATE.value,
                 "allowed_actions": [
                     a.value for a in failed.allowed_actions()
                 ],
@@ -415,64 +408,6 @@ def report_action(
 
 
 @router.post(
-    "/{workspace_id}/actions/complete",
-    response_model=WorkspaceResponse,
-    summary="Mark the workspace as COMPLETED.",
-)
-def complete_action(
-    workspace_id: UUID,
-    orchestrator: WorkspaceOrchestrator = Depends(
-        get_workspace_orchestrator
-    ),
-) -> WorkspaceResponse:
-    """Run the COMPLETE action."""
-    return _run_action(
-        orchestrator,
-        workspace_id,
-        WorkspaceAction.COMPLETE.value,
-        orchestrator.complete,
-    )
-
-
-@router.post(
-    "/{workspace_id}/actions/publish",
-    response_model=WorkspaceResponse,
-    summary="Publish the workspace's report as a PDF.",
-)
-def publish_action(
-    workspace_id: UUID,
-    orchestrator: WorkspaceOrchestrator = Depends(
-        get_workspace_orchestrator
-    ),
-) -> WorkspaceResponse:
-    """Run the PUBLISH action.
-
-    Renders the workspace's final report as a PDF and persists
-    the bytes on the session. The workspace advances through
-    ``PUBLISHING`` to the terminal ``COMPLETED`` state.
-
-    This is the document-export step -- after PUBLISH succeeds,
-    the user can download the PDF via
-    ``GET /workspaces/{id}/published-report.pdf``.
-
-    Legal from REPORTED only. Any other starting state returns
-    409 with the FSM error envelope. PUBLISH is irreversible
-    in the sense that it overwrites any previously-published
-    PDF, but the workspace's report itself is preserved (the
-    user can still re-run REPORT to regenerate the markdown).
-
-    See ADR-009 for the FSM audit + the four-layer pattern
-    that drove this endpoint.
-    """
-    return _run_action(
-        orchestrator,
-        workspace_id,
-        WorkspaceAction.PUBLISH.value,
-        orchestrator.publish,
-    )
-
-
-@router.post(
     "/{workspace_id}/actions/retry",
     response_model=WorkspaceResponse,
     summary="Recover from the ERROR state.",
@@ -483,12 +418,67 @@ def retry_action(
         get_workspace_orchestrator
     ),
 ) -> WorkspaceResponse:
-    """Run the RETRY action."""
+    """Run the RETRY action.
+
+    Returns the user to ``INITIAL`` (after a failed search) or
+    ``INTERMEDIATE`` (after a failed generate), based on
+    ``last_known_state`` recorded when ERROR was entered.
+    """
     return _run_action(
         orchestrator,
         workspace_id,
         WorkspaceAction.RETRY.value,
         orchestrator.retry,
+    )
+
+
+@router.post(
+    "/{workspace_id}/actions/back_to_workspace",
+    response_model=WorkspaceResponse,
+    summary="Navigate back from FINAL to INTERMEDIATE.",
+)
+def back_to_workspace_action(
+    workspace_id: UUID,
+    orchestrator: WorkspaceOrchestrator = Depends(
+        get_workspace_orchestrator
+    ),
+) -> WorkspaceResponse:
+    """Navigate back from FINAL to INTERMEDIATE.
+
+    Optional power-user feature: lets the user refine the
+    corpus and re-generate. Existing report / summary / PDF
+    are kept on the session so a quick "back" doesn't lose
+    work; a subsequent GENERATE overwrites them.
+    """
+    return _run_action(
+        orchestrator,
+        workspace_id,
+        WorkspaceAction.BACK_TO_WORKSPACE.value,
+        orchestrator.back_to_workspace,
+    )
+
+
+@router.post(
+    "/{workspace_id}/actions/back_to_home",
+    response_model=WorkspaceResponse,
+    summary="Navigate back from INTERMEDIATE to INITIAL.",
+)
+def back_to_home_action(
+    workspace_id: UUID,
+    orchestrator: WorkspaceOrchestrator = Depends(
+        get_workspace_orchestrator
+    ),
+) -> WorkspaceResponse:
+    """Navigate back from INTERMEDIATE to INITIAL.
+
+    Lets the user start a new search from the Workspace page
+    without going through the Home page first.
+    """
+    return _run_action(
+        orchestrator,
+        workspace_id,
+        WorkspaceAction.BACK_TO_HOME.value,
+        orchestrator.back_to_home,
     )
 
 

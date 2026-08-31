@@ -80,8 +80,9 @@ class WorkspaceStatusResponse(BaseModel):
     last_error : str | None
         Last error message if the workspace is in ERROR.
 
-    is_transient : bool
-        Whether the state is transient (an operation is in flight).
+    page : str
+        Frontend page token for this state (``"home"``,
+        ``"workspace"``, ``"report"``, ``"error"``).
 
     is_terminal : bool
         Whether the state is a terminal success state.
@@ -118,9 +119,11 @@ class WorkspaceStatusResponse(BaseModel):
         description="Last error message if the workspace is in ERROR.",
     )
 
-    is_transient: bool = Field(
-        default=False,
-        description="Whether the state is transient.",
+    page: str = Field(
+        default="home",
+        description=(
+            "Frontend page token. One of home, workspace, report, error."
+        ),
     )
 
     is_terminal: bool = Field(
@@ -155,6 +158,6 @@ class WorkspaceStatusResponse(BaseModel):
                 for t in session.state_history
             ],
             last_error=session.last_error,
-            is_transient=session.state.is_transient,
+            page=session.state.page,
             is_terminal=session.state.is_terminal,
         )

@@ -189,21 +189,19 @@ export const Report: React.FC = () => {
       fresh?.workspace_id === workspaceId && fresh.summary == null;
     setPhase(willSummarize ? 'Summarizing…' : 'Generating report…');
     try {
-      // FSM-aware REPORT action. The hook's ``runAction``
-      // special-cases 'report' to call the FSM-aware
+      // FSM-aware GENERATE action. The hook's ``runAction``
+      // special-cases 'generate' to call the FSM-aware
       // endpoint and return ``ReportResponse`` -- so the
-      // legacy ``/reports/generate`` endpoint is bypassed
-      // (it's still wired on the backend, marked deprecated,
-      // and kept for any external client that hasn't migrated).
-      // See ADR-009 and the b900965 / 1faf32e sessions for
-      // the FSM-audit context.
-      const result = await runAction('report');
+      // legacy /reports/generate endpoint is bypassed (it's
+      // now retired and removed). See ADR-017 for the
+      // FSM-simplification context.
+      const result = await runAction('generate');
       // The hook's return type is ``WorkspaceResponse |
       // ReportResponse`` because TypeScript can't narrow
       // method overloads on an interface. At this call site
-      // we *know* the action is 'report' so the return is
+      // we *know* the action is 'generate' so the return is
       // a ReportResponse -- the cast is safe and the
-      // runtime hook special-cases the 'report' branch.
+      // runtime hook special-cases the 'generate' branch.
       setReport(result as ReportResponse);
       // Optionally refetch workspace to update report_available flag.
       await fetchWorkspace(workspaceId);
@@ -232,7 +230,7 @@ export const Report: React.FC = () => {
    * legacy ``api.complete`` shortcut. Routing through
    * ``api.complete`` would advance the workspace to COMPLETED
    * but leave ``session.published_report`` empty, breaking the
-   * PDF download. ``runAction('publish')`` is the only path
+   * PDF download. ``handleDownloadClick()`` is the only path
    * that:
    *
    *   1. Renders the PDF on the server,
@@ -252,19 +250,17 @@ export const Report: React.FC = () => {
     setPublishing(true);
     setPubError(null);
     try {
-      // ``runAction('publish')`` dispatches to the FSM-aware
-      // ``POST /workspaces/{id}/actions/publish`` endpoint.
-      // The hook's ``runAction`` mirrors the server's
-      // ``allowed_actions`` by raising ``IllegalWorkspaceActionError``
-      // if the FSM doesn't allow PUBLISH from the current
-      // state (e.g. if the user landed on this page after
-      // somehow getting to CREATED without a report).
-      await runAction('publish');
-      // Refresh the workspace so the new
+      // In the new 4-state FSM (ADR-017), the GENERATE action
+      // (which ran when the user clicked "Generate report" on
+      // the workspace page) already produces the PDF. There is
+      // no separate PUBLISH action any more — the PDF is on the
+      // session. This button just triggers the download.
+      //
+      // The hook's runAction('generate') did the side effect
+      // before the user landed on this page; here we only need
+      // to refresh the workspace so the
       // ``published_report_available`` flag is reflected in
-      // ``currentWorkspace``. ``runAction`` already does this
-      // internally, but an explicit refetch makes the data
-      // flow obvious to anyone reading the code.
+      // ``currentWorkspace``.
       await fetchWorkspace(workspaceId);
       // Auto-download the PDF. The endpoint sets
       // ``Content-Disposition: attachment`` so the browser
@@ -287,7 +283,7 @@ export const Report: React.FC = () => {
       }, 0);
     } catch (err) {
       setPubError(
-        err instanceof Error ? err.message : 'Failed to publish report.',
+        err instanceof Error ? err.message : 'Failed to download PDF.',
       );
       // Do NOT bump ``publishedAt`` on error -- a stale
       // "Download PDF" link pointing at a non-existent PDF
@@ -342,12 +338,13 @@ export const Report: React.FC = () => {
   // for an unpublished workspace returns 404.
   //
   // We subscribe to ``currentWorkspace`` via the Zustand
-  // selector so the component re-renders when
-  // ``runAction('publish')`` writes the post-publish
-  // workspace into the store. ``published_report_available``
-  // is the specific field we care about; we select it
-  // directly (rather than the whole object) so unrelated
-  // state changes don't trigger a re-render.
+  // selector so the component re-renders when GENERATE (run
+  // on the Workspace page before the user landed here)
+  // writes the post-generate workspace into the store.
+  // ``published_report_available`` is the specific field we
+  // care about; we select it directly (rather than the
+  // whole object) so unrelated state changes don't trigger
+  // a re-render.
   //
   // We also re-read it via a local state bump that the
   // ``handlePublish`` ``finally`` block flips. The
@@ -451,16 +448,22 @@ export const Report: React.FC = () => {
     const headerMessage = isRecoverable
       ? 'Report generation hit an error.'
       : 'Error generating report.';
-    // Prefer ``last_error`` (the orchestrator's reason for the
-    // failure) over the raw ``message`` (which can include the
-    // exception type and the wrapped ``from exc`` detail). Both
-    // are user-visible; ``last_error`` is the action that
-    // actually failed.
+    // ``last_error`` -- the orchestrator's reason for the
+    // failure. Falls through ``errorEnvelope?.last_error``
+    // (the structured 409 envelope) -> ``errorEnvelope?.message``
+    // (any other envelope shape) -> ``error?.message`` (the
+    // page-level hook error) -> ``genError?.message`` (the
+    // local generation-error state set by the catch block in
+    // the useEffect). We check ``genError`` LAST because
+    // ``genError`` is always set after a failure (the catch
+    // block sets it unconditionally) and we want any more
+    // specific envelope detail to win.
     const detailMessage =
       errorEnvelope?.last_error ??
       errorEnvelope?.message ??
       error?.message ??
-      (typeof genError === 'string' ? genError : null);
+      (genError instanceof Error ? genError.message :
+       typeof genError === 'string' ? genError : null);
     // ``last_error_at`` -- the UTC timestamp paired with
     // ``last_error`` (v5 schema). When present we render a
     // small "at HH:MM:SS" stamp next to the error detail so

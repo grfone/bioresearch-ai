@@ -458,6 +458,24 @@ the contract. 389/389 backend tests pass.
 * **"PDF parsing is on the roadmap" toast.** The PDF tab is
   real now, so the "PDF" card in the empty-state workflow
   picker drops a file instead of showing the placeholder.
+* **FSM simplification — collapse nine states to four** (see
+  [ADR-017](../docs/adr/ADR-017-three-page-fsm.md)). The FSM
+  is now `INITIAL → INTERMEDIATE → FINAL` plus `ERROR`,
+  mapped 1:1 to the three user-facing pages (Home, Workspace,
+  Report). The four transient in-flight markers
+  (`SEARCHING`, `SUMMARIZING`, `REPORTING`, `PUBLISHING`) are
+  gone — the UI's spinner is the source of truth for "an
+  operation is in flight." Five actions
+  (`SUMMARIZE`, `REPORT`, `COMPLETE`, `PUBLISH`, `COMPARE`)
+  collapse to one: `GENERATE`, which runs summary + report +
+  PDF + LaTeX in one HTTP call. The cross-paper
+  evidence-comparison intermediate (already removed by
+  [ADR-016](../docs/adr/ADR-016-remove-compared-state.md)) is
+  reaffirmed by this change. Wire-format gains a `page: str`
+  field on `WorkspaceResponse` so the SPA can route without
+  parsing the FSM state. Schema bumps 7 → 8: the
+  `last_known_state` column lets `retry` from `ERROR` restore
+  the pre-error state.
 
 ### Changed
 

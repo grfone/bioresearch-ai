@@ -41,55 +41,65 @@ def test_transitions_table_is_total() -> None:
 
 
 def test_legal_action_transitions() -> None:
-    """Spot-check legal transitions."""
-    assert next_state(WorkspaceState.CREATED, WorkspaceAction.SEARCH) is WorkspaceState.SEARCHING
+    """Spot-check legal transitions for the 4-state FSM."""
+    # Home page → Workspace page
     assert (
-        next_state(WorkspaceState.PAPERS_RETRIEVED, WorkspaceAction.SUMMARIZE)
-        is WorkspaceState.SUMMARIZING
+        next_state(WorkspaceState.INITIAL, WorkspaceAction.SEARCH)
+        is WorkspaceState.INTERMEDIATE
     )
+    # Workspace page → Report page
     assert (
-        next_state(WorkspaceState.SUMMARIZED, WorkspaceAction.REPORT)
-        is WorkspaceState.REPORTING
+        next_state(WorkspaceState.INTERMEDIATE, WorkspaceAction.GENERATE)
+        is WorkspaceState.FINAL
     )
+    # Report page → back to Workspace (iterative refinement)
     assert (
-        next_state(WorkspaceState.REPORTED, WorkspaceAction.COMPLETE)
-        is WorkspaceState.COMPLETED
+        next_state(WorkspaceState.FINAL, WorkspaceAction.BACK_TO_WORKSPACE)
+        is WorkspaceState.INTERMEDIATE
+    )
+    # Workspace page → back to Home (start a new search)
+    assert (
+        next_state(WorkspaceState.INTERMEDIATE, WorkspaceAction.BACK_TO_HOME)
+        is WorkspaceState.INITIAL
     )
 
 
 def test_illegal_action_raises() -> None:
-    """REPORT from CREATED is illegal — guard against the bug."""
+    """GENERATE from INITIAL is illegal — guard against the bug."""
     with pytest.raises(IllegalWorkspaceActionError) as exc:
-        next_state(WorkspaceState.CREATED, WorkspaceAction.REPORT)
-    assert exc.value.current_state == "CREATED"
-    assert exc.value.action == "report"
+        next_state(WorkspaceState.INITIAL, WorkspaceAction.GENERATE)
+    assert exc.value.current_state == "INITIAL"
+    assert exc.value.action == "generate"
     assert "search" in exc.value.allowed
 
 
 def test_allowed_actions_sorted() -> None:
     """allowed_actions returns alphabetically sorted actions."""
-    actions = allowed_actions(WorkspaceState.SUMMARIZED)
+    actions = allowed_actions(WorkspaceState.INTERMEDIATE)
     assert actions == sorted(actions, key=lambda a: a.value)
 
 
-def test_retry_returns_to_creatable_state() -> None:
-    """ERROR → RETRY recovers to CREATED."""
+def test_retry_recovers_from_error() -> None:
+    """ERROR → RETRY recovers to INITIAL (the safe default)."""
     assert (
         next_state(WorkspaceState.ERROR, WorkspaceAction.RETRY)
-        is WorkspaceState.CREATED
+        is WorkspaceState.INITIAL
     )
 
 
-def test_searching_is_transient() -> None:
-    assert WorkspaceState.SEARCHING.is_transient
-    assert WorkspaceState.SUMMARIZING.is_transient
-    assert WorkspaceState.REPORTING.is_transient
-    assert not WorkspaceState.PAPERS_RETRIEVED.is_transient
+def test_final_is_terminal() -> None:
+    """FINAL is the terminal success state."""
+    assert WorkspaceState.FINAL.is_terminal
+    assert not WorkspaceState.INTERMEDIATE.is_terminal
+    assert not WorkspaceState.INITIAL.is_terminal
 
 
-def test_completed_is_terminal() -> None:
-    assert WorkspaceState.COMPLETED.is_terminal
-    assert not WorkspaceState.REPORTED.is_terminal
+def test_pages_map_to_states() -> None:
+    """Each state maps to a known frontend page token."""
+    assert WorkspaceState.INITIAL.page == "home"
+    assert WorkspaceState.INTERMEDIATE.page == "workspace"
+    assert WorkspaceState.FINAL.page == "report"
+    assert WorkspaceState.ERROR.page == "error"
 
 
 # ---------------------------------------------------------------------------
@@ -103,52 +113,102 @@ def _session() -> ResearchSession:
     )
 
 
-def test_initial_state_is_created() -> None:
-    assert _session().state is WorkspaceState.CREATED
+def test_initial_state_is_initial() -> None:
+    """A fresh workspace is in INITIAL."""
+    assert _session().state is WorkspaceState.INITIAL
 
 
 def test_legal_transition_appends_history() -> None:
     s = _session()
     s.transition_to(WorkspaceAction.SEARCH)
-    assert s.state is WorkspaceState.SEARCHING
+    assert s.state is WorkspaceState.INTERMEDIATE
     assert len(s.state_history) == 2
     last = s.state_history[-1]
-    assert last.from_state is WorkspaceState.CREATED
-    assert last.to_state is WorkspaceState.SEARCHING
+    assert last.from_state is WorkspaceState.INITIAL
+    assert last.to_state is WorkspaceState.INTERMEDIATE
     assert last.action is WorkspaceAction.SEARCH
 
 
 def test_illegal_transition_raises_and_does_not_mutate() -> None:
     s = _session()
     with pytest.raises(IllegalWorkspaceActionError):
-        s.transition_to(WorkspaceAction.REPORT)
-    assert s.state is WorkspaceState.CREATED
+        s.transition_to(WorkspaceAction.GENERATE)
+    assert s.state is WorkspaceState.INITIAL
     assert len(s.state_history) == 1  # only the initial seed
 
 
 def test_force_state_completes_transient() -> None:
+    """force_state is allowed from any state (used by orchestrator)."""
     s = _session()
     s.transition_to(WorkspaceAction.SEARCH)
-    assert s.state is WorkspaceState.SEARCHING
-    s.force_state(WorkspaceState.PAPERS_RETRIEVED, reason="PubMed returned 5")
-    assert s.state is WorkspaceState.PAPERS_RETRIEVED
+    assert s.state is WorkspaceState.INTERMEDIATE
+    # The orchestrator uses force_state to record the durable state
+    # after an async operation completes; in the 4-state model this
+    # means transitioning from INITIAL → INTERMEDIATE explicitly.
+    s.force_state(WorkspaceState.INTERMEDIATE, reason="Search returned 5 papers")
 
 
 def test_force_state_to_error_records_reason() -> None:
+    """force_state(ERROR) records last_error but does NOT set
+    last_known_state. ``last_known_state`` is only set by the
+    orchestrator's ``_fail()`` helper (which calls force_state
+    AFTER capturing the pre-error state). A bare force_state
+    call is the "raw" entry point and does not maintain the
+    audit trail."""
     s = _session()
     s.transition_to(WorkspaceAction.SEARCH)
     s.force_state(WorkspaceState.ERROR, reason="NetworkError")
     assert s.state is WorkspaceState.ERROR
     assert s.last_error == "NetworkError"
+    # Bare force_state doesn't set last_known_state -- the
+    # orchestrator's _fail() helper does that explicitly.
+    assert s.last_known_state is None
 
 
-def test_add_papers_advances_to_papers_retrieved() -> None:
+def test_fail_helper_records_last_known_state() -> None:
+    """The orchestrator's ``_fail()`` helper sets last_known_state
+    BEFORE moving to ERROR, so a subsequent RETRY can restore
+    the right page."""
+    from app.application.services.workspace_orchestrator import (
+        WorkspaceOrchestrator,
+    )
+    from tests.unit.test_workspace_orchestrator import (
+        InMemoryRepository,
+        StubLLM,
+        StubPDFGenerator,
+        StubPubMed,
+        StubReportGenerator,
+    )
+
+    repo = InMemoryRepository()
+    orch = WorkspaceOrchestrator(
+        workspace_repository=repo,
+        literature_searcher=StubPubMed([]),
+        llm_provider=StubLLM(),
+        report_generator=StubReportGenerator(),
+        pdf_generator=StubPDFGenerator(),
+    )
+
+    ws = ResearchSession(
+        question=ResearchQuestion(question="x"),
+        state=WorkspaceState.INTERMEDIATE,
+    )
+    repo.create(ws)
+
+    orch._fail(ws, RuntimeError("LLM timeout"))
+    assert ws.state is WorkspaceState.ERROR
+    assert ws.last_error == "RuntimeError: LLM timeout"
+    assert ws.last_known_state is WorkspaceState.INTERMEDIATE
+
+
+def test_add_papers_advances_to_intermediate() -> None:
+    """Adding the first paper advances the workspace from INITIAL."""
     from app.domain.entities.paper import Paper
 
     s = _session()
     paper = Paper(title="Test", pmid="12345")
     s.add_papers([paper])
-    assert s.state is WorkspaceState.PAPERS_RETRIEVED
+    assert s.state is WorkspaceState.INTERMEDIATE
     assert len(s.papers) == 1
 
 
@@ -162,14 +222,15 @@ def test_add_papers_dedupes() -> None:
     assert len(s.papers) == 1
 
 
-def test_remove_paper_degrades_to_created() -> None:
+def test_remove_paper_degrades_to_initial() -> None:
+    """Removing the last paper regresses the workspace to INITIAL."""
     from app.domain.entities.paper import Paper
 
     s = _session()
     s.add_papers([Paper(title="t", pmid="9")])
-    assert s.state is WorkspaceState.PAPERS_RETRIEVED
+    assert s.state is WorkspaceState.INTERMEDIATE
     assert s.remove_paper("9") is True
-    assert s.state is WorkspaceState.CREATED
+    assert s.state is WorkspaceState.INITIAL
     assert s.papers == []
 
 
@@ -183,14 +244,13 @@ def test_allowed_actions_returns_sorted_list() -> None:
 def test_progress_anchor_is_monotonic() -> None:
     """Progress for non-error states is non-decreasing in workflow order."""
     anchors = [
-        (WorkspaceState.CREATED, 0.0),
-        (WorkspaceState.PAPERS_RETRIEVED, 0.2),
-        (WorkspaceState.SUMMARIZED, 0.5),
-        (WorkspaceState.REPORTED, 0.95),
-        (WorkspaceState.COMPLETED, 1.0),
+        (WorkspaceState.INITIAL, 0.0),
+        (WorkspaceState.INTERMEDIATE, 0.5),
+        (WorkspaceState.FINAL, 1.0),
+        (WorkspaceState.ERROR, 0.0),
     ]
     for state, expected in anchors:
-        assert _session().state == WorkspaceState.CREATED  # sanity
+        assert _session().state == WorkspaceState.INITIAL  # sanity
         ws = ResearchSession(
             question=ResearchQuestion(question="x"),
             state=state,
@@ -202,22 +262,31 @@ def test_status_property_returns_state_value() -> None:
     """The legacy ``status`` property mirrors the FSM state."""
     s = ResearchSession(
         question=ResearchQuestion(question="x"),
-        state=WorkspaceState.SUMMARIZED,
+        state=WorkspaceState.INTERMEDIATE,
     )
-    assert s.status == "SUMMARIZED"
+    assert s.status == "INTERMEDIATE"
+
+
+def test_page_property_returns_state_page() -> None:
+    """The ``page`` property mirrors the FSM state's frontend page."""
+    s = ResearchSession(
+        question=ResearchQuestion(question="x"),
+        state=WorkspaceState.FINAL,
+    )
+    assert s.page == "report"
 
 
 def test_state_history_persists_from_init() -> None:
     """Hydrating a session with a populated history preserves it."""
     s = ResearchSession(
         question=ResearchQuestion(question="x"),
-        state=WorkspaceState.SUMMARIZED,
+        state=WorkspaceState.INTERMEDIATE,
         state_history=[
             StateTransition(
-                from_state=WorkspaceState.CREATED,
-                to_state=WorkspaceState.SUMMARIZED,
+                from_state=WorkspaceState.INITIAL,
+                to_state=WorkspaceState.INTERMEDIATE,
             )
         ],
     )
     assert len(s.state_history) == 1
-    assert s.state_history[0].to_state is WorkspaceState.SUMMARIZED
+    assert s.state_history[0].to_state is WorkspaceState.INTERMEDIATE

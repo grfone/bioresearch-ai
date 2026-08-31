@@ -36,15 +36,9 @@ export interface WorkspaceRequest {
  * → report → done.
  */
 export type WorkspaceState =
-  | 'CREATED'
-  | 'SEARCHING'
-  | 'PAPERS_RETRIEVED'
-  | 'SUMMARIZING'
-  | 'SUMMARIZED'
-  | 'REPORTING'
-  | 'REPORTED'
-  | 'PUBLISHING'
-  | 'COMPLETED'
+  | 'INITIAL'
+  | 'INTERMEDIATE'
+  | 'FINAL'
   | 'ERROR';
 
 /**
@@ -53,17 +47,18 @@ export type WorkspaceState =
  * The UI uses these verbs to call the orchestrator. The backend
  * rejects illegal actions with HTTP 409.
  *
- * Note: the COMPARE action was removed on 2026-08-30.
+ * Note: the COMPARE, SUMMARIZE, REPORT, COMPLETE and PUBLISH
+ * actions were merged into a single GENERATE action on
+ * 2026-08-31 (see ADR-017).
  */
 export type WorkspaceAction =
   | 'search'
-  | 'summarize'
-  | 'report'
-  | 'complete'
-  | 'publish'
+  | 'generate'
   | 'retry'
   | 'add_paper'
-  | 'remove_paper';
+  | 'remove_paper'
+  | 'back_to_workspace'
+  | 'back_to_home';
 
 /**
  * Full representation of a Research Workspace returned by the API.

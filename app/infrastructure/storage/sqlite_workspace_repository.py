@@ -163,7 +163,7 @@ def _rewrite_legacy_summary_in_blob(blob: dict) -> bool:
 # Schema constants
 # ---------------------------------------------------------------------------
 
-LATEST_SCHEMA_VERSION = 7
+LATEST_SCHEMA_VERSION = 8
 
 
 # Columns that were added in each schema version. The repository
@@ -263,6 +263,20 @@ _V6_DATA_MIGRATION = (
 _V7_DROP_COLUMNS = (
     "evidence_comparison",
 )
+# v8: add ``last_known_state`` column.
+#
+# The 2026-08-31 FSM refactor (ADR-017) collapsed the workspace
+# lifecycle to four states (INITIAL / INTERMEDIATE / FINAL /
+# ERROR). When ERROR is entered we record the state the
+# workspace was in immediately before, so a subsequent RETRY
+# action can restore it (INITIAL for a failed search,
+# INTERMEDIATE for a failed generation). The column is
+# nullable: ``NULL`` for workspaces that have never been in
+# ERROR, or that were in ERROR with no recoverable previous
+# state (corrupted rows).
+_V8_COLUMNS = (
+    ("last_known_state", "TEXT"),
+)
 
 
 class SqliteWorkspaceRepository(WorkspaceRepository):
@@ -317,7 +331,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         # v6 in-place data migration: rewrite every legacy
         # Summary blob (``{"text": ...}``) to the new
         # ``{"body": ...}`` shape. This is wired into the
-        # schema-version flow (``LATEST_SCHEMA_VERSION = 7``)
+        # schema-version flow (``LATEST_SCHEMA_VERSION = 8``)
         # so the schema-version pragma tracks whether data
         # migration has run, not just whether columns are
         # up to date.
@@ -394,7 +408,8 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     state_history TEXT,
                     published_report TEXT,
                     last_error TEXT,
-                    last_error_at TEXT
+                    last_error_at TEXT,
+                    last_known_state TEXT
                 )
                 """
             )
@@ -491,6 +506,15 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     cursor.execute(
                         f"ALTER TABLE workspaces DROP COLUMN {column_name}"
                     )
+
+        # v8: add the ``last_known_state`` column. ADR-017
+        # (linear 4-state FSM) needs to remember the
+        # pre-ERROR state so RETRY can restore it.
+        for column_name, column_def in _V8_COLUMNS:
+            if column_name not in existing:
+                cursor.execute(
+                    f"ALTER TABLE workspaces ADD COLUMN {column_name} {column_def}"
+                )
 
         # Bump the schema version -- this happens BEFORE v6
         # because v6 is a (potentially slow) data rewrite
@@ -655,8 +679,9 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     id, question, papers, summary, report, notes,
                     metadata, created_at, updated_at,
                     state, state_history,
-                    published_report, last_error, last_error_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    published_report, last_error, last_error_at,
+                    last_known_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(workspace.id),
@@ -692,6 +717,17 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     # of ERROR state.
                     workspace.last_error_at.isoformat()
                     if workspace.last_error_at is not None
+                    else None,
+                    # v8: ``last_known_state`` -- the state the
+                    # workspace was in immediately before
+                    # ERROR was entered. ``None`` for
+                    # workspaces that have never been in
+                    # ERROR. RETRY reads this column to
+                    # restore the right page (INITIAL for a
+                    # failed search, INTERMEDIATE for a failed
+                    # generation). See ADR-017.
+                    workspace.last_known_state.value
+                    if workspace.last_known_state is not None
                     else None,
                 ),
             )
@@ -881,23 +917,34 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         #   13 last_error_at          (v5 column)
         #
         # Pre-v4 databases have 12 columns (no last_error); the
+        # Index map (after v8 migration):
+        #   0  id
+        #   1  question
+        #   2  papers
+        #   3  summary
+        #   4  report
+        #   5  notes
+        #   6  metadata
+        #   7  created_at
+        #   8  updated_at
+        #   9  state
+        #   10 state_history
+        #   11 published_report       (v3 column)
+        #   12 last_error             (v4 column)
+        #   13 last_error_at          (v5 column)
+        #   14 last_known_state       (v8 column)
+        #
+        # Pre-v4 databases have 13 columns (no last_error); the
         # padding fills ``padded[12]`` and ``padded[13]`` with
         # ``None`` -- both map to "no error".
         # Pre-v5 databases have 13 columns so only ``padded[13]``
         # resolves to the padding ``None``.
-        #
-        # Note: pre-v7 databases had an ``evidence_comparison``
-        # column at index 11, which the v7 migration drops on
-        # connect. The deserialiser no longer reads that index
-        # at all -- the field is gone from the entity and the
-        # API response. Workspaces that were in COMPARING/COMPARED
-        # when the operator upgraded are "elevated" via
-        # ``_infer_state`` (the raw ``COMPARING``/``COMPARED``
-        # enum value raises ``ValueError`` and the workspace
-        # falls back to data-driven inference -- typically
-        # REPORTED because the comparison was always followed by
-        # a report).
-        padded: list[Any] = list(row) + [None] * (15 - len(row))
+        # Pre-v7 databases had an ``evidence_comparison`` column
+        # at index 11 which the v7 migration drops on connect;
+        # after the drop the indices shift left by one.
+        # Pre-v8 databases have 14 columns so ``padded[14]``
+        # resolves to the padding ``None``.
+        padded: list[Any] = list(row) + [None] * (16 - len(row))
         return {
             "id": padded[0],
             "question": padded[1],
@@ -926,6 +973,11 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             # read as ``None`` -- matching the v4 padding
             # behaviour for the error string itself.
             "last_error_at": padded[13],
+            # v8: ``last_known_state``. The state the workspace
+            # was in immediately before ERROR was entered.
+            # ``None`` for workspaces that have never been in
+            # ERROR (or pre-v8 rows).
+            "last_known_state": padded[14],
         }
 
     def _dict_to_workspace(self, row_dict: Dict[str, Any]) -> ResearchSession:
@@ -991,6 +1043,21 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             else None
         )
 
+        # v8: ``last_known_state`` -- the state the workspace was
+        # in immediately before ERROR was entered. The raw
+        # value is a string (or None); we parse it back into
+        # a ``WorkspaceState`` enum value.
+        last_known_state_raw = row_dict.get("last_known_state")
+        last_known_state: WorkspaceState | None = None
+        if last_known_state_raw:
+            try:
+                last_known_state = WorkspaceState(last_known_state_raw)
+            except ValueError:
+                # Pre-ADR-017 rows may have state values like
+                # "CREATED" that no longer exist. Treat them
+                # as None -- RETRY will fall back to a default.
+                last_known_state = None
+
         workspace = ResearchSession(
             id=UUID(row_dict["id"]),
             question=question,
@@ -1002,6 +1069,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             state_history=state_history,
             last_error=last_error,
             last_error_at=last_error_at,
+            last_known_state=last_known_state,
             created_at=created_at,
             updated_at=updated_at,
             metadata=metadata,
@@ -1147,7 +1215,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         if not history_json:
             return [
                 StateTransition(
-                    from_state=WorkspaceState.CREATED,
+                    from_state=WorkspaceState.INITIAL,
                     to_state=current_state,
                     action=None,
                 )
@@ -1183,7 +1251,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         if not history:
             return [
                 StateTransition(
-                    from_state=WorkspaceState.CREATED,
+                    from_state=WorkspaceState.INITIAL,
                     to_state=current_state,
                     action=None,
                 )
@@ -1216,9 +1284,9 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             except ValueError:
                 pass
         if report is not None:
-            return WorkspaceState.REPORTED
+            return WorkspaceState.FINAL
         if summary is not None:
-            return WorkspaceState.SUMMARIZED
+            return WorkspaceState.INTERMEDIATE
         if papers:
-            return WorkspaceState.PAPERS_RETRIEVED
-        return WorkspaceState.CREATED
+            return WorkspaceState.INTERMEDIATE
+        return WorkspaceState.INITIAL

@@ -70,33 +70,37 @@ with HTTP 409 + the list of legal alternatives.
 [ 1 ] Ask a research question in natural language.
         │
         ▼
-[ FSM: CREATED ]
+[ Page: Home, FSM: INITIAL ]
         │
         ▼
-[ 2 ] The app auto-searches PubMed, OpenAlex, Europe PMC,
-      and bioRxiv in parallel. The workspace advances to
-      PAPERS_RETRIEVED.
+[ 2 ] Click "Search". The app auto-searches PubMed,
+      OpenAlex, Europe PMC, and bioRxiv in parallel. The
+      workspace advances to INTERMEDIATE and the user is
+      navigated to the Workspace page.
         │
         ▼
-[ FSM: PAPERS_RETRIEVED ]
+[ Page: Workspace, FSM: INTERMEDIATE ]
         │
         ▼
-[ 3 ] Review the hit list. Add the relevant papers -- by
+[ 3 ] Review the hit list. Add more papers -- by
       DOI/PMID bulk paste, single DOI, PDF upload (DOI on
       the first page is auto-extracted), or title fallback.
+      Remove irrelevant papers with one click. Click into
+      a paper's DOI link to read the source.
         │
         ▼
-[ FSM: PAPERS_RETRIEVED ]   (still -- adding papers does
-                              not change the state)
+[ Page: Workspace, FSM: INTERMEDIATE ]   (still -- adding
+                              or removing papers does not
+                              change the state)
         │
         ▼
-[ 4 ] Click "Generate Report". The orchestrator
-      auto-summarises if no summary exists, then synthesises
-      a citation-aware executive report. The workspace
-      advances to REPORTED.
+[ 4 ] Click "Generate Report". The orchestrator runs the
+      full pipeline server-side: summarise -> report ->
+      PDF -> LaTeX. The workspace advances to FINAL and
+      the user is navigated to the Report page.
         │
         ▼
-[ FSM: REPORTED ]
+[ Page: Report, FSM: FINAL ]
         │
         ▼
 [ 5 ] Read the report. Every claim is citation-linked back
@@ -107,19 +111,39 @@ with HTTP 409 + the list of legal alternatives.
 The full state machine:
 
 ```text
-CREATED ──search──▶ SEARCHING ──▶ PAPERS_RETRIEVED
-                                  │
-                                  ├─summarize──▶ SUMMARIZING ──▶ SUMMARIZED
-                                  │
-                                  └─report (one-click, auto-summarises)
-                                                  │
-                                                  ▼
-                                              REPORTING ──▶ REPORTED ──publish──▶ PUBLISHING ──▶ COMPLETED
+INITIAL ──search──▶ INTERMEDIATE ──generate──▶ FINAL
+                       │                            │
+                       ├─back_to_home──▶ INITIAL    └─back_to_workspace──▶ INTERMEDIATE
+                       └─ERROR (recoverable: retry, add_paper, remove_paper)
 ```
 
-The FSM is **linear** since 2026-08-30 (see [ADR-016](docs/adr/ADR-016-remove-compared-state.md)): eleven states collapsed to nine, with the cross-paper evidence-comparison intermediate removed because the report generator never consumed the comparison as input. The FSM is documented in [`app/core/enums/workspace_state.py`](app/core/enums/workspace_state.py) and the orchestrator in [`WorkspaceOrchestrator.report()`](app/application/services/workspace_orchestrator.py). The frontend mirrors the FSM state in its lab-bench UI: enabled buttons depend on `workspace.allowed_actions`, which is the legal-next-actions list for the current state.
+The FSM is **linear since 2026-08-31** (see [ADR-017](docs/adr/ADR-017-three-page-fsm.md)):
+nine states collapsed to four (`INITIAL`, `INTERMEDIATE`, `FINAL`,
+`ERROR`), with transient in-flight markers (SEARCHING, SUMMARIZING,
+REPORTING, PUBLISHING) removed because the UI's spinner is the source
+of truth for "operation in flight." The cross-paper evidence-comparison
+intermediate (COMPARING → COMPARED, removed 2026-08-30, ADR-016) and the
+PUBLISH / COMPLETE actions are also gone — `generate` does everything
+in one shot (summarise + report + PDF + LaTeX).
 
-See [ADR-008](docs/adr/ADR-008-one-click-report-from-papers-retrieved.md) for why the FSM was lifted from a hard-coded `summary-first` workflow to a one-click "any papers -> report" pipeline.
+The four states map 1:1 to the three user-facing pages (Home, Workspace,
+Report) plus an ERROR page. `INTERMEDIATE → FINAL` is a single `generate`
+action that runs the full pipeline server-side; the FSM does not need to
+care about the steps internally. The `page` field on
+`WorkspaceResponse` carries the front-end route token (`home` /
+`workspace` / `report` / `error`) so the SPA can route without parsing
+the FSM state.
+
+The FSM is documented in [`app/core/enums/workspace_state.py`](app/core/enums/workspace_state.py)
+and the orchestrator in [`WorkspaceOrchestrator`](app/application/services/workspace_orchestrator.py).
+The frontend mirrors the FSM state in its lab-bench UI: enabled
+buttons depend on `workspace.allowed_actions`, which is the
+legal-next-actions list for the current state.
+
+See [ADR-008](docs/adr/ADR-008-one-click-report-from-papers-retrieved.md)
+for the historical one-click-report decision and
+[ADR-017](docs/adr/ADR-017-three-page-fsm.md) for the 2026-08-31
+simplification that mapped the FSM to the three pages.
 
 ---
 
@@ -174,21 +198,20 @@ See [ADR-008](docs/adr/ADR-008-one-click-report-from-papers-retrieved.md) for wh
 
 A snapshot of the work since the first public release:
 
-- **Deterministic finite state machine** for the workspace lifecycle (`CREATED → SEARCHING → PAPERS_RETRIEVED → ... → REPORTED → COMPLETED`) — illegal actions are rejected with HTTP 409 and the list of legal next actions
-- **Cross-paper evidence comparison** — consensus, contradictions, gaps, future directions, and a side-by-side matrix
+- **Deterministic four-state finite state machine** for the workspace lifecycle (`INITIAL → INTERMEDIATE → FINAL`, plus `ERROR`) — illegal actions are rejected with HTTP 409 and the list of legal next actions is returned in the envelope (see [ADR-017](docs/adr/ADR-017-three-page-fsm.md))
 - **Lab-bench UI** with state, progress, action availability, and transition history
 - **PDF upload** — drop a PDF, the DOI/PMID on the first page is auto-extracted and resolved (200 MB cap, configurable via `PDF_UPLOAD_MAX_BYTES`)
 - **Multi-worker ready** via a pluggable cache backend (in-memory by default, Redis for multi-worker deployments)
 - **One-click install** via `python3 bootstrap.py` (detects OS, installs Docker, builds the image, opens the running app). The bootstrap now also recovers automatically from DNS hiccups and broken IPv6 routing on the user's host.
-- **Vancouver-style citations** — `[paper:N]` markers in the body map to a numbered, hyperlinked bibliography; the anti-fabrication guard sanitises any LLM-hallucinated citation indices at ingest (see [ADR-009](docs/adr/ADR-009-publishing-state.md))
-- **PUBLISHING state** — the FSM gained an explicit `PUBLISHING → COMPLETED` transition with a dedicated endpoint, so users can see progress on long PDF renders (see [ADR-009](docs/adr/ADR-009-publishing-state.md))
+- **Vancouver-style citations** — `[paper:N]` markers in the body map to a numbered, hyperlinked bibliography; the anti-fabrication guard sanitises any LLM-hallucinated citation indices at ingest
+- **One-shot `generate` action** — pressing "Generate Report" runs the full pipeline server-side (summary → report → PDF → LaTeX) and returns the rendered report in one HTTP response. The "Generate PDF" button on the Report page just triggers the browser download.
 - **Multi-page PDF + Unicode coverage** — the published PDF uses DejaVu Sans (TTF-embedded via reportlab) so Greek letters, Latin diacritics, em-dashes, and bold sub-headings render correctly; numbered references are real clickable internal `/Dest` annotations
 - **Clickable DOI links** — bibliography entries include `https://doi.org/...` URLs that are clickable in both the PDF and the LaTeX source
 - **Generate PDF / Generate TeX buttons** — the report action auto-downloads the PDF on success, and a second blue button downloads the LaTeX source for editing in Overleaf / TeXstudio before recompiling
 - **Observability** — `/metrics` (Prometheus text format) and `/health/sanitizer` + `/health/title-fallback` endpoints expose in-process LLM-safety counters and the title-fallback rate (with a warning log when >50% over a 20-call window)
 - **H1 title fallback** — if the synthesis LLM omits the `# ` heading, we inject one from the first sentence (idempotent) so the report always has a real title (instead of "Untitled" or the body duplicated as the title)
 - **Anti-fabrication sanitizer telemetry** — every call to the citation marker sanitizer is logged + counted, so you can see the running total via `/health/sanitizer` and confirm the guard is doing its job
-- **9 ADRs** documenting the architectural decisions (see [Design decisions](#design-decisions))
+- **17 ADRs** documenting the architectural decisions (see [Design decisions](#design-decisions))
 
 See the [Roadmap](#roadmap) below for what's left.
 
@@ -467,8 +490,8 @@ We capture every non-trivial architectural decision in an Architecture Decision 
 | [ADR-005](docs/adr/ADR-005-multi-identity-paper-dedup.md) | Multi-identity paper deduplication (PMID/DOI/title) | Accepted |
 | [ADR-006](docs/adr/ADR-006-parallel-multi-source-search.md) | Parallel multi-source literature search | Accepted |
 | [ADR-007](docs/adr/ADR-007-configurable-pdf-upload-cap.md) | Configurable PDF upload size cap (200 MB default) | Accepted |
-| [ADR-008](docs/adr/ADR-008-one-click-report-from-papers-retrieved.md) | One-click report from PAPERS_RETRIEVED | Accepted |
-| [ADR-009](docs/adr/ADR-009-publishing-state.md) | `PUBLISHING` FSM state for PDF export + four-layer audit pattern | Accepted |
+| [ADR-008](docs/adr/ADR-008-one-click-report-from-papers-retrieved.md) | One-click report from PAPERS_RETRIEVED (superseded by ADR-017) | Accepted |
+| [ADR-009](docs/adr/ADR-009-publishing-state.md) | `PUBLISHING` FSM state for PDF export + four-layer audit pattern (superseded by ADR-017) | Accepted |
 | [ADR-010](docs/adr/ADR-010-pdf-and-latex-export.md) | Reportlab-based multi-page PDF + LaTeX export + clickable numbered references | Accepted |
 | [ADR-011](docs/adr/ADR-011-vancouver-citations-anti-fabrication.md) | Vancouver-style citations + anti-fabrication sanitizer at ingest | Accepted |
 | [ADR-012](docs/adr/ADR-012-fsm-aware-report-action.md) | FSM-aware REPORT action returns full `ReportResponse` (overload pattern) | Accepted |
@@ -476,6 +499,7 @@ We capture every non-trivial architectural decision in an Architecture Decision 
 | [ADR-014](docs/adr/ADR-014-prometheus-metrics-health-probes.md) | Prometheus `/metrics` exposition + JSON `/health/*` probes | Accepted |
 | [ADR-015](docs/adr/ADR-015-bootstrap-dns-ipv6-retry-auto-fix.md) | Bootstrap DNS + IPv6 retry with opt-in auto-fix | Accepted |
 | [ADR-016](docs/adr/ADR-016-remove-compared-state.md) | Remove the COMPARING/COMPARED FSM states — see ADR for the four-layer audit | Accepted |
+| [ADR-017](docs/adr/ADR-017-three-page-fsm.md) | Collapse the FSM to four states mapped 1:1 to the three pages (Home / Workspace / Report) | Accepted |
 
 Five ADRs are particularly worth reading for new contributors:
 

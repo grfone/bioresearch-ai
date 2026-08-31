@@ -242,19 +242,21 @@ export function useWorkspace(
       setLoading(true);
       setError(null);
       try {
-        if (action === 'report') {
-          // FSM-aware report action. Returns ReportResponse.
-          // We don't pass it to setCurrentWorkspace (wrong
-          // shape); the page calls fetchWorkspace separately
-          // to keep the store in sync.
-          const data = await api.runReportAction(workspaceId);
-          // Best-effort refresh -- the page's flow is to
-          // call fetchWorkspace right after setReport, so
-          // the duplicate GET is harmless. We do it here so
-          // other consumers of the store (e.g. the action
-          // bar's allowed-actions pill) see the new state
-          // without a separate refetch.
+        if (action === 'generate') {
+          // FSM-aware GENERATE action. Runs the full pipeline
+          // (summary + report + PDF + LaTeX) in one server call
+          // and returns a ReportResponse. The page then calls
+          // fetchWorkspace separately to refresh the store.
+          // See ADR-017.
+          const data = await api.runGenerateAction(workspaceId);
           await fetchWorkspace(workspaceId).catch(() => undefined);
+          return data;
+        }
+        if (action === 'back_to_workspace' || action === 'back_to_home') {
+          const data = await api.runRegressionAction(
+            workspaceId, action,
+          );
+          setCurrentWorkspace(data);
           return data;
         }
 
@@ -263,28 +265,22 @@ export function useWorkspace(
           case 'search':
             data = await api.runSearchAction(workspaceId, actionOptions?.query);
             break;
-          case 'summarize':
-            data = await api.runSummarizeAction(workspaceId);
-            break;
-          case 'complete':
-            data = await api.runCompleteAction(workspaceId);
-            break;
-          case 'publish':
-            // FSM-aware PUBLISH: renders the PDF on the
-            // server, persists it on the session, advances
-            // REPORTED -> PUBLISHING -> COMPLETED, and returns
-            // the updated workspace. The frontend then
-            // downloads the bytes via the GET endpoint. See
-            // ADR-009 for the audit pattern that drove this
-            // (FSM table + orchestrator + entity + frontend
-            // call-site are all wired).
-            data = await api.runPublishAction(workspaceId);
-            break;
           case 'retry':
             data = await api.runRetryAction(workspaceId);
             break;
+          case 'add_paper':
+          case 'remove_paper':
+            // Paper CRUD goes through dedicated endpoints
+            // (see addPaper / removePaper in this hook);
+            // the actions here are session-level state
+            // transitions only.
+            throw new Error(
+              `Action '${action}' is not exposed via runAction.`,
+            );
           default:
-            throw new Error(`Action '${action}' is not exposed via runAction.`);
+            throw new Error(
+              `Action '${action}' is not exposed via runAction.`,
+            );
         }
         setCurrentWorkspace(data);
         return data;

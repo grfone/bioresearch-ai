@@ -6,51 +6,43 @@ Enumeration of the finite set of states a Research Workspace can be in.
 Purpose
 -------
 A Research Workspace follows a deterministic lifecycle. The state
-machine is the single source of truth for "what can happen next" in the
-BioResearch AI platform. By centralising the states in one enum we
-make transitions explicit, testable, and impossible to bypass by
-accident.
+machine is the single source of truth for "what can happen next" in
+the BioResearch AI platform. By centralising the states in one enum
+we make transitions explicit, testable, and impossible to bypass
+by accident.
 
-States are organised into a tiered lifecycle that mirrors the actual
-research workflow:
+States are organised around the three pages of the application:
 
-    CREATED
+    INITIAL         (Home — landing page)
         │  search
         ▼
-    SEARCHING   (transient)
-        │
+    INTERMEDIATE    (Workspace — lab bench where the user curates papers)
+        │  generate
         ▼
-    PAPERS_RETRIEVED
-        │  summarize
-        ▼
-    SUMMARIZING  (transient)
-        │
-        ▼
-    SUMMARIZED
-        │  generate_report
-        ▼
-    REPORTING    (transient)
-        │
-        ▼
-    REPORTED ─┬─► PUBLISHING (transient) ─► COMPLETED
-             │                               ▲
-             │                               │
-             │  archive / mark done          │
-             └─────────────────────────────►┘
+    FINAL           (Report — finished PDF / LaTeX / executive summary)
 
-ERROR is reachable from any non-terminal state and can be returned
-from ERROR to the previous state on retry.
+ERROR is reachable from any of the three action-driven states and can
+be returned to the previous state on retry. ERROR is reserved for
+**truly unrecoverable** failures — programmatic bugs, malformed
+inputs that bypass the schema, etc. Transient LLM failures (timeouts,
+rate limits, 429s, transient token-exhaustion) are NOT routed to
+ERROR: the orchestrator retries them silently up to a bound. Only
+when the bound is exceeded AND there is no path forward does the
+FSM enter ERROR.
 
 Note
 ----
-This is a **linear** workflow: search → summarise → report → done.
-The previous cross-paper COMPARING/COMPARED intermediate states
-were removed on 2026-08-30 because (a) the report generator does
-not consume the evidence comparison as input -- it works from the
-summary alone -- and (b) the COMPARE-only panel had no users after
-the REPORT action was bundled to auto-summarise (see ADR-008).
-Removing the COMPARED state shortens the lifecycle from eleven to
-nine states without losing any user-visible capability.
+This is the third iteration of the workspace FSM (the original
+2024 release used eleven states with a separate PUBLISHING
+transient and a `COMPARING`/`COMPARED` cross-paper evidence
+comparison intermediate; the 2026-08-30 refactor dropped the
+comparison subsystem for nine states). This 2026-08-31 refactor
+collapses the remaining nine states to four — three pages plus
+an ERROR — and moves "transient in-flight" semantics to the UI
+layer (loading spinners, disabled buttons). The orchestrator
+remains the authoritative driver; the FSM is just the
+authoritative description of the user-visible workflow. See
+ADR-017 for the design rationale.
 
 Author
 ------
@@ -71,70 +63,37 @@ class WorkspaceState(str, Enum):
 
     Members
     -------
-    CREATED
-        Workspace exists, no literature retrieved yet.
+    INITIAL
+        The user is on the Home (landing) page. They have entered a
+        research question and can click Search. The workspace
+        aggregate exists but typically has zero papers.
 
-    SEARCHING
-        PubMed request is in flight. Transient.
+    INTERMEDIATE
+        The user is on the Workspace page. Search has returned at
+        least one paper. They can add more papers (manual upload,
+        DOI resolve, title search), remove papers, click into a
+        paper's DOI / PMID URL, or click Generate Report.
 
-    PAPERS_RETRIEVED
-        At least one paper has been retrieved and stored. No summary yet.
-
-    SUMMARIZING
-        Evidence summarisation is in flight. Transient.
-
-    SUMMARIZED
-        Evidence summary exists. No final report yet.
-
-    REPORTING
-        Final report generation is in flight. Transient.
-
-    REPORTED
-        Final report exists. Workspace still mutable (more papers
-        can be added and intermediate steps can be re-run).
-
-    PUBLISHING
-        PDF export of the final report is in flight. Transient.
-        Like ``REPORTING``, this is short-lived; the next durable
-        state is ``COMPLETED`` once the PDF bytes have been
-        generated and stored on the workspace.
-
-    COMPLETED
-        Terminal success state. The workspace is finished and ready for
-        export / sharing.
+    FINAL
+        The user is on the Report page. The report has been
+        generated (text + PDF + LaTeX) and is available for
+        download. From this page the user can also navigate back to
+        INTERMEDIATE (back_to_workspace) to refine the corpus and
+        re-generate.
 
     ERROR
-        A non-terminal failure occurred. The runtime records the reason
-        on the session and can be recovered to the previous state on
-        retry.
+        A truly unrecoverable failure occurred during an FSM action.
+        The runtime records the reason on the session and the user
+        can recover to the previous state on retry. The UI surfaces
+        an Error page with logs and a contact email; transient LLM
+        errors are NOT routed here — those are retried silently by
+        the orchestrator up to a configurable bound.
     """
 
-    CREATED = "CREATED"
-    SEARCHING = "SEARCHING"
-    PAPERS_RETRIEVED = "PAPERS_RETRIEVED"
-    SUMMARIZING = "SUMMARIZING"
-    SUMMARIZED = "SUMMARIZED"
-    REPORTING = "REPORTING"
-    REPORTED = "REPORTED"
-    PUBLISHING = "PUBLISHING"
-    COMPLETED = "COMPLETED"
+    INITIAL = "INITIAL"
+    INTERMEDIATE = "INTERMEDIATE"
+    FINAL = "FINAL"
     ERROR = "ERROR"
-
-    @property
-    def is_transient(self) -> bool:
-        """
-        Whether the state represents an in-flight operation.
-
-        Transient states (SEARCHING, SUMMARIZING, REPORTING)
-        are not durable end states. They describe the system while an
-        external request is running.
-
-        Returns
-        -------
-        bool
-            True if the state is transient.
-        """
-        return self in _TRANSIENT_STATES
 
     @property
     def is_terminal(self) -> bool:
@@ -146,17 +105,35 @@ class WorkspaceState(str, Enum):
         bool
             True if the state is a terminal success state.
         """
-        return self is WorkspaceState.COMPLETED
+        return self is WorkspaceState.FINAL
+
+    @property
+    def page(self) -> str:
+        """
+        The frontend route that corresponds to this state.
+
+        This is the canonical mapping used by the SPA's
+        ``<Navigate>`` to route the user to the right page. The
+        reverse mapping (``INITIAL → "/"``, ``INTERMEDIATE → "/ws/:id"``,
+        ``FINAL → "/report/:id"``, ``ERROR → "/error/:id"``) is what
+        the workspaceStore uses to render the right component.
+
+        Returns
+        -------
+        str
+            A short token (one of ``"home"``, ``"workspace"``,
+            ``"report"``, ``"error"``) identifying the page. The
+            frontend maps these to concrete routes.
+        """
+        return _PAGE_BY_STATE[self]
 
 
-_TRANSIENT_STATES: frozenset[WorkspaceState] = frozenset(
-    {
-        WorkspaceState.SEARCHING,
-        WorkspaceState.SUMMARIZING,
-        WorkspaceState.REPORTING,
-        WorkspaceState.PUBLISHING,
-    }
-)
+_PAGE_BY_STATE: dict[WorkspaceState, str] = {
+    WorkspaceState.INITIAL: "home",
+    WorkspaceState.INTERMEDIATE: "workspace",
+    WorkspaceState.FINAL: "report",
+    WorkspaceState.ERROR: "error",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -179,44 +156,56 @@ class WorkspaceAction(str, Enum):
     Members
     -------
     SEARCH
-        Trigger a PubMed search for the workspace's question.
+        Submit the workspace's research question to the literature
+        searchers and advance from ``INITIAL`` to ``INTERMEDIATE``.
+        The orchestrator creates the workspace if it doesn't exist.
 
-    SUMMARIZE
-        Synthesise the current papers into an evidence summary.
-
-    REPORT
-        Generate the final structured research report.
-
-    COMPLETE
-        Manually mark the workspace as finished.
-
-    PUBLISH
-        Render the workspace's final report as a PDF and mark
-        the workspace as COMPLETED. This is the document-export
-        action -- it produces a downloadable PDF and advances
-        the FSM through PUBLISHING to COMPLETED. Legal only
-        from REPORTED because the report must exist before we
-        can render it. See ADR-009.
+    GENERATE
+        Run the summarisation + report generation pipeline and
+        advance from ``INTERMEDIATE`` to ``FINAL``. The pipeline
+        includes:
+          1. Summarise the workspace's papers into a Summary.
+          2. Generate the structured ResearchReport.
+          3. Render the PDF (reportlab) and the LaTeX source.
+          4. Persist all three on the session.
+        PDF / LaTeX download is a side-effect available on the
+        FINAL page.
 
     RETRY
-        Recover from an ERROR state by returning to the previous state.
+        Recover from ``ERROR`` by returning to the previous state.
+        The orchestrator remembers the state the workspace was in
+        before the error (``INITIAL`` or ``INTERMEDIATE``) and
+        restores it. See :class:`WorkspaceSession` for the storage.
+
+    BACK_TO_WORKSPACE
+        Navigate the user back from ``FINAL`` to ``INTERMEDIATE``
+        so they can refine the corpus and re-generate. Optional —
+        iterative refinement is a power-user feature.
+
+    BACK_TO_HOME
+        Navigate the user back from ``INTERMEDIATE`` to ``INITIAL``
+        so they can start a new search from the Workspace page.
+        Optional — the Home page's "new search" button covers most
+        use cases.
 
     ADD_PAPER
-        Add a paper directly (e.g. manual curation). Does not change
-        state but is recorded as a legal action.
+        Add a paper directly (e.g. manual curation, DOI resolve,
+        title search). Does not change the FSM state. Legal only
+        in ``INTERMEDIATE``.
 
     REMOVE_PAPER
-        Remove a paper from the workspace. Recorded as an action; if
-        the last paper is removed the state degrades to PAPERS_RETRIEVED
-        or CREATED based on the resulting count.
+        Remove a paper from the workspace. Does not change the FSM
+        state. Legal in any state where the workspace has papers
+        (``INTERMEDIATE`` and ``FINAL``; also ``INITIAL`` for the
+        rare case of a workspace that was seeded by the
+        curator before the user arrived).
     """
 
     SEARCH = "search"
-    SUMMARIZE = "summarize"
-    REPORT = "report"
-    COMPLETE = "complete"
-    PUBLISH = "publish"
+    GENERATE = "generate"
     RETRY = "retry"
+    BACK_TO_WORKSPACE = "back_to_workspace"
+    BACK_TO_HOME = "back_to_home"
     ADD_PAPER = "add_paper"
     REMOVE_PAPER = "remove_paper"
 
@@ -233,61 +222,39 @@ class WorkspaceAction(str, Enum):
 # ---------------------------------------------------------------------------
 
 TRANSITIONS: dict[WorkspaceState, dict[WorkspaceAction, WorkspaceState]] = {
-    WorkspaceState.CREATED: {
-        WorkspaceAction.SEARCH: WorkspaceState.SEARCHING,
-        WorkspaceAction.ADD_PAPER: WorkspaceState.PAPERS_RETRIEVED,
+    # Home page: only "search" advances the workflow.
+    WorkspaceState.INITIAL: {
+        WorkspaceAction.SEARCH: WorkspaceState.INTERMEDIATE,
+        # add_paper and remove_paper are legal in INITIAL so a
+        # curator can pre-seed a workspace. The orchestrator
+        # treats these as no-op FSM-wise.
+        WorkspaceAction.ADD_PAPER: WorkspaceState.INITIAL,
+        WorkspaceAction.REMOVE_PAPER: WorkspaceState.INITIAL,
     },
-    WorkspaceState.SEARCHING: {
-        # SEARCHING is transient — the orchestrator flips to either
-        # PAPERS_RETRIEVED (success) or ERROR (failure) once the
-        # underlying request completes.
-        WorkspaceAction.RETRY: WorkspaceState.CREATED,
+    # Workspace page: most actions live here.
+    WorkspaceState.INTERMEDIATE: {
+        WorkspaceAction.GENERATE: WorkspaceState.FINAL,
+        WorkspaceAction.ADD_PAPER: WorkspaceState.INTERMEDIATE,
+        WorkspaceAction.REMOVE_PAPER: WorkspaceState.INTERMEDIATE,
+        WorkspaceAction.BACK_TO_HOME: WorkspaceState.INITIAL,
     },
-    WorkspaceState.PAPERS_RETRIEVED: {
-        WorkspaceAction.SEARCH: WorkspaceState.SEARCHING,
-        WorkspaceAction.SUMMARIZE: WorkspaceState.SUMMARIZING,
-        # ``REPORT`` is allowed from ``PAPERS_RETRIEVED`` so a
-        # user with papers but no summary can still get a
-        # report with one click. The orchestrator
-        # (``WorkspaceOrchestrator.report``) auto-runs the
-        # summarisation step when ``session.summary is None``;
-        # the state machine just records the user-visible
-        # transition. See ADR-008 for the rationale.
-        WorkspaceAction.REPORT: WorkspaceState.REPORTING,
-        WorkspaceAction.REMOVE_PAPER: WorkspaceState.PAPERS_RETRIEVED,
-        WorkspaceAction.ADD_PAPER: WorkspaceState.PAPERS_RETRIEVED,
+    # Report page: read-mostly. PDF download is a side-effect of
+    # generate (no FSM action).
+    WorkspaceState.FINAL: {
+        WorkspaceAction.BACK_TO_WORKSPACE: WorkspaceState.INTERMEDIATE,
+        # Paper list is still mutable — the user might want to
+        # fix a typo in a paper's title before exporting.
+        WorkspaceAction.ADD_PAPER: WorkspaceState.FINAL,
+        WorkspaceAction.REMOVE_PAPER: WorkspaceState.FINAL,
     },
-    WorkspaceState.SUMMARIZING: {
-        WorkspaceAction.RETRY: WorkspaceState.PAPERS_RETRIEVED,
-    },
-    WorkspaceState.SUMMARIZED: {
-        WorkspaceAction.SUMMARIZE: WorkspaceState.SUMMARIZING,
-        WorkspaceAction.SEARCH: WorkspaceState.SEARCHING,
-        WorkspaceAction.REPORT: WorkspaceState.REPORTING,
-        WorkspaceAction.ADD_PAPER: WorkspaceState.SUMMARIZED,
-        WorkspaceAction.REMOVE_PAPER: WorkspaceState.SUMMARIZED,
-    },
-    WorkspaceState.REPORTING: {
-        WorkspaceAction.RETRY: WorkspaceState.SUMMARIZED,
-    },
-    WorkspaceState.REPORTED: {
-        WorkspaceAction.SUMMARIZE: WorkspaceState.SUMMARIZING,
-        WorkspaceAction.SEARCH: WorkspaceState.SEARCHING,
-        WorkspaceAction.REPORT: WorkspaceState.REPORTING,
-        WorkspaceAction.COMPLETE: WorkspaceState.COMPLETED,
-        WorkspaceAction.PUBLISH: WorkspaceState.PUBLISHING,
-        WorkspaceAction.ADD_PAPER: WorkspaceState.REPORTED,
-        WorkspaceAction.REMOVE_PAPER: WorkspaceState.REPORTED,
-    },
-    WorkspaceState.PUBLISHING: {
-        WorkspaceAction.RETRY: WorkspaceState.REPORTED,
-    },
-    WorkspaceState.COMPLETED: {
-        WorkspaceAction.ADD_PAPER: WorkspaceState.REPORTED,
-        WorkspaceAction.REMOVE_PAPER: WorkspaceState.REPORTED,
-    },
+    # Error page: only "retry" (back to where we were) makes sense.
     WorkspaceState.ERROR: {
-        WorkspaceAction.RETRY: WorkspaceState.CREATED,
+        # ERROR → INITIAL: covers a failed search (no workspace yet,
+        # or a fresh workspace). The orchestrator decides the
+        # destination based on whether the workspace has papers.
+        WorkspaceAction.RETRY: WorkspaceState.INITIAL,
+        WorkspaceAction.ADD_PAPER: WorkspaceState.ERROR,
+        WorkspaceAction.REMOVE_PAPER: WorkspaceState.ERROR,
     },
 }
 

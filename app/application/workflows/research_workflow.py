@@ -24,6 +24,14 @@ The graph deliberately uses no LLM/PubMed nodes. Those are
 infrastructure concerns that belong to nodes constructed by the
 composition root. The graph only knows about state transitions.
 
+Note
+----
+As of 2026-08-31 (ADR-017), the FSM has only four states —
+``INITIAL``, ``INTERMEDIATE``, ``FINAL``, ``ERROR`` — and the graph
+mirrors that. The full summarise + report + publish pipeline is
+collapsed into a single ``generate`` action; the previous
+``compare`` / ``report`` / ``publish`` / ``complete`` nodes are gone.
+
 Author
 ------
 Guillermo Ramajo Fernández
@@ -65,10 +73,10 @@ class WorkflowState:
         Papers returned by the most recent SEARCH node.
 
     last_summary : Summary | None
-        Summary returned by the most recent SUMMARIZE node.
+        Summary returned by the most recent GENERATE node (stage 1).
 
     last_report : ResearchReport | None
-        Report returned by the most recent REPORT node.
+        Report returned by the most recent GENERATE node (stage 2).
 
     error : str | None
         Last error message, if any.
@@ -94,6 +102,13 @@ def build_research_workflow():
     runtime state and mutate the :class:`ResearchSession` aggregate.
     They delegate the heavy lifting to the use cases injected into
     the orchestrator. This module only declares the topology.
+
+    The graph mirrors the 4-state FSM from ADR-017:
+
+        START -> search -> generate -> END
+
+    ``generate`` runs the full pipeline server-side (summary +
+    report + PDF + LaTeX) in one orchestrator action.
 
     Returns
     -------
@@ -134,12 +149,15 @@ def build_research_workflow():
             state.session.replace_papers(state.last_papers)
         return state
 
-    def summarize_node(state: WorkflowState) -> WorkflowState:
+    def generate_node(state: WorkflowState) -> WorkflowState:
+        """
+        GENERATE node — runs the full pipeline (summary + report).
+        The orchestrator populates ``last_summary`` and
+        ``last_report`` before entering the graph; this node
+        attaches them to the session.
+        """
         if state.last_summary is not None:
             state.session.set_summary(state.last_summary)
-        return state
-
-    def report_node(state: WorkflowState) -> WorkflowState:
         if state.last_report is not None:
             state.session.set_report(state.last_report)
         return state
@@ -149,37 +167,16 @@ def build_research_workflow():
     # ------------------------------------------------------------------
 
     graph.add_node("search", search_node)
-    graph.add_node("summarize", summarize_node)
-    graph.add_node("report", report_node)
+    graph.add_node("generate", generate_node)
 
-    # Linear happy path: search → summarize → report → done.
+    # Linear happy path: search → generate → done.
     graph.add_edge(START, "search")
-    graph.add_edge("search", "summarize")
-    graph.add_edge("summarize", "report")
-    graph.add_edge("report", END)
+    graph.add_edge("search", "generate")
+    graph.add_edge("generate", END)
 
-    # ------------------------------------------------------------------
-    # Conditional skips
-    # ------------------------------------------------------------------
-    # The FSM allows skipping summarise (e.g. going directly from
-    # PAPERS_RETRIEVED to REPORTING — see ADR-008). The graph
-    # is left as a linear happy-path here; the orchestrator is
-    # the authoritative driver today. The graph is exposed for
-    # documentation and for future checkpointing.
-
-    def _after_search(state: WorkflowState) -> str:
-        return "summarize"
-
-    def _after_summarize(state: WorkflowState) -> str:
-        return "report"
-
-    def _after_report(state: WorkflowState) -> str:
-        return "report"
-
-    # The graph above is the linear version. The conditional version
-    # is left as a follow-up; the orchestrator is the authoritative
-    # driver today. The graph is exposed for documentation and for
-    # future checkpointing.
+    # The graph above is the linear version. The orchestrator
+    # is the authoritative driver today. The graph is exposed
+    # for documentation and for future checkpointing.
 
     return graph.compile()
 

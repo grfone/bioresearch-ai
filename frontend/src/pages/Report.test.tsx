@@ -24,8 +24,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 
 // Mock the api client. The Report page calls
-// ``api.runReportAction`` (FSM-aware endpoint) via the
-// useWorkspace hook's ``runAction('report')`` dispatch.
+// ``api.runGenerateAction`` (FSM-aware endpoint) via the
+// useWorkspace hook's ``runAction("generate")`` dispatch.
 // The legacy ``api.generateReport`` is kept in the mock
 // only because the hook's ``generateReport`` wrapper still
 // exists for any callers that haven't migrated; the
@@ -34,23 +34,12 @@ vi.mock('../api/client', () => ({
   api: {
     generateReport: vi.fn(),
     fetchWorkspace: vi.fn(),
-    // The Publish-as-PDF button routes through the FSM-aware
-    // ``POST /workspaces/{id}/actions/publish`` endpoint,
-    // not the legacy ``api.complete`` shortcut. The mock
-    // exposes both because the wire-format test below
-    // asserts on which endpoint gets called.
-    runPublishAction: vi.fn(),
-    // The REPORT button (and the auto-summarise/auto-compare
-    // pipeline that runs as part of the REPORT action) now
-    // routes through the FSM-aware endpoint. ``runAction``
-    // in the hook special-cases 'report' to call this method
-    // and return ``ReportResponse`` -- the page stores the
-    // result via ``setReport`` directly. See ADR-009 + the
-    // b900965/1faf32e sessions for the audit context.
-    runReportAction: vi.fn(),
-    // The download URL is built client-side from the
-    // workspace id; we expose a stub that just echoes the
-    // input so tests can assert on the call site.
+    // The Generate PDF button on the Report page just
+    // triggers a browser-side download -- no FSM action
+    // runs from that click (generate already produced the
+    // PDF before the user landed on the page). We keep
+    // the mock here in case a future test wants to assert
+    // on the URL helper.
     getPublishedReportUrl: vi.fn((workspaceId: string) =>
       `http://test/workspaces/${workspaceId}/published-report.pdf`,
     ),
@@ -76,11 +65,11 @@ const mockUseWorkspaceReturn: {
   error: unknown;
   fetchWorkspace: ReturnType<typeof vi.fn>;
   generateReport: ReturnType<typeof vi.fn>;
-  // The PUBLISH button routes through ``runAction('publish')``
+  // The PUBLISH button routes through ``handleDownloadClick()``
   // (FSM-aware path -- see ADR-009). The legacy ``api.complete``
   // shortcut would advance to COMPLETED but leave
   // ``session.published_report`` empty; the FSM-aware
-  // ``runAction('publish')`` is the only path that renders the
+  // ``handleDownloadClick()`` is the only path that renders the
   // PDF AND persists it AND advances REPORTED -> PUBLISHING ->
   // COMPLETED.
   runAction: ReturnType<typeof vi.fn>;
@@ -161,7 +150,6 @@ import { api } from '../api/client';
 const mockApi = api as unknown as {
   generateReport: ReturnType<typeof vi.fn>;
   fetchWorkspace: ReturnType<typeof vi.fn>;
-  runPublishAction: ReturnType<typeof vi.fn>;
   getPublishedReportUrl: ReturnType<typeof vi.fn>;
   getPublishedTexUrl: ReturnType<typeof vi.fn>;
 };
@@ -171,8 +159,23 @@ describe('Report > loader phases', () => {
     mockApi.generateReport.mockReset();
     mockFetchWorkspace.mockReset();
     mockRunAction.mockReset();
-    mockApi.runPublishAction.mockReset();
-    mockApi.getPublishedReportUrl.mockClear();
+    // ``mockReset`` clears the mock's implementation, so
+    // we re-register the URL builder here. Otherwise
+    // ``getPublishedReportUrl(workspaceId)`` returns
+    // ``undefined`` and the anchor's ``href`` resolves to
+    // ``http://localhost:3000/undefined`` -- a subtle
+    // test-pollution bug that only surfaces when this
+    // describe-block runs after another that touched the
+    // same mock. Keep this re-registration cheap; the
+    // arrow is identical to the one in vi.mock above.
+    mockApi.getPublishedReportUrl.mockImplementation(
+      (workspaceId: string) =>
+        `http://test/workspaces/${workspaceId}/published-report.pdf`,
+    );
+    mockApi.getPublishedTexUrl.mockImplementation(
+      (workspaceId: string) =>
+        `http://test/workspaces/${workspaceId}/published-report.tex`,
+    );
     mockUseWorkspaceReturn.workspace = null;
     mockUseWorkspaceReturn.loading = false;
     mockUseWorkspaceReturn.error = null;
@@ -213,11 +216,11 @@ describe('Report > loader phases', () => {
     mockFetchWorkspace.mockResolvedValue({
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'SUMMARIZED',
+      state: 'INTERMEDIATE',
       summary: { text: 'A prior summary.', paper_ids: [] },
       papers: [],
       total_papers: 0,
-      allowed_actions: ['report'],
+      allowed_actions: ['generate'],
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
     });
@@ -233,11 +236,11 @@ describe('Report > loader phases', () => {
     mockUseWorkspaceReturn.workspace = {
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'SUMMARIZED',
+      state: 'INTERMEDIATE',
       summary: { text: 'A prior summary.', paper_ids: [] },
       papers: [],
       total_papers: 0,
-      allowed_actions: ['report'],
+      allowed_actions: ['generate'],
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
     };
@@ -279,22 +282,22 @@ describe('Report > loader phases', () => {
     mockFetchWorkspace.mockResolvedValue({
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'PAPERS_RETRIEVED',
+      state: 'INTERMEDIATE',
       summary: null,
       papers: [],
       total_papers: 0,
-      allowed_actions: ['report'],
+      allowed_actions: ['generate'],
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
     });
     mockUseWorkspaceReturn.workspace = {
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'PAPERS_RETRIEVED',
+      state: 'INTERMEDIATE',
       summary: null,
       papers: [],
       total_papers: 0,
-      allowed_actions: ['report'],
+      allowed_actions: ['generate'],
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
     };
@@ -333,7 +336,7 @@ describe('Report > loader phases', () => {
     mockFetchWorkspace.mockResolvedValue({
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'REPORTED',
+      state: 'FINAL',
       summary: { text: 'A summary.', paper_ids: [] },
       papers: [],
       total_papers: 0,
@@ -344,7 +347,7 @@ describe('Report > loader phases', () => {
     mockUseWorkspaceReturn.workspace = {
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'REPORTED',
+      state: 'FINAL',
       summary: { text: 'A summary.', paper_ids: [] },
       papers: [],
       total_papers: 0,
@@ -396,7 +399,7 @@ describe('Report > loader phases', () => {
  *   1. Positive:   The button exists and clicking it
  *                  routes to the FSM-aware endpoint.
  *   2. Audit:      The button uses the FSM hook
- *                  ``runAction('publish')`` (NOT the
+ *                  ``handleDownloadClick()`` (NOT the
  *                  legacy ``api.complete`` shortcut).
  *   3. Negative:   The button is not present when the
  *                  workspace is in a state that doesn't
@@ -426,11 +429,11 @@ describe('Report > Generate PDF', () => {
     const workspace = {
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'REPORTED',
+      state: 'FINAL',
       summary: { text: 'A summary.', paper_ids: [] },
       papers: [],
       total_papers: 0,
-      allowed_actions: ['publish', 'complete'],
+      allowed_actions: ['generate'],
       report_available: true,
       // The flag that drives the "Download PDF" link
       // visibility. Tests below toggle this on and off
@@ -452,7 +455,7 @@ describe('Report > Generate PDF', () => {
     // individual tests can override per-call via
     // ``mockRejectedValueOnce`` etc.
     mockRunAction.mockImplementation(async (action: string) => {
-      if (action === 'report') {
+      if (action === 'generate') {
         return {
           content: '# A Test Report\n\nSome content here.',
           summary: '# A Test Report\n\nSome content here.',
@@ -469,10 +472,12 @@ describe('Report > Generate PDF', () => {
       // BEFORE the click -- that one-shot wins.
       return {
         ...workspace,
-        // PUBLISH moves us to COMPLETED and flips the flag.
-        state: action === 'publish' ? 'COMPLETED' : workspace.state,
+        // In the new 4-state FSM the post-generate state is
+        // FINAL (we don't have a separate PUBLISH action
+        // anymore -- generate already produces the PDF).
+        state: action === 'generate' ? 'FINAL' : workspace.state,
         published_report_available:
-          action === 'publish' ? true : workspace.published_report_available,
+          action === 'generate' ? true : workspace.published_report_available,
       } as never;
     });
   }
@@ -519,16 +524,18 @@ describe('Report > Generate PDF', () => {
   });
 
   it('auto-downloads the PDF on click (no separate download button)', async () => {
-    setupReadyToPublish(false);  // starts unpublished
+    setupReadyToPublish(true);  // starts published — the button is visible
     const { Report } = await import('./Report');
     render(<Report />);
     await waitFor(() => {
       expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
     });
 
-    // Click Publish -- this calls runAction('publish'),
-    // then auto-creates a temporary ``<a>`` and clicks
-    // it to trigger the browser download.
+    // Click "Generate PDF" -- this triggers the browser
+    // download (no FSM action runs because the PDF is
+    // already on the session from when generate() ran on
+    // the workspace page). handlePublish creates a
+    // temporary <a> and clicks it.
     const publishBtn = await screen.findByRole('button', {
       name: /Generate PDF/i,
     });
@@ -557,7 +564,7 @@ describe('Report > Generate PDF', () => {
       });
     fireEvent.click(publishBtn);
     // The click handler is async -- it awaits
-    // ``runAction('publish')`` and ``fetchWorkspace()``
+    // ``handleDownloadClick()`` and ``fetchWorkspace()``
     // before triggering the auto-download. ``waitFor``
     // polls until ``clickedHref`` is set (or times out).
     await waitFor(
@@ -646,21 +653,25 @@ describe('Report > Generate PDF', () => {
 
   it('routes through the FSM-aware PUBLISH endpoint (Layer-4 audit)', async () => {
     /**
-     * The Layer-4 audit: clicking Publish must call
-     * ``runAction('publish')`` (which dispatches to
-     * ``POST /workspaces/{id}/actions/publish``), NOT the
-     * legacy ``api.complete`` shortcut. This is the
-     * single test that catches the regression the FSM-audit
-     * skill warns about: a future contributor who sees
-     * "the button advances the workspace to COMPLETED" and
-     * wires it to ``api.complete`` instead. The PDF would
-     * never appear because COMPLETE doesn't render.
+     * The Layer-4 audit: clicking "Generate PDF" must
+     * trigger a browser-side PDF download (via the hidden
+     * <a download> trick in handlePublish), NOT call any
+     * state-machine action.
      *
-     * Both mocks are reset in beforeEach -- the negative
-     * assertion (``runPublishAction`` was NOT called) is
-     * as important as the positive assertion. A test that
-     * only checks "something happened" doesn't pin the
-     * contract; this one does.
+     * In the new 4-state FSM (ADR-017), GENERATE is the only
+     * action that produces a PDF, and it runs automatically
+     * on the workspace page before the user lands on the
+     * Report page. The "Generate PDF" button on the Report
+     * page is now a download trigger — it just redirects the
+     * browser to the published-report.pdf endpoint.
+     *
+     * This test pins that contract: clicking "Generate PDF"
+     * MUST NOT call runAction(...) because no FSM action
+     * is needed (the workspace is already in FINAL with the
+     * PDF on the session). The negative assertion is the
+     * important one — a future refactor that wires the
+     * button to runAction('generate') would cause a redundant
+     * generation round-trip on every click.
      */
     setupReadyToPublish(false);
     const { Report } = await import('./Report');
@@ -672,43 +683,35 @@ describe('Report > Generate PDF', () => {
     // Sanity: ensure mocks are clean before the click so
     // assertions about call counts are deterministic.
     mockRunAction.mockClear();
-    mockApi.runPublishAction.mockClear();
+    mockApi.getPublishedReportUrl.mockClear();
 
     fireEvent.click(
       await screen.findByRole('button', { name: /Generate PDF/i }),
     );
 
-    // Positive: the FSM-aware hook was called with 'publish'.
-    await waitFor(() => {
-      expect(mockRunAction).toHaveBeenCalledWith('publish');
-    });
-    // Negative: the legacy ``api.runPublishAction`` direct
-    // call was NOT made -- we route through the hook so the
-    // hook can mirror server state. This is the false-positive
-    // guard from the FSM-audit skill: a test that only checks
-    // the positive call could pass if both are called.
-    expect(mockApi.runPublishAction).not.toHaveBeenCalled();
+    // Negative: the FSM-aware hook was NOT called -- the
+    // button is a download trigger, not an action runner.
+    // generate() already ran on the workspace page before
+    // the user landed here.
+    expect(mockRunAction).not.toHaveBeenCalled();
   });
 
-  it('surfaces a publish error and keeps the button enabled for retry', async () => {
+  it('surfaces a generation error and keeps the page recoverable', async () => {
     setupReadyToPublish(false);
     // The first ``runAction`` call from the useEffect's
-    // ``handleGenerateReport`` (action='report') must SUCCEED --
-    // otherwise the page would render the report error UI,
-    // not the publish one. The 'publish' call is the one we
-    // want to fail, so we wrap the mock to dispatch per-action.
-    //
-    // We chain: one-shot for 'publish' (after the useEffect's
-    // 'report' has been consumed by setupReadyToPublish's
-    // default mockImplementation), then fall back to the
-    // default. ``mockRejectedValueOnce`` doesn't accept a
-    // predicate, so we use ``mockImplementation`` to gate on
-    // the action.
+    // ``handleGenerateReport`` (action='generate') MUST FAIL
+    // -- that's what we're testing. In the new 4-state FSM
+    // (ADR-017) there is no separate PUBLISH action; GENERATE
+    // does everything (summary + report + PDF + LaTeX). When
+    // it fails, the page should show the error UI and let the
+    // user retry. The retry path runs the RETRY action
+    // (ERROR → INITIAL or INTERMEDIATE per last_known_state)
+    // and then re-runs GENERATE.
     const baseImpl = mockRunAction.getMockImplementation();
     mockRunAction.mockImplementation(
       async (action: string) => {
-        if (action === 'publish') {
-          throw new Error('FSM rejected PUBLISH');
+        if (action === 'generate') {
+          throw new Error('FSM rejected GENERATE');
         }
         if (baseImpl) {
           return (baseImpl as (...args: unknown[]) => unknown)(
@@ -720,24 +723,24 @@ describe('Report > Generate PDF', () => {
     );
     const { Report } = await import('./Report');
     render(<Report />);
+    // Wait for the page to render its error UI (the
+    // generation failed in the useEffect that runs on
+    // mount).
     await waitFor(() => {
       expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
     });
 
-    fireEvent.click(
-      await screen.findByRole('button', { name: /Generate PDF/i }),
-    );
-
-    // The publish error is shown in the dedicated error block
-    // -- ``role="alert"`` so screen readers announce it. We
-    // use a data-testid for a stable selector.
+    // The generation error is shown in the dedicated error
+    // block -- ``role="alert"`` so screen readers announce
+    // it. We use a data-testid for a stable selector.
     await waitFor(() => {
-      const errorEl = screen.getByTestId('publish-error');
-      expect(errorEl.textContent).toContain('FSM rejected PUBLISH');
+      const errorEl = screen.getByTestId('report-error-detail');
+      expect(errorEl.textContent).toContain('FSM rejected GENERATE');
     });
-    // Button still present (recoverable error, not a hard fail).
+    // Recover button is still present (recoverable error,
+    // not a hard fail).
     expect(
-      screen.queryByRole('button', { name: /Generate PDF/i }),
+      screen.queryByRole('button', { name: /Retry/i }),
     ).not.toBeNull();
   });
 });/**
@@ -801,7 +804,7 @@ describe('Report > error UI', () => {
     // wins. We provide a default here so tests that don't
     // care about the per-action shape just work.
     mockRunAction.mockImplementation(async (action: string) => {
-      if (action === 'report') {
+      if (action === 'generate') {
         return {
           workspace_id: 'ws-1',
           question: 'x',
@@ -816,7 +819,7 @@ describe('Report > error UI', () => {
       // workspace.
       return {
         ...workspace,
-        state: 'CREATED',
+        state: 'INITIAL',
         allowed_actions: ['add_paper', 'search'],
       } as never;
     });
@@ -886,8 +889,8 @@ describe('Report > error UI', () => {
       makeApiError(409, {
         error: 'illegal_workspace_action',
         message: 'Action report is not allowed from state SUMMARIZED',
-        current_state: 'SUMMARIZED',
-        action: 'report',
+        current_state: 'INTERMEDIATE',
+        action: 'generate',
         allowed_actions: ['search', 'compare', 'report'],
       }),
     );
@@ -923,7 +926,7 @@ describe('Report > error UI', () => {
     // CTA triggers THREE actions in sequence on the page:
     //   1. ``runAction('retry')`` -- FSM RETRY action
     //   2. ``fetchWorkspace()`` -- refetch the (now-CREATED) session
-    //   3. ``runAction('report')`` -- re-attempt generation
+    //   3. ``runAction("generate")`` -- re-attempt generation
     // We provide one-shot successes for the post-RETRY calls.
     // The 'retry' call uses the default ``mockImplementation``
     // (which returns the workspace shape -- correct for
@@ -967,7 +970,7 @@ describe('Report > error UI', () => {
       expect(mockRunAction).toHaveBeenCalledTimes(2);
     });
     expect(mockRunAction).toHaveBeenNthCalledWith(1, 'retry');
-    expect(mockRunAction).toHaveBeenNthCalledWith(2, 'report');
+    expect(mockRunAction).toHaveBeenNthCalledWith(2, 'generate');
   });
 
   it('falls through to plain Retry for network/transport errors', async () => {
@@ -1079,11 +1082,11 @@ describe('Report > citation rendering (Vancouver / ICMJE inline links)', () => {
     const workspace = {
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'REPORTED',
+      state: 'FINAL',
       summary: { text: 'A summary.', paper_ids: [] },
       papers: [],
       total_papers: 0,
-      allowed_actions: ['publish', 'complete'],
+      allowed_actions: ['generate'],
       report_available: true,
       published_report_available: false,
       last_error: null,
@@ -1097,7 +1100,7 @@ describe('Report > citation rendering (Vancouver / ICMJE inline links)', () => {
     mockFetchWorkspace.mockResolvedValue(workspace);
     mockRunAction.mockImplementation(
       async (action: string) => {
-        if (action === 'report') {
+        if (action === 'generate') {
           return {
             workspace_id: 'ws-1',
             question: 'x',
@@ -1123,9 +1126,9 @@ describe('Report > citation rendering (Vancouver / ICMJE inline links)', () => {
         }
         return {
           ...workspace,
-          state: action === 'publish' ? 'COMPLETED' : workspace.state,
+          state: action === 'generate' ? 'FINAL' : workspace.state,
           published_report_available:
-            action === 'publish' ? true : workspace.published_report_available,
+            action === 'generate' ? true : workspace.published_report_available,
         } as never;
       },
     );
@@ -1210,11 +1213,11 @@ describe('Report > citation rendering (Vancouver / ICMJE inline links)', () => {
     const workspace = {
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'REPORTED',
+      state: 'FINAL',
       summary: { text: 'A summary.', paper_ids: [] },
       papers: [],
       total_papers: 0,
-      allowed_actions: ['publish', 'complete'],
+      allowed_actions: ['generate'],
       report_available: true,
       published_report_available: false,
       last_error: null,
@@ -1228,7 +1231,7 @@ describe('Report > citation rendering (Vancouver / ICMJE inline links)', () => {
     mockFetchWorkspace.mockResolvedValue(workspace);
     mockRunAction.mockImplementation(
       async (action: string) => {
-        if (action === 'report') {
+        if (action === 'generate') {
           return {
             workspace_id: 'ws-1',
             question: 'x',
@@ -1290,11 +1293,11 @@ describe('Report > Limitations / Future Work citation rendering', () => {
     const workspace = {
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'REPORTED',
+      state: 'FINAL',
       summary: { text: 'A summary.', paper_ids: [] },
       papers: [],
       total_papers: 0,
-      allowed_actions: ['publish', 'complete'],
+      allowed_actions: ['generate'],
       report_available: true,
       published_report_available: false,
       last_error: null,
@@ -1308,7 +1311,7 @@ describe('Report > Limitations / Future Work citation rendering', () => {
     mockFetchWorkspace.mockResolvedValue(workspace);
     mockRunAction.mockImplementation(
       async (action: string) => {
-        if (action === 'report') {
+        if (action === 'generate') {
           return {
             workspace_id: 'ws-1',
             question: 'x',

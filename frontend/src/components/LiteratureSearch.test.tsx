@@ -98,7 +98,7 @@ describe('LiteratureSearch', () => {
         return Promise.resolve({
           workspace_id: 'test-workspace',
           question: 'x',
-          state: 'PAPERS_RETRIEVED',
+          state: 'INTERMEDIATE',
           papers: papers as any,
           total_papers: Array.isArray(papers) ? papers.length : 0,
           allowed_actions: ['report', 'summarize', 'search'],

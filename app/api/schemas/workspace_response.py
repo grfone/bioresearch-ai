@@ -128,11 +128,10 @@ class WorkspaceResponse(BaseModel):
     state: str = Field(
         description="Current FSM state of the workspace.",
         examples=[
-            "CREATED",
-            "PAPERS_RETRIEVED",
-            "SUMMARIZED",
-            "REPORTED",
-            "COMPLETED",
+            "INITIAL",
+            "INTERMEDIATE",
+            "FINAL",
+            "ERROR",
         ],
     )
 
@@ -141,7 +140,7 @@ class WorkspaceResponse(BaseModel):
             "Backwards-compatible status string. Always matches the "
             "FSM state value. New clients should prefer 'state'."
         ),
-        examples=["CREATED", "SUMMARIZED", "REPORTED"],
+        examples=["INITIAL", "INTERMEDIATE", "FINAL"],
     )
 
     allowed_actions: list[str] = Field(
@@ -154,6 +153,17 @@ class WorkspaceResponse(BaseModel):
         ge=0.0,
         le=1.0,
         description="Coarse progress indicator in [0.0, 1.0].",
+    )
+
+    page: str = Field(
+        default="home",
+        description=(
+            "Frontend page token for the current state. One of "
+            "home (INITIAL), workspace (INTERMEDIATE), "
+            "report (FINAL), error (ERROR). Useful for client "
+            "routing without parsing the FSM state."
+        ),
+        examples=["home", "workspace", "report", "error"],
     )
 
     last_error: str | None = Field(
@@ -361,6 +371,15 @@ class WorkspaceResponse(BaseModel):
         else:
             allowed_actions = []
 
+        # Page token: maps the FSM state to one of the three
+        # frontend pages. Lets clients route without parsing
+        # state strings.
+        state_obj = getattr(session, "state", None)
+        if state_obj is not None and hasattr(state_obj, "page"):
+            page: str = state_obj.page
+        else:
+            page = "home"
+
         # Progress
         progress = float(getattr(session, "progress", 0.0))
 
@@ -413,6 +432,7 @@ class WorkspaceResponse(BaseModel):
             state=state_value,
             status=status_value,
             allowed_actions=allowed_actions,
+            page=page,
             progress=progress,
             last_error=last_error,
             last_error_at=last_error_at,

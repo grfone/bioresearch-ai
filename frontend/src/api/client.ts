@@ -354,58 +354,47 @@ export const api = {
     );
   },
 
-  /** Run the SUMMARIZE action on a workspace. */
-  runSummarizeAction: (workspaceId: string): Promise<WorkspaceResponse> => {
-    return fetchJson(
-      buildUrl(`/workspaces/${workspaceId}/actions/summarize`),
-      { method: 'POST' },
-    );
-  },
-
-  /** Run the REPORT action on a workspace. */
   /**
-   * FSM-aware REPORT action. Returns the rendered report
-   * directly (the same shape the legacy /reports/generate
-   * endpoint returns) so the page can call ``setReport(result)``
-   * without a reshape. The endpoint still enforces the FSM
-   * contract end-to-end (illegal action -> 409 with
-   * ``last_error`` + ``allowed_actions``).
+   * Run the GENERATE action on a workspace.
+   *
+   * One-shot pipeline: summarises the corpus, generates the
+   * structured report, renders the PDF, and persists all three
+   * on the session. The workspace moves INTERMEDIATE -> FINAL
+   * on success. Legal only from INTERMEDIATE.
+   *
+   * Returns the rendered report (ReportResponse) so the page can
+   * call ``setReport(result)`` without a reshape. The endpoint
+   * enforces the FSM contract end-to-end (illegal action -> 409
+   * with ``last_error`` + ``allowed_actions``). See ADR-017.
    */
-  runReportAction: (workspaceId: string): Promise<ReportResponse> => {
+  runGenerateAction: (workspaceId: string): Promise<ReportResponse> => {
     return fetchJson(
-      buildUrl(`/workspaces/${workspaceId}/actions/report`),
-      { method: 'POST' },
-    );
-  },
-
-  /** Run the COMPLETE action on a workspace. */
-  runCompleteAction: (workspaceId: string): Promise<WorkspaceResponse> => {
-    return fetchJson(
-      buildUrl(`/workspaces/${workspaceId}/actions/complete`),
+      buildUrl(`/workspaces/${workspaceId}/actions/generate`),
       { method: 'POST' },
     );
   },
 
   /**
-   * Run the PUBLISH action on a workspace.
+   * Run a regression action (back_to_workspace, back_to_home).
    *
-   * Renders the workspace's final report as a PDF and advances
-   * the FSM through PUBLISHING to COMPLETED. After this call
-   * returns, the PDF is downloadable via
-   * ``getPublishedReportUrl(workspaceId)``.
-   *
-   * Legal only from REPORTED. Any other starting state returns
-   * 409 -- the action is FSM-gated, just like ``runReportAction``
-   * and friends.
-   *
-   * The returned ``WorkspaceResponse`` reflects the post-PUBLISH
-   * state. The workspace's ``state`` is now COMPLETED, and the
-   * ``published_report`` field is populated (downloading the
-   * PDF doesn't require any further action).
+   * These actions let the user navigate the FSM in reverse:
+   * from FINAL -> INTERMEDIATE (back_to_workspace) to re-edit
+   * the corpus, and from INTERMEDIATE -> INITIAL (back_to_home)
+   * to start over with a different question.
    */
-  runPublishAction: (workspaceId: string): Promise<WorkspaceResponse> => {
+  runRegressionAction: (
+    workspaceId: string, action: 'back_to_workspace' | 'back_to_home',
+  ): Promise<WorkspaceResponse> => {
     return fetchJson(
-      buildUrl(`/workspaces/${workspaceId}/actions/publish`),
+      buildUrl(`/workspaces/${workspaceId}/actions/${action}`),
+      { method: 'POST' },
+    );
+  },
+
+  /** Run the RETRY action on a workspace. */
+  runRetryAction: (workspaceId: string): Promise<WorkspaceResponse> => {
+    return fetchJson(
+      buildUrl(`/workspaces/${workspaceId}/actions/retry`),
       { method: 'POST' },
     );
   },
@@ -437,14 +426,6 @@ export const api = {
    */
   getPublishedTexUrl: (workspaceId: string): string => {
     return buildUrl(`/workspaces/${workspaceId}/published-report.tex`);
-  },
-
-  /** Run the RETRY action on a workspace. */
-  runRetryAction: (workspaceId: string): Promise<WorkspaceResponse> => {
-    return fetchJson(
-      buildUrl(`/workspaces/${workspaceId}/actions/retry`),
-      { method: 'POST' },
-    );
   },
 
   /** Return the FSM status of a workspace. */

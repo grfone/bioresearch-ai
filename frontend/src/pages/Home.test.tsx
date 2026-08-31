@@ -134,7 +134,7 @@ describe('Home', () => {
     createResolve({
       workspace_id: 'ws-1',
       question: 'biomarkers for Alzheimer Disease',
-      state: 'CREATED',
+      state: 'INITIAL',
       papers: [],
       total_papers: 0,
       allowed_actions: ['add_paper', 'search'],
@@ -159,7 +159,7 @@ describe('Home', () => {
     searchResolve({
       workspace_id: 'ws-1',
       question: 'biomarkers for Alzheimer Disease',
-      state: 'PAPERS_RETRIEVED',
+      state: 'INTERMEDIATE',
       papers: [],
       total_papers: 0,
       allowed_actions: ['add_paper', 'report', 'search', 'summarize'],
@@ -180,7 +180,7 @@ describe('Home', () => {
     mockRunSearchAction.mockResolvedValue({
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'PAPERS_RETRIEVED',
+      state: 'INTERMEDIATE',
       papers: [],
       total_papers: 0,
       allowed_actions: ['report'],
@@ -209,7 +209,7 @@ describe('Home', () => {
     createResolve({
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'CREATED',
+      state: 'INITIAL',
       papers: [],
       total_papers: 0,
       allowed_actions: [],
@@ -229,7 +229,7 @@ describe('Home', () => {
     mockCreateWorkspace.mockResolvedValue({
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'CREATED',
+      state: 'INITIAL',
       papers: [],
       total_papers: 0,
       allowed_actions: ['add_paper', 'search'],
@@ -239,7 +239,7 @@ describe('Home', () => {
     mockRunSearchAction.mockResolvedValue({
       workspace_id: 'ws-1',
       question: 'x',
-      state: 'PAPERS_RETRIEVED',
+      state: 'INTERMEDIATE',
       papers: [],
       total_papers: 0,
       allowed_actions: ['report'],

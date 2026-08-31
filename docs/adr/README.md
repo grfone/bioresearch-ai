@@ -59,6 +59,17 @@ These documents serve as long-term project documentation and help future contrib
   never consumed it as input. FSM is now linear: search →
   summarise → report → done. v7 migration drops the
   `evidence_comparison` SQLite column on connect.
+- [ADR-017: Collapse the FSM to four states mapped 1:1 to the three pages](ADR-017-three-page-fsm.md) —
+  the FSM collapses from nine to four states (`INITIAL` →
+  `INTERMEDIATE` → `FINAL`, plus `ERROR`). Transient in-flight
+  markers (SEARCHING, SUMMARIZING, REPORTING, PUBLISHING) are
+  gone — the UI's spinner is the source of truth for "an
+  operation is in flight." Five actions collapse to three:
+  `search`, `generate` (does summary + report + PDF + LaTeX in
+  one HTTP call), and `retry`. The FSM wire-format gains a
+  new `page` field so the SPA can route without parsing the
+  FSM state. v8 migration adds the `last_known_state` column
+  so `retry` from `ERROR` can restore the pre-error state.
 
 ## Every ADR follows the same format:
 

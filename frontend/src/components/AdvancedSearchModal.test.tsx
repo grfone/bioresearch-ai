@@ -62,7 +62,7 @@ describe('AdvancedSearchModal', () => {
     mockApi.runSearchAction.mockReset();
     mockApi.runSearchAction.mockResolvedValue({
       workspace_id: 'ws-1',
-      state: 'PAPERS_RETRIEVED',
+      state: 'INTERMEDIATE',
       allowed_actions: ['add_paper', 'search', 'summarize'],
       papers: [],
     });

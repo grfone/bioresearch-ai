@@ -101,7 +101,7 @@ export const Workspace: React.FC = () => {
     // Navigate immediately so the user sees the
     // ``Report`` page's loading screen the instant they
     // click "Generate Report". Previously we awaited the
-    // full ``runAction('report')`` round-trip here (which
+    // full ``runAction("generate")`` round-trip here (which
     // takes 11-43s because the orchestrator auto-summarises
     // + auto-compares + reports inside one FSM action --
     // see ADR-008). The user spent that whole window
@@ -292,7 +292,7 @@ export const Workspace: React.FC = () => {
           rendered further down the page; the button just fires the
           click. */}
       <WorkspaceActionBar
-        canReport={can('report')}
+        canReport={can('generate')}
         canAddPapers={can('add_paper')}
         onGenerateReport={handleGenerateReport}
         onOpenAdvancedSearch={() => setAdvancedSearchOpen(true)}

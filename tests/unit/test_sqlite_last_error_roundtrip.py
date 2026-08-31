@@ -84,7 +84,7 @@ def temp_db_path() -> Iterator[str]:
 
 
 def _make_workspace(
-    state: WorkspaceState = WorkspaceState.CREATED,
+    state: WorkspaceState = WorkspaceState.INITIAL,
     last_error: str | None = None,
 ) -> ResearchSession:
     """Construct a minimal valid ResearchSession for round-trip tests."""
@@ -172,13 +172,13 @@ def test_v4_round_trip_clears_last_error_on_successful_update(
 
     # Simulate a successful RETRY: move to CREATED with
     # ``last_error`` cleared (transition_to does this).
-    ws.state = WorkspaceState.CREATED
+    ws.state = WorkspaceState.INITIAL
     ws.last_error = None
     ws.state_history.clear()  # don't include stale history
     repo.update(ws)
 
     reloaded = repo.get(ws.id)
-    assert reloaded.state is WorkspaceState.CREATED
+    assert reloaded.state is WorkspaceState.INITIAL
     # After RETRY, ``last_error`` should be None -- the
     # recovery cleared it.
     assert reloaded.last_error is None, (
@@ -623,5 +623,5 @@ def test_pre_v5_database_reads_as_no_last_error_at(tmp_path) -> None:
             row[1]
             for row in conn.execute("PRAGMA table_info(workspaces)").fetchall()
         ]
-    assert version == 7
+    assert version == 8
     assert "last_error_at" in cols

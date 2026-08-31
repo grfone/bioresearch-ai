@@ -1,5 +1,12 @@
 # ADR-008: One-click report from PAPERS_RETRIEVED
 
+> **Superseded in part by [ADR-017](ADR-017-three-page-fsm.md)**
+> (2026-08-31). The FSM is now four-state (`INITIAL` →
+> `INTERMEDIATE` → `FINAL`, plus `ERROR`); `PAPERS_RETRIEVED` is
+> now `INTERMEDIATE`. The one-click report principle is still
+> valid — `INTERMEDIATE → FINAL` runs the full pipeline
+> (summarise + report + PDF + LaTeX) in one `generate` action.
+
 ## Status
 
 Accepted — superseded in part by

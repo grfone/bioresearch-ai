@@ -162,7 +162,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]
                 question=ResearchQuestion(
                     question="test question"
                 ),
-                state=WorkspaceState.PAPERS_RETRIEVED,
+                state=WorkspaceState.INTERMEDIATE,
             )
             session.add_papers(papers)
             session.id = workspace_id
@@ -182,7 +182,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]
 
             session = ResearchSession(
                 question=ResearchQuestion(question=question),
-                state=WorkspaceState.CREATED,
+                state=WorkspaceState.INITIAL,
             )
             return session
 
@@ -289,7 +289,7 @@ def test_pdf_upload_with_resolvable_doi(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["state"] == "PAPERS_RETRIEVED"
+    assert body["state"] == "INTERMEDIATE"
     papers = body["papers"]
     assert len(papers) == 1
     assert papers[0]["title"] == "Alzheimer's Disease: a Review"
@@ -337,7 +337,7 @@ def test_pdf_upload_with_unresolvable_doi_falls_back_to_pdf_text(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["state"] == "PAPERS_RETRIEVED"
+    assert body["state"] == "INTERMEDIATE"
     papers = body["papers"]
     assert len(papers) == 1
     # The structured extractor picked up the title.

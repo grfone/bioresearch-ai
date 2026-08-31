@@ -57,16 +57,16 @@ def _make_state() -> tuple[Any, Any, dict[UUID, Any]]:
     from app.domain.entities.research_session import ResearchSession
 
     # Two workspaces: one in CREATED (where the title-flow is
-    # most likely to be exercised) and one in PAPERS_RETRIEVED
+    # most likely to be exercised) and one in INTERMEDIATE
     # (so we can verify the route doesn't accidentally regress
     # later states).
     fresh = ResearchSession(
         question=ResearchQuestion(question="What is GLP-1?"),
-        state=WorkspaceState.CREATED,
+        state=WorkspaceState.INITIAL,
     )
     populated = ResearchSession(
         question=ResearchQuestion(question="CRISPR review"),
-        state=WorkspaceState.PAPERS_RETRIEVED,
+        state=WorkspaceState.INTERMEDIATE,
     )
     paper = Paper(title="Pre-existing.", pmid="000")
     populated.add_papers([paper])
@@ -106,16 +106,16 @@ def _make_state() -> tuple[Any, Any, dict[UUID, Any]]:
             session = _get(wid)
             session.transition_to(WorkspaceAction.SEARCH)
             session.force_state(
-                WorkspaceState.PAPERS_RETRIEVED,
+                WorkspaceState.INTERMEDIATE,
                 reason="stub-search",
             )
             return session
 
         def summarize(self, wid: UUID) -> ResearchSession:
             session = _get(wid)
-            session.transition_to(WorkspaceAction.SUMMARIZE)
+            session.transition_to(WorkspaceAction.GENERATE)
             session.force_state(
-                WorkspaceState.SUMMARIZED,
+                WorkspaceState.INTERMEDIATE,
                 reason="stub-summarize",
             )
             return session
@@ -134,16 +134,16 @@ def _make_state() -> tuple[Any, Any, dict[UUID, Any]]:
 
         def report(self, wid: UUID) -> ResearchSession:
             session = _get(wid)
-            session.transition_to(WorkspaceAction.REPORT)
+            session.transition_to(WorkspaceAction.GENERATE)
             session.force_state(
-                WorkspaceState.REPORTED,
+                WorkspaceState.FINAL,
                 reason="stub-report",
             )
             return session
 
         def complete(self, wid: UUID) -> ResearchSession:
             session = _get(wid)
-            session.transition_to(WorkspaceAction.COMPLETE)
+            session.transition_to(WorkspaceAction.RETRY)
             return session
 
         def retry(self, wid: UUID) -> ResearchSession:
@@ -339,7 +339,7 @@ def test_title_only_request_adds_a_paper(client) -> None:
     test_client, orchestrator, workspaces = client
     ws_id = next(
         wid for wid, s in workspaces.items()
-        if s.state.name == "CREATED"
+        if s.state.name == "INITIAL"
     )
 
     response = test_client.post(
@@ -349,7 +349,7 @@ def test_title_only_request_adds_a_paper(client) -> None:
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["state"] == "PAPERS_RETRIEVED"
+    assert body["state"] == "INTERMEDIATE"
     pmids = [p["pmid"] for p in body["papers"]]
     assert "999" in pmids
 
@@ -369,7 +369,7 @@ def test_disambiguation_hints_pass_through(client) -> None:
     test_client, orchestrator, workspaces = client
     ws_id = next(
         wid for wid, s in workspaces.items()
-        if s.state.name == "CREATED"
+        if s.state.name == "INITIAL"
     )
 
     response = test_client.post(
@@ -399,7 +399,7 @@ def test_empty_title_returns_422(client) -> None:
     test_client, orchestrator, workspaces = client
     ws_id = next(
         wid for wid, s in workspaces.items()
-        if s.state.name == "CREATED"
+        if s.state.name == "INITIAL"
     )
 
     response = test_client.post(
@@ -416,7 +416,7 @@ def test_whitespace_only_title_returns_422(client) -> None:
     test_client, _, workspaces = client
     ws_id = next(
         wid for wid, s in workspaces.items()
-        if s.state.name == "CREATED"
+        if s.state.name == "INITIAL"
     )
 
     response = test_client.post(
@@ -438,7 +438,7 @@ def test_no_confident_match_returns_422(client) -> None:
     test_client, orchestrator, workspaces = client
     ws_id = next(
         wid for wid, s in workspaces.items()
-        if s.state.name == "CREATED"
+        if s.state.name == "INITIAL"
     )
     orchestrator.next_return_none = True
 
@@ -461,7 +461,7 @@ def test_workspace_in_papers_retrieved_state_works(client) -> None:
     test_client, _, workspaces = client
     ws_id = next(
         wid for wid, s in workspaces.items()
-        if s.state.name == "PAPERS_RETRIEVED"
+        if s.state.name == "INTERMEDIATE"
     )
 
     response = test_client.post(
@@ -479,35 +479,32 @@ def test_workspace_in_papers_retrieved_state_works(client) -> None:
 
 def test_fsm_illegal_state_returns_409(client) -> None:
     """If the orchestrator raises ``IllegalWorkspaceActionError``
-    the route returns 409 with the legal-alternatives body —
-    the same contract as ``POST /papers/bulk``.
+    the route returns 409 with the legal-alternatives body.
 
-    We seed the workspace into REPORTING (a transient state
-    where ``ADD_PAPER`` is forbidden) by force. We can't go
-    through the orchestrator's normal ``report()`` because
-    PAPERS_RETRIEVED → REPORTING requires passing through
-    SUMMARIZED first; force-state is the test
-    seam for that.
+    In the new 4-state FSM (INITIAL → INTERMEDIATE → FINAL →
+    ERROR), add_paper is legal from any state including ERROR,
+    but generate is not legal from ERROR. We exercise the
+    generate→409 contract here. The old FSM tested
+    add_paper-from-REPORTING which no longer maps because
+    REPORTING was retired 2026-08-31 (see ADR-017).
     """
     from app.core.enums.workspace_state import WorkspaceState
     test_client, _, workspaces = client
-    ws_id = next(
-        wid for wid, s in workspaces.items()
-        if s.state.name == "PAPERS_RETRIEVED"
-    )
+    ws_id = next(iter(workspaces))
     workspace = workspaces[ws_id]
-    workspace.state = WorkspaceState.REPORTING
+    workspace.state = WorkspaceState.ERROR
+    workspace.last_error = "Seed for illegal-state test."
+    workspace.last_error_at = None
 
     response = test_client.post(
-        f"/workspaces/{ws_id}/papers/from-title",
-        json={"title": "Another paper"},
+        f"/workspaces/{ws_id}/actions/generate",
     )
 
     assert response.status_code == 409
     body = response.json()
     detail = body["detail"]
-    assert detail["action"] == "add_paper"
-    assert detail["current_state"] == "REPORTING"
+    assert detail["action"] == "generate"
+    assert detail["current_state"] == "ERROR"
 
 
 def test_year_out_of_range_returns_422(client) -> None:
@@ -519,7 +516,7 @@ def test_year_out_of_range_returns_422(client) -> None:
     test_client, orchestrator, workspaces = client
     ws_id = next(
         wid for wid, s in workspaces.items()
-        if s.state.name == "CREATED"
+        if s.state.name == "INITIAL"
     )
 
     response = test_client.post(

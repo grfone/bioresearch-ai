@@ -4,7 +4,7 @@
  * Tests for the Workspace page's "Generate Report" CTA.
  *
  * Bug history (commit context): before this fix, the button
- * click fired an ``await runAction('report')`` that took
+ * click fired an ``await runAction("generate")`` that took
  * 11-43 seconds (the orchestrator auto-summarises + auto-
  * compares + reports inside one FSM action -- see ADR-008).
  * During that wait the user stayed on the Workspace page
@@ -81,10 +81,10 @@ vi.mock('../state/workspaceStore', () => ({
       currentWorkspace: {
         workspace_id: 'ws-1',
         question: 'biomarkers',
-        state: 'REPORTED',
+        state: 'INTERMEDIATE',
         papers: [],
         total_papers: 0,
-        allowed_actions: ['add_paper', 'report'],
+        allowed_actions: ['add_paper', 'generate'],
       },
       setCurrentWorkspace: vi.fn(),
       removePaper: vi.fn(),
@@ -96,17 +96,17 @@ vi.mock('../state/workspaceStore', () => ({
 // Mock the workspace hook to return a workspace that's
 // already loaded (no fetch needed) and a no-op ``runAction``.
 // The bug we fixed was in handleGenerateReport calling
-// runAction('report') -- the test below ensures that call
+// runAction("generate") -- the test below ensures that call
 // no longer happens.
 vi.mock('../hooks/useWorkspace', () => ({
   useWorkspace: () => ({
     workspace: {
       workspace_id: 'ws-1',
       question: 'biomarkers',
-      state: 'REPORTED',
+      state: 'INTERMEDIATE',
       papers: [],
       total_papers: 0,
-      allowed_actions: ['add_paper', 'report'],
+      allowed_actions: ['add_paper', 'generate'],
     },
     loading: false,
     error: null,
@@ -137,7 +137,7 @@ describe('Workspace > handleGenerateReport', () => {
     // synchronously on click (no awaited promise). The
     // callback itself is the trivial wrapper around
     // ``navigate`` that this fix introduces; the deeper
-    // assertion is that we DO NOT await ``runAction('report')``.
+    // assertion is that we DO NOT await ``runAction("generate")``.
     const { WorkspaceActionBar } = await import('../components/WorkspaceActionBar');
     render(
       <WorkspaceActionBar
@@ -169,9 +169,9 @@ describe('Workspace > handleGenerateReport', () => {
     });
   });
 
-  it('does NOT call api.runAction("report") from the click handler', async () => {
+  it('does NOT call api.runAction("generate") from the click handler', async () => {
     // The bug we fixed: clicking Generate Report awaited
-    // api.runAction('report') which took 11-43 seconds
+    // api.runAction("generate") which took 11-43 seconds
     // before navigating. This test pins the simpler shape
     // (navigate-only, no api call) so the regression can
     // never sneak back in.
@@ -356,11 +356,11 @@ describe('Workspace > Add Papers collapse', () => {
           currentWorkspace: {
             workspace_id: 'ws-1',
             question: 'biomarkers',
-            state: 'REPORTED',
+            state: 'INTERMEDIATE',
             papers: [],
             total_papers: 0,
             // 'add_paper' is NOT in this list.
-            allowed_actions: ['report'],
+            allowed_actions: ['generate'],
           },
           setCurrentWorkspace: vi.fn(),
           removePaper: vi.fn(),
@@ -373,10 +373,10 @@ describe('Workspace > Add Papers collapse', () => {
         workspace: {
           workspace_id: 'ws-1',
           question: 'biomarkers',
-          state: 'REPORTED',
+          state: 'INTERMEDIATE',
           papers: [],
           total_papers: 0,
-          allowed_actions: ['report'],
+          allowed_actions: ['generate'],
         },
         loading: false,
         error: null,

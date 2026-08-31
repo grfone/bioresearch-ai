@@ -304,33 +304,42 @@ Only the Infrastructure layer communicates with external APIs.
 
 # Finite State Machine
 
-The workspace lifecycle is a deterministic finite state machine (FSM) — every transition is enumerated in `app/core/enums/workspace_state.py`. Illegal actions are rejected with HTTP 409 and the list of legal next actions. See [ADR-009](docs/adr/ADR-009-publishing-state.md) for the four-layer audit pattern used to add new actions, and [ADR-016](docs/adr/ADR-016-remove-compared-state.md) for the recent simplification (dropping the COMPARING/COMPARED intermediate states).
+The workspace lifecycle is a deterministic finite state machine (FSM) — every transition is enumerated in `app/core/enums/workspace_state.py`. Illegal actions are rejected with HTTP 409 and the list of legal next actions is returned in the envelope. See [ADR-017](docs/adr/ADR-017-three-page-fsm.md) for the four-state FSM mapped 1:1 to the three pages, [ADR-009](docs/adr/ADR-009-publishing-state.md) for the four-layer audit pattern (still the standing recipe for any new action), and [ADR-016](docs/adr/ADR-016-remove-compared-state.md) for the previous simplification that removed the `COMPARING` / `COMPARED` cross-paper evidence-comparison intermediate.
 
 ```
-CREATED ──search──▶ SEARCHING ──▶ PAPERS_RETRIEVED
-                                  │
-                                  ├─summarize──▶ SUMMARIZING ──▶ SUMMARIZED
-                                  │
-                                  └─report (one-click)─▶ REPORTING ──▶ REPORTED ──publish──▶ PUBLISHING ──▶ COMPLETED
-                                              (auto-summarises
-                                               if needed — ADR-008)
+INITIAL ──search──▶ INTERMEDIATE ──generate──▶ FINAL
+                       │                            │
+                       ├─back_to_home──▶ INITIAL    └─back_to_workspace──▶ INTERMEDIATE
+                       └─ERROR (recoverable: retry, add_paper, remove_paper)
 ```
 
-The FSM is **linear** since 2026-08-30 (ADR-016). Eleven states
-collapsed to nine; the cross-paper evidence-comparison
-intermediate (COMPARING → COMPARED) was removed because the
-report generator never consumed the comparison as input.
-From `SUMMARIZED` the next action is `report`; from
-`PAPERS_RETRIEVED` the user can also jump straight to `report`
-because the orchestrator auto-summarises (ADR-008).
+The FSM is **four-state since 2026-08-31** (ADR-017). Nine
+states collapsed to four — the three stable states map 1:1 to
+the three user-facing pages (`INITIAL` ↔ Home, `INTERMEDIATE` ↔
+Workspace, `FINAL` ↔ Report), plus an `ERROR` state for the
+recoverable failure page. Transient in-flight markers
+(`SEARCHING`, `SUMMARIZING`, `REPORTING`, `PUBLISHING`) are gone
+— the UI's spinner is the source of truth for "an operation is
+in flight."
 
-`REPORTING` and `PUBLISHING` are transient — listed in
-`_TRANSIENT_STATES` so the workspace-status strip treats them
-like `SEARCHING` or `SUMMARIZING`. The user only sees the next
-durable state (`REPORTED` or `COMPLETED`) once the network
-round-trip resolves.
+`search` is the only INITIAL→INTERMEDIATE transition. From
+`INTERMEDIATE`, five actions are legal: `generate` (the
+one-shot summary+report+PDF+LaTeX pipeline that produces
+`FINAL`), `add_paper` / `remove_paper` (modify the corpus in
+place, no state change), and `back_to_home` (regress to
+INITIAL — the user wants to change the question). From `FINAL`,
+the user can `back_to_workspace` to refine the corpus.
+`ERROR` is reachable from any state and `retry` restores the
+pre-error state via `session.last_known_state` (a v8-migrated
+column).
 
-Every state transition records a `StateTransition` with `(action, reason)` for the audit trail. The four-layer audit pattern (FSM table → orchestrator → structural → frontend wire-format) is the standing recipe for any new FSM action.
+The wire format carries a `page: str` field on
+`WorkspaceResponse` so the SPA can route without parsing the
+FSM state. The four-layer audit pattern (FSM table →
+orchestrator → entity → frontend wire-format) is the standing
+recipe for any new FSM action.
+
+Every state transition records a `StateTransition` with `(action, reason)` for the audit trail.
 
 ---
 

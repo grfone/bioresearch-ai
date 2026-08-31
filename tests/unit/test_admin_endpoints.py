@@ -201,11 +201,11 @@ class TestOrchestratorStatsEndpoint:
         import app.api.routes.admin as admin_mod
         from app.core.enums.workspace_state import WorkspaceState
 
-        # Set up deterministic counts: 2 CREATED, 1
-        # PAPERS_RETRIEVED, 0 everywhere else.
+        # Set up deterministic counts: 2 INITIAL, 1
+        # INTERMEDIATE, 0 everywhere else.
         counts = {state.value: 0 for state in WorkspaceState}
-        counts["CREATED"] = 2
-        counts["PAPERS_RETRIEVED"] = 1
+        counts["INITIAL"] = 2
+        counts["INTERMEDIATE"] = 1
         fake = self._fake_orchestrator_with_counts(counts)
 
         # The endpoint imports get_workspace_orchestrator
@@ -227,8 +227,8 @@ class TestOrchestratorStatsEndpoint:
             )
 
         # Counts are passed through verbatim.
-        assert body["CREATED"] == 2
-        assert body["PAPERS_RETRIEVED"] == 1
+        assert body["INITIAL"] == 2
+        assert body["INTERMEDIATE"] == 1
         # Total equals sum of state counts (3 here).
         assert body["total"] == 3
 
@@ -244,9 +244,9 @@ class TestOrchestratorStatsEndpoint:
         import app.api.routes.admin as admin_mod
         from app.core.enums.workspace_state import WorkspaceState
 
-        # Sparse input: only REPORTED has a count.
+        # Sparse input: only FINAL has a count.
         fake = self._fake_orchestrator_with_counts(
-            {"REPORTED": 4}
+            {"FINAL": 4}
         )
 
         monkeypatch.setattr(
@@ -258,11 +258,11 @@ class TestOrchestratorStatsEndpoint:
         body = response.json()
 
         # Sparse input was 1 key; the endpoint should have
-        # zero-filled all the OTHER states to 0. REPORTED
+        # zero-filled all the OTHER states to 0. FINAL
         # itself stays at 4.
-        assert body["REPORTED"] == 4
+        assert body["FINAL"] == 4
         for state in WorkspaceState:
-            if state.value == "REPORTED":
+            if state.value == "FINAL":
                 continue
             assert body[state.value] == 0, (
                 f"state {state.value} expected 0 (zero-filled), "
@@ -316,27 +316,27 @@ class TestWorkspaceStateCountsRepository:
 
         repo = InMemoryWorkspaceRepository()
 
-        # Create 3 CREATED workspaces
+        # Create 3 INITIAL workspaces
         for _ in range(3):
             session = ResearchSession(
                 question=ResearchQuestion(question="x"),
-                state=WorkspaceState.CREATED,
+                state=WorkspaceState.INITIAL,
             )
             repo.create(session)
 
-        # Create 1 PAPERS_RETRIEVED workspace
+        # Create 1 INTERMEDIATE workspace
         session = ResearchSession(
             question=ResearchQuestion(question="y"),
-            state=WorkspaceState.PAPERS_RETRIEVED,
+            state=WorkspaceState.INTERMEDIATE,
         )
         repo.create(session)
 
         counts = repo.workspace_state_counts()
-        assert counts["CREATED"] == 3
-        assert counts["PAPERS_RETRIEVED"] == 1
+        assert counts["INITIAL"] == 3
+        assert counts["INTERMEDIATE"] == 1
         # All other states are zero.
         for state in WorkspaceState:
-            if state.value not in ("CREATED", "PAPERS_RETRIEVED"):
+            if state.value not in ("INITIAL", "INTERMEDIATE"):
                 assert counts[state.value] == 0
 
 

@@ -11,8 +11,8 @@ import type { WorkspaceResponse } from '../models/workspace';
 const SAMPLE_WORKSPACE: WorkspaceResponse = {
   workspace_id: 'ws-1',
   question: 'What is X?',
-  state: 'CREATED',
-  status: 'CREATED',
+  state: 'INITIAL',
+  status: 'INITIAL',
   allowed_actions: ['add_paper', 'search'],
   progress: 0,
   last_error: null,
@@ -66,8 +66,8 @@ describe('workspaceStore', () => {
         makePaper('67890'),
       ]);
       const ws = useWorkspaceStore.getState().currentWorkspace!;
-      expect(ws.state).toBe('PAPERS_RETRIEVED');
-      expect(ws.allowed_actions).toContain('summarize');
+      expect(ws.state).toBe('INTERMEDIATE');
+      expect(ws.allowed_actions).toContain('generate');
       expect(ws.total_papers).toBe(2);
       expect(ws.papers.length).toBe(2);
     });
@@ -78,15 +78,15 @@ describe('workspaceStore', () => {
       // manual entry).
       useWorkspaceStore.getState().setCurrentWorkspace({
         ...SAMPLE_WORKSPACE,
-        state: 'PAPERS_RETRIEVED',
-        allowed_actions: ['add_paper', 'remove_paper', 'search', 'summarize'],
+        state: 'INTERMEDIATE',
+        allowed_actions: ['add_paper', 'back_to_home', 'generate', 'remove_paper'],
         papers: [makePaper('1')],
         total_papers: 1,
       });
       useWorkspaceStore.getState().addPapersToCurrent([makePaper('2')]);
       const ws = useWorkspaceStore.getState().currentWorkspace!;
-      expect(ws.state).toBe('PAPERS_RETRIEVED');
-      expect(ws.allowed_actions).toContain('summarize');
+      expect(ws.state).toBe('INTERMEDIATE');
+      expect(ws.allowed_actions).toContain('generate');
       expect(ws.total_papers).toBe(2);
     });
 
@@ -109,7 +109,7 @@ describe('workspaceStore', () => {
       ]);
       const stateBefore =
         useWorkspaceStore.getState().currentWorkspace!.state;
-      expect(stateBefore).toBe('PAPERS_RETRIEVED');
+      expect(stateBefore).toBe('INTERMEDIATE');
       // Now try adding the same paper again — dedup, no
       // new papers.
       useWorkspaceStore.getState().addPapersToCurrent([
@@ -117,7 +117,7 @@ describe('workspaceStore', () => {
       ]);
       const ws = useWorkspaceStore.getState().currentWorkspace!;
       // State should not change.
-      expect(ws.state).toBe('PAPERS_RETRIEVED');
+      expect(ws.state).toBe('INTERMEDIATE');
       // Total paper count should not change.
       expect(ws.total_papers).toBe(1);
     });

@@ -113,28 +113,29 @@ function nextAllowedActions(
   totalPapers: number,
 ): Array<
   | 'search'
-  | 'summarize'
-  | 'report'
-  | 'complete'
+  | 'generate'
   | 'retry'
   | 'add_paper'
   | 'remove_paper'
+  | 'back_to_workspace'
+  | 'back_to_home'
 > {
   switch (state) {
-    case 'CREATED':
+    case 'INITIAL':
       return ['add_paper', 'search'];
-    case 'PAPERS_RETRIEVED':
-      return ['add_paper', 'remove_paper', 'search', 'summarize'];
-    case 'SUMMARIZED':
-      return ['add_paper', 'remove_paper', 'report', 'search'];
-    case 'REPORTED':
-      return ['complete', 'remove_paper', 'search'];
-    case 'COMPLETED':
+    case 'INTERMEDIATE':
+      return [
+        'add_paper',
+        'back_to_home',
+        'generate',
+        'remove_paper',
+      ];
+    case 'FINAL':
       return totalPapers > 0
-        ? ['remove_paper', 'search']
-        : ['search'];
+        ? ['back_to_workspace', 'remove_paper']
+        : ['back_to_workspace'];
     case 'ERROR':
-      return ['retry'];
+      return ['add_paper', 'remove_paper', 'retry'];
     default:
       return ['search'];
   }
@@ -301,7 +302,7 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             // backend's TRANSITIONS table.
             const prevState = state.currentWorkspace.state;
             const nextState =
-              prevState === 'CREATED' ? 'PAPERS_RETRIEVED' : prevState;
+              prevState === 'INITIAL' ? 'INTERMEDIATE' : prevState;
             const nextAllowed = nextAllowedActions(
               nextState,
               totalPapers,

@@ -188,7 +188,7 @@ class ResearchSession:
 
     id: UUID = field(default_factory=uuid4)
 
-    state: WorkspaceState = WorkspaceState.CREATED
+    state: WorkspaceState = WorkspaceState.INITIAL
 
     papers: list[Paper] = field(default_factory=list)
 
@@ -217,6 +217,12 @@ class ResearchSession:
 
     last_error_at: datetime | None = None
 
+    #: The state the workspace was in immediately before ERROR was
+    #: entered. Set by ``WorkspaceOrchestrator._fail`` and read by
+    #: ``retry`` to restore the right page on retry. ``None`` when
+    #: the workspace has never been in ERROR.
+    last_known_state: WorkspaceState | None = None
+
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -233,8 +239,8 @@ class ResearchSession:
         if not self.state_history:
             self.state_history.append(
                 StateTransition(
-                    from_state=WorkspaceState.CREATED,
-                    to_state=WorkspaceState.CREATED,
+                    from_state=WorkspaceState.INITIAL,
+                    to_state=WorkspaceState.INITIAL,
                     action=None,
                 )
             )
@@ -273,13 +279,25 @@ class ResearchSession:
         return self.state.value
 
     @property
+    def page(self) -> str:
+        """
+        The frontend page token for this state.
+
+        Convenience accessor for ``WorkspaceState.page``. The
+        frontend maps these tokens (``"home"``/``"workspace"``/
+        ``"report"``/``"error"``) to concrete routes.
+        """
+        return self.state.page
+
+    @property
     def progress(self) -> float:
         """
         A coarse progress indicator in the range [0.0, 1.0].
 
         The progress is anchored on the FSM lifecycle. It is purely
         informational — execution is deterministic, not driven by
-        progress.
+        progress. The four-state FSM has only three forward
+        positions (INITIAL → INTERMEDIATE → FINAL) plus ERROR.
 
         Returns
         -------
@@ -287,14 +305,9 @@ class ResearchSession:
             Progress value in [0.0, 1.0].
         """
         anchor = {
-            WorkspaceState.CREATED: 0.0,
-            WorkspaceState.SEARCHING: 0.1,
-            WorkspaceState.PAPERS_RETRIEVED: 0.2,
-            WorkspaceState.SUMMARIZING: 0.3,
-            WorkspaceState.SUMMARIZED: 0.5,
-            WorkspaceState.REPORTING: 0.8,
-            WorkspaceState.REPORTED: 0.95,
-            WorkspaceState.COMPLETED: 1.0,
+            WorkspaceState.INITIAL: 0.0,
+            WorkspaceState.INTERMEDIATE: 0.5,
+            WorkspaceState.FINAL: 1.0,
             WorkspaceState.ERROR: 0.0,
         }
         return anchor.get(self.state, 0.0)
@@ -391,9 +404,10 @@ class ResearchSession:
         action.
 
         This is **only** used by the repository during deserialization
-        and by the orchestrator when transiting out of transient
-        states (e.g. SEARCHING → PAPERS_RETRIEVED after the PubMed
-        request completes). Application code should never call this
+        and by the orchestrator when recording the outcome of an
+        action (e.g. after search completes successfully, the
+        orchestrator calls ``force_state(INTERMEDIATE)`` to record
+        the durable state). Application code should never call this
         directly.
 
         Parameters
@@ -404,11 +418,6 @@ class ResearchSession:
         reason : str | None
             Optional reason for the forced transition.
         """
-        # Allow transient→stable transitions (e.g. SEARCHING →
-        # PAPERS_RETRIEVED) because they are how the orchestrator
-        # completes requests. We also allow ERROR-targeted transitions
-        # when a reason is supplied. Everything else must go through
-        # transition_to().
         previous = self.state
         if previous is new_state:
             # No-op: already in the target state.
@@ -417,20 +426,14 @@ class ResearchSession:
         # A forced transition is legal if either:
         #   (a) the target state is reachable through the FSM table
         #       from the current state, OR
-        #   (b) the current state is transient and the target is a
-        #       stable completion (e.g. SEARCHING → PAPERS_RETRIEVED),
-        #   OR
-        #   (c) the target is ERROR (recorded failure).
+        #   (b) the target is ERROR (recorded failure) — the
+        #       orchestrator's _fail() helper uses force_state to
+        #       record fatal failures, regardless of the originating
+        #       state.
         reachable = TRANSITIONS.get(previous, {})
-        transient_completion = (
-            previous.is_transient
-            and not new_state.is_transient
-            and new_state is not WorkspaceState.ERROR
-        )
         error_target = new_state is WorkspaceState.ERROR
         if (
             new_state not in reachable.values()
-            and not transient_completion
             and not error_target
         ):
             # The orchestrator only calls force_state with legal
@@ -496,9 +499,9 @@ class ResearchSession:
             return
         self.papers.extend(new_papers)
         self.touch()
-        if self.state is WorkspaceState.CREATED:
+        if self.state is WorkspaceState.INITIAL:
             self.force_state(
-                WorkspaceState.PAPERS_RETRIEVED,
+                WorkspaceState.INTERMEDIATE,
                 reason="Papers added",
             )
 
@@ -533,12 +536,12 @@ class ResearchSession:
         self.touch()
         if papers:
             self.force_state(
-                WorkspaceState.PAPERS_RETRIEVED,
+                WorkspaceState.INTERMEDIATE,
                 reason="Papers replaced",
             )
         else:
             self._force_state_regressive(
-                WorkspaceState.CREATED,
+                WorkspaceState.INITIAL,
                 reason="No papers remaining",
             )
 
@@ -560,8 +563,8 @@ class ResearchSession:
         did not invoke an action — they mutated the workspace's
         paper collection directly.
 
-        Allowed regressive targets are :class:`WorkspaceState.CREATED`
-        and :class:`WorkspaceState.PAPERS_RETRIEVED`. Any other
+        Allowed regressive targets are :class:`WorkspaceState.INITIAL`
+        and :class:`WorkspaceState.INTERMEDIATE`. Any other
         target is rejected with :class:`IllegalWorkspaceActionError`.
 
         Parameters
@@ -573,8 +576,8 @@ class ResearchSession:
             Optional reason for the regression.
         """
         allowed_regressive = (
-            WorkspaceState.CREATED,
-            WorkspaceState.PAPERS_RETRIEVED,
+            WorkspaceState.INITIAL,
+            WorkspaceState.INTERMEDIATE,
         )
         if new_state not in allowed_regressive:
             raise IllegalWorkspaceActionError(
@@ -624,13 +627,13 @@ class ResearchSession:
             self.touch()
             if not self.papers:
                 # Removing the last paper regresses the workspace to
-                # CREATED. This is a legitimate degradation that the
+                # INITIAL. This is a legitimate degradation that the
                 # FSM does not model as a transition (papers can be
                 # removed directly without an action), so we use
                 # _force_state_regressive to bypass the strict
                 # forward-only guard.
                 self._force_state_regressive(
-                    WorkspaceState.CREATED,
+                    WorkspaceState.INITIAL,
                     reason="Last paper removed",
                 )
         return removed

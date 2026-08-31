@@ -1,5 +1,16 @@
 # ADR-009: PUBLISHING FSM state for PDF export
 
+> **Superseded in part by [ADR-017](ADR-017-three-page-fsm.md)**
+> (2026-08-31). The FSM is now four-state (`INITIAL` →
+> `INTERMEDIATE` → `FINAL`, plus `ERROR`); the `PUBLISHING`
+> transient state and the dedicated PUBLISH action are gone.
+> `INTERMEDIATE → FINAL` (one `generate` action) now produces
+> the PDF as a side effect, and the user downloads it via the
+> `/published-report.pdf` endpoint.
+>
+> The four-layer audit pattern this ADR documents remains the
+> standard for any future architectural change.
+
 ## Status
 
 Accepted — superseded in part by
