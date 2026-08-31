@@ -52,6 +52,13 @@ These documents serve as long-term project documentation and help future contrib
   `BIORESEARCH_AUTO_FIX_DOCKER_IPV6=1` auto-fix (writes
   `{"ipv6": false}` to `/etc/docker/daemon.json` and restarts the
   daemon), safe subprocess handling.
+- [ADR-016: Remove the COMPARING/COMPARED FSM states](ADR-016-remove-compared-state.md) —
+  the cross-paper evidence-comparison subsystem is gone end-to-end
+  (entity, use case, LLM generator, validator, persistence column,
+  HTTP endpoint, frontend panel) because the report generator
+  never consumed it as input. FSM is now linear: search →
+  summarise → report → done. v7 migration drops the
+  `evidence_comparison` SQLite column on connect.
 
 ## Every ADR follows the same format:
 

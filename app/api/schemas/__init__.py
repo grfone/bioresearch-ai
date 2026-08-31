@@ -4,9 +4,6 @@ app.api.schemas import X`` instead of remembering the per-file
 path.
 """
 
-from app.api.schemas.evidence_comparison_response import (
-    EvidenceComparisonResponse,
-)
 from app.api.schemas.find_by_title_request import FindByTitleRequest
 from app.api.schemas.paper_request import (
     AuthorRequest,
@@ -37,7 +34,6 @@ from app.api.schemas.workspace_status_response import WorkspaceStatusResponse
 __all__ = [
     "AuthorRequest",
     "AuthorResponse",
-    "EvidenceComparisonResponse",
     "FailedResolutionResponse",
     "FindByTitleRequest",
     "JournalRequest",

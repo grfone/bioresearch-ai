@@ -13,9 +13,7 @@ from app.application.validation.citation_validator import CitationValidator
 from app.core.enums.citation_style import CitationStyleEnum
 from app.core.exceptions import CitationValidationError
 from app.domain.entities.citation import Citation
-from app.domain.entities.evidence_comparison import EvidenceComparison
-from app.domain.entities.evidence_matrix import EvidenceMatrix, MatrixCell
-from app.domain.entities.finding import Contradiction, Finding
+from app.domain.entities.finding import Finding
 from app.domain.entities.paper import Paper
 from app.domain.entities.research_report import ResearchReport
 from app.domain.entities.summary import Summary
@@ -81,71 +79,6 @@ def test_validate_finding_accepts_mixed_form() -> None:
     v.validate_finding(
         Finding(claim="x", paper_ids=["12345", "pmid:12345"])
     )
-
-
-# ---------------------------------------------------------------------------
-# validate_evidence_comparison
-# ---------------------------------------------------------------------------
-
-
-def _comparison_with_consensus(paper_ids: list[str]) -> EvidenceComparison:
-    return EvidenceComparison(
-        consensus=[Finding(claim="x", paper_ids=paper_ids)],
-        used_paper_ids=paper_ids,
-    )
-
-
-def test_validate_comparison_passes_when_all_papers_in_set() -> None:
-    papers = [_paper(pmid="1"), _paper(pmid="2")]
-    v = CitationValidator(papers)
-    v.validate_evidence_comparison(
-        _comparison_with_consensus(["pmid:1", "pmid:2"])
-    )
-
-
-def test_validate_comparison_rejects_fabricated_pmid() -> None:
-    papers = [_paper(pmid="1")]
-    v = CitationValidator(papers)
-    with pytest.raises(CitationValidationError):
-        v.validate_evidence_comparison(
-            _comparison_with_consensus(["pmid:1", "pmid:99999"])
-        )
-
-
-def test_validate_comparison_validates_matrix() -> None:
-    papers = [_paper(pmid="1")]
-    v = CitationValidator(papers)
-    matrix = EvidenceMatrix(
-        columns=["Methods"],
-        rows=[
-            MatrixCell(paper_id="pmid:1", facets={"Methods": "RCT"}),
-            MatrixCell(paper_id="pmid:99999", facets={"Methods": "Observational"}),
-        ],
-        used_paper_ids=["pmid:1", "pmid:99999"],
-    )
-    comparison = EvidenceComparison(
-        matrix=matrix,
-        used_paper_ids=["pmid:1"],
-    )
-    with pytest.raises(CitationValidationError):
-        v.validate_evidence_comparison(comparison)
-
-
-def test_validate_comparison_validates_contradictions() -> None:
-    papers = [_paper(pmid="1")]
-    v = CitationValidator(papers)
-    comparison = EvidenceComparison(
-        contradictions=[
-            Contradiction(
-                topic="efficacy",
-                description="disagreement",
-                paper_ids=["pmid:1", "pmid:99999"],
-            )
-        ],
-        used_paper_ids=["pmid:1"],
-    )
-    with pytest.raises(CitationValidationError):
-        v.validate_evidence_comparison(comparison)
 
 
 # ---------------------------------------------------------------------------

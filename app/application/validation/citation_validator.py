@@ -31,8 +31,6 @@ from typing import Iterable
 
 from app.core.exceptions import CitationValidationError
 from app.domain.entities.citation import Citation
-from app.domain.entities.evidence_comparison import EvidenceComparison
-from app.domain.entities.evidence_matrix import EvidenceMatrix
 from app.domain.entities.finding import Contradiction, Finding
 from app.domain.entities.paper import Paper
 from app.domain.entities.research_report import ResearchReport
@@ -44,13 +42,17 @@ class CitationValidator:
 
     The validator is constructed from a list of papers (typically the
     workspace's papers at the time of generation). It then exposes
-    three methods that validate the three artefacts the LLM can
+    two methods that validate the two artefacts the LLM can
     produce:
 
     - ``validate_finding`` — the finding's paper IDs must be in the set.
-    - ``validate_evidence_comparison`` — every paper ID in the
-      comparison (consensus, contradictions, matrix) must be in the set.
     - ``validate_report`` — every citation's paper must be in the set.
+
+    The cross-paper ``EvidenceComparison`` artefact that used to
+    live between summary and report was removed on 2026-08-30
+    (see the FSM diagram in ``app/core/enums/workspace_state.py``).
+    ``validate_evidence_comparison`` and
+    ``validate_evidence_matrix`` are gone with it.
 
     On violation, the validator raises :class:`CitationValidationError`
     with a list of offending paper IDs. The orchestrator can then
@@ -148,45 +150,6 @@ class CitationValidator:
         self._validate_ids(
             contradiction.paper_ids,
             context=f"contradiction '{contradiction.topic!r}'",
-        )
-
-    def validate_evidence_comparison(
-        self,
-        comparison: EvidenceComparison,
-    ) -> None:
-        """
-        Validate every paper ID referenced in an EvidenceComparison.
-
-        Checks consensus findings, contradictions, and the matrix.
-        Raises on the first violation (with the offending ID).
-
-        Raises
-        ------
-        CitationValidationError
-            If any cited paper ID is not in the allowed set.
-        """
-        for finding in comparison.consensus:
-            self.validate_finding(finding)
-        for contradiction in comparison.contradictions:
-            self.validate_contradiction(contradiction)
-        if comparison.matrix is not None:
-            self.validate_evidence_matrix(comparison.matrix)
-
-    def validate_evidence_matrix(
-        self,
-        matrix: EvidenceMatrix,
-    ) -> None:
-        """
-        Validate every paper ID in a matrix.
-
-        Raises
-        ------
-        CitationValidationError
-            If any cited paper ID is not in the allowed set.
-        """
-        self._validate_ids(
-            [cell.paper_id for cell in matrix.rows],
-            context="matrix rows",
         )
 
     def validate_report(self, report: ResearchReport) -> None:

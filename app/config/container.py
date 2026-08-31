@@ -33,7 +33,7 @@ Architecture
         |                           |
 Literature Capabilities   WorkspaceOrchestrator
         |                           |
-Use Cases (search, etc.)   Use Cases (compare, etc.)
+Use Cases (search, summarise, etc.)
         |                           |
 PubMed / LLM / Storage      Persistence
                                  |
@@ -58,9 +58,6 @@ from app.application.services.workspace_service import (
     WorkspaceService,
 )
 
-from app.application.use_cases.compare_evidence import (
-    CompareEvidenceUseCase,
-)
 from app.application.use_cases.create_workspace import (
     CreateWorkspaceUseCase,
 )
@@ -80,12 +77,6 @@ from app.application.use_cases.update_workspace import (
     UpdateWorkspaceUseCase,
 )
 
-from app.infrastructure.llm.comparison_generator import (
-    LLMComparisonGenerator,
-)
-from app.infrastructure.llm.comparison_mapper import (
-    EvidenceComparisonMapper,
-)
 from app.infrastructure.llm.llm_factory import (
     LLMFactory,
 )
@@ -259,12 +250,6 @@ class Container:
             report_mapper=report_mapper,
         )
 
-        comparison_mapper = EvidenceComparisonMapper()
-        comparison_generator = LLMComparisonGenerator(
-            llm_provider=llm_provider,
-            comparison_mapper=comparison_mapper,
-        )
-
         # PDF generator for the PUBLISH action. Uses
         # reportlab with embedded DejaVu Sans for full
         # Unicode coverage (Greek letters, diacritics,
@@ -281,7 +266,6 @@ class Container:
             literature_searcher=literature_searcher,
             llm_provider=llm_provider,
             report_generator=report_generator,
-            comparison_generator=comparison_generator,
             pdf_generator=pdf_generator,
         )
 

@@ -313,22 +313,16 @@ export const Workspace: React.FC = () => {
           this with a different surface (e.g. a collapsible
           detail panel). */}
 
-      {/* Evidence Comparison used to render here, but the
-          COMPARE action is now bundled into REPORT (the
-          orchestrator auto-runs summarise + compare as
-          part of the one-click report flow -- see ADR-008).
-          The COMPARE-only panel had no user after that, and
-          its empty-state ("No cross-paper comparison yet.
-          Run the COMPARE action to generate one from the
-          workspace's papers.") would now be confusing: the
-          panel renders but the action no longer exists in
-          the action bar. We keep the underlying data on
-          the workspace model -- ``has_evidence_comparison``
-          is still set by the auto-compare inside
-          ``WorkspaceOrchestrator.report`` -- but the panel
-          is no longer surfaced. If a future feature needs
-          to inspect the comparison in isolation, we can
-          re-mount this with a different surface. */}
+      {/* Evidence Comparison was rendered here in the prior
+          version of this page. The COMPARE action and the
+          COMPARING/COMPARED FSM states were removed on
+          2026-08-30 (see ADR-016) because the report
+          generator never consumed the comparison as input —
+          the report works from the summary alone, and the
+          evidence comparison was a write-only artefact.
+          If a future feature needs a side-by-side matrix, it
+          can be re-mounted here. The slot is intentionally
+          empty for now. */}
 
       {/* Literature Search + Papers List, wrapped in a ref so the
           empty-state cards above can scroll into view. */}

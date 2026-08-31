@@ -11,9 +11,9 @@
  *      is in flight
  *
  * Compare is NOT a separate phase: the orchestrator's
- * ``report()`` doesn't actually call the compare use case
- * (the panel was removed in commit decc964; the data-side
- * ``has_evidence_comparison`` flag is set but not awaited).
+ * ``report()`` doesn't call a compare use case (the
+ * ``COMPARING``/``COMPARED`` FSM states were removed on
+ * 2026-08-30 — see ADR-016).
  *
  * We mock the API client, the useWorkspace hook, and the
  * Zustand store. The test asserts the phase label text
@@ -431,7 +431,6 @@ describe('Report > Generate PDF', () => {
       papers: [],
       total_papers: 0,
       allowed_actions: ['publish', 'complete'],
-      has_evidence_comparison: false,
       report_available: true,
       // The flag that drives the "Download PDF" link
       // visibility. Tests below toggle this on and off
@@ -783,7 +782,6 @@ describe('Report > error UI', () => {
       papers: [],
       total_papers: 0,
       allowed_actions: ['retry'],
-      has_evidence_comparison: false,
       report_available: false,
       published_report_available: false,
       last_error: null,
@@ -1086,7 +1084,6 @@ describe('Report > citation rendering (Vancouver / ICMJE inline links)', () => {
       papers: [],
       total_papers: 0,
       allowed_actions: ['publish', 'complete'],
-      has_evidence_comparison: false,
       report_available: true,
       published_report_available: false,
       last_error: null,
@@ -1218,7 +1215,6 @@ describe('Report > citation rendering (Vancouver / ICMJE inline links)', () => {
       papers: [],
       total_papers: 0,
       allowed_actions: ['publish', 'complete'],
-      has_evidence_comparison: false,
       report_available: true,
       published_report_available: false,
       last_error: null,
@@ -1299,7 +1295,6 @@ describe('Report > Limitations / Future Work citation rendering', () => {
       papers: [],
       total_papers: 0,
       allowed_actions: ['publish', 'complete'],
-      has_evidence_comparison: false,
       report_available: true,
       published_report_available: false,
       last_error: null,

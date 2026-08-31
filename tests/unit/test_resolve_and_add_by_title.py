@@ -41,7 +41,6 @@ import pytest
 from app.application.services.workspace_orchestrator import (
     WorkspaceOrchestrator,
 )
-from app.application.use_cases.compare_evidence import CompareEvidenceUseCase
 from app.application.use_cases.generate_report import GenerateReportUseCase
 from app.application.use_cases.search_literature import SearchLiteratureUseCase
 from app.application.use_cases.summarize_papers import SummarizePapersUseCase
@@ -51,7 +50,6 @@ from app.core.enums.workspace_state import (
 )
 from app.core.exceptions import IllegalWorkspaceActionError
 from app.domain.entities.author import Author
-from app.domain.entities.evidence_comparison import EvidenceComparison
 from app.domain.entities.finding import Finding  # noqa: F401
 from app.domain.entities.journal import Journal
 from app.domain.entities.paper import Paper
@@ -59,7 +57,6 @@ from app.domain.entities.research_question import ResearchQuestion
 from app.domain.entities.research_session import ResearchSession
 from app.domain.entities.research_report import ResearchReport
 from app.domain.entities.summary import Summary
-from app.domain.interfaces.comparison_generator import ComparisonGenerator
 from app.domain.interfaces.llm_provider import LLMProvider
 from app.domain.interfaces.literature_searcher import LiteratureSearcher
 from app.domain.interfaces.pdf_generator import PDFGenerator
@@ -173,20 +170,6 @@ class StubReportGenerator(ReportGenerator):
         )
 
 
-class StubComparisonGenerator(ComparisonGenerator):
-    def generate(
-        self,
-        question: ResearchQuestion,
-        papers: list[Paper],
-    ) -> EvidenceComparison:
-        return EvidenceComparison(
-            consensus=[],
-            used_paper_ids=[p.pmid for p in papers if p.pmid],
-            research_gaps=[],
-            future_directions=[],
-        )
-
-
 class StubPDFGenerator(PDFGenerator):
     """Minimal stub: returns canned PDF bytes so PublishedReport
     validation passes. The orchestrator needs the ``pdf_generator``
@@ -279,7 +262,6 @@ def _make_orchestrator(
         literature_searcher=searcher,
         llm_provider=llm,
         report_generator=StubReportGenerator(),
-        comparison_generator=StubComparisonGenerator(),
         pdf_generator=StubPDFGenerator(),
     )
 
@@ -548,7 +530,7 @@ class TestResolveAndAddByTitleFSMGuard:
 
     Looking at ``WorkspaceState.transitions`` the FSM only
     forbids ``ADD_PAPER`` from transient states (SEARCHING,
-    SUMMARIZING, COMPARING, REPORTING) and from ERROR. POST-PAPERS
+    SUMMARIZING, REPORTING) and from ERROR. POST-PAPERS
     states (PAPERS_RETRIEVED onward through COMPLETED) all allow
     ADD_PAPER because the user might want to add more papers
     even after a report is generated."""
@@ -558,7 +540,6 @@ class TestResolveAndAddByTitleFSMGuard:
         [
             WorkspaceState.SEARCHING,
             WorkspaceState.SUMMARIZING,
-            WorkspaceState.COMPARING,
             WorkspaceState.REPORTING,
             WorkspaceState.ERROR,
         ],
@@ -581,7 +562,6 @@ class TestResolveAndAddByTitleFSMGuard:
             WorkspaceState.CREATED,
             WorkspaceState.PAPERS_RETRIEVED,
             WorkspaceState.SUMMARIZED,
-            WorkspaceState.COMPARED,
             WorkspaceState.REPORTED,
             WorkspaceState.COMPLETED,
         ],

@@ -22,9 +22,6 @@ import type {
   WorkspaceResponse,
   WorkspaceStatusResponse,
 } from '../models/workspace';
-import type {
-  EvidenceComparisonResponse,
-} from '../models/comparison';
 import type { ReportRequest, ReportResponse } from '../models/report';
 import type { Paper, PaperRequest } from '../models/paper';
 
@@ -365,14 +362,6 @@ export const api = {
     );
   },
 
-  /** Run the COMPARE action on a workspace. */
-  runCompareAction: (workspaceId: string): Promise<WorkspaceResponse> => {
-    return fetchJson(
-      buildUrl(`/workspaces/${workspaceId}/actions/compare`),
-      { method: 'POST' },
-    );
-  },
-
   /** Run the REPORT action on a workspace. */
   /**
    * FSM-aware REPORT action. Returns the rendered report
@@ -461,15 +450,6 @@ export const api = {
   /** Return the FSM status of a workspace. */
   getTransitions: (workspaceId: string): Promise<WorkspaceStatusResponse> => {
     return fetchJson(buildUrl(`/workspaces/${workspaceId}/transitions`));
-  },
-
-  /** Return the stored evidence comparison for a workspace. */
-  getEvidenceComparison: (
-    workspaceId: string,
-  ): Promise<EvidenceComparisonResponse> => {
-    return fetchJson(
-      buildUrl(`/workspaces/${workspaceId}/evidence-comparison`),
-    );
   },
 
   // ------------------------------------------------------------------

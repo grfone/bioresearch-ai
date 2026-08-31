@@ -36,6 +36,8 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.exceptions import IllegalWorkspaceActionError
+
 
 # ---------------------------------------------------------------------------
 # Shared in-memory state
@@ -119,13 +121,16 @@ def _make_state() -> tuple[Any, Any, dict[UUID, Any]]:
             return session
 
         def compare(self, wid: UUID) -> ResearchSession:
-            session = _get(wid)
-            session.transition_to(WorkspaceAction.COMPARE)
-            session.force_state(
-                WorkspaceState.COMPARED,
-                reason="stub-compare",
+            # COMPARE action removed on 2026-08-30 — see
+            # ``WorkspaceOrchestrator.compare`` for the rationale.
+            # The stub raises the same error so test fixtures
+            # built before the removal still validate the
+            # stub-orchestrator wiring.
+            raise IllegalWorkspaceActionError(
+                current_state="ANY",
+                action="compare",
+                allowed=[],
             )
-            return session
 
         def report(self, wid: UUID) -> ResearchSession:
             session = _get(wid)
@@ -481,7 +486,7 @@ def test_fsm_illegal_state_returns_409(client) -> None:
     where ``ADD_PAPER`` is forbidden) by force. We can't go
     through the orchestrator's normal ``report()`` because
     PAPERS_RETRIEVED → REPORTING requires passing through
-    SUMMARIZED and COMPARED first; force-state is the test
+    SUMMARIZED first; force-state is the test
     seam for that.
     """
     from app.core.enums.workspace_state import WorkspaceState

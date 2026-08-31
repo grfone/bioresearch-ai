@@ -48,11 +48,7 @@ def test_legal_action_transitions() -> None:
         is WorkspaceState.SUMMARIZING
     )
     assert (
-        next_state(WorkspaceState.SUMMARIZED, WorkspaceAction.COMPARE)
-        is WorkspaceState.COMPARING
-    )
-    assert (
-        next_state(WorkspaceState.COMPARED, WorkspaceAction.REPORT)
+        next_state(WorkspaceState.SUMMARIZED, WorkspaceAction.REPORT)
         is WorkspaceState.REPORTING
     )
     assert (
@@ -87,7 +83,6 @@ def test_retry_returns_to_creatable_state() -> None:
 def test_searching_is_transient() -> None:
     assert WorkspaceState.SEARCHING.is_transient
     assert WorkspaceState.SUMMARIZING.is_transient
-    assert WorkspaceState.COMPARING.is_transient
     assert WorkspaceState.REPORTING.is_transient
     assert not WorkspaceState.PAPERS_RETRIEVED.is_transient
 
@@ -190,8 +185,7 @@ def test_progress_anchor_is_monotonic() -> None:
     anchors = [
         (WorkspaceState.CREATED, 0.0),
         (WorkspaceState.PAPERS_RETRIEVED, 0.2),
-        (WorkspaceState.SUMMARIZED, 0.45),
-        (WorkspaceState.COMPARED, 0.7),
+        (WorkspaceState.SUMMARIZED, 0.5),
         (WorkspaceState.REPORTED, 0.95),
         (WorkspaceState.COMPLETED, 1.0),
     ]

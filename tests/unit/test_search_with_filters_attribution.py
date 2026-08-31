@@ -26,9 +26,6 @@ from app.domain.entities.research_session import ResearchSession
 from app.domain.interfaces.llm_provider import LLMProvider
 from app.domain.interfaces.literature_searcher import LiteratureSearcher
 from app.domain.interfaces.report_generator import ReportGenerator
-from app.domain.interfaces.comparison_generator import (
-    ComparisonGenerator,
-)
 from app.domain.interfaces.pdf_generator import PDFGenerator
 from app.domain.value_objects.search_filters import SearchFilters
 from app.domain.value_objects.search_result import SearchResult
@@ -100,11 +97,6 @@ class _StubReportGenerator(ReportGenerator):
         raise NotImplementedError
 
 
-class _StubComparisonGenerator(ComparisonGenerator):
-    def generate(self, *args, **kwargs):  # pragma: no cover
-        raise NotImplementedError
-
-
 class _StubPDFGenerator(PDFGenerator):
     """Stub PDF generator for orchestrator construction.
 
@@ -163,7 +155,6 @@ def _orchestrator(
         literature_searcher=multi_source,
         llm_provider=_StubLLM(),
         report_generator=_StubReportGenerator(),
-        comparison_generator=_StubComparisonGenerator(),
         pdf_generator=_StubPDFGenerator(),
     )
 

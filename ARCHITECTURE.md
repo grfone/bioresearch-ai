@@ -304,23 +304,31 @@ Only the Infrastructure layer communicates with external APIs.
 
 # Finite State Machine
 
-The workspace lifecycle is a deterministic finite state machine (FSM) — every transition is enumerated in `app/core/enums/workspace_state.py`. Illegal actions are rejected with HTTP 409 and the list of legal next actions. See [ADR-009](docs/adr/ADR-009-publishing-state.md) for the four-layer audit pattern used to add new actions.
+The workspace lifecycle is a deterministic finite state machine (FSM) — every transition is enumerated in `app/core/enums/workspace_state.py`. Illegal actions are rejected with HTTP 409 and the list of legal next actions. See [ADR-009](docs/adr/ADR-009-publishing-state.md) for the four-layer audit pattern used to add new actions, and [ADR-016](docs/adr/ADR-016-remove-compared-state.md) for the recent simplification (dropping the COMPARING/COMPARED intermediate states).
 
 ```
-CREATED ──search──▶ SEARCHING ──▶ PAPERS_RETRIEVED ──report──▶ REPORTING ──▶ REPORTED
-                                          │                                          │
-                                          ├─compare──▶ COMPARING ──▶ COMPARED ───────┘
-                                          │
-                                          └─summarize──▶ SUMMARIZING ──▶ SUMMARIZED ──report──▶ REPORTING ──▶ REPORTED
-
-REPORTED ──publish──▶ PUBLISHING ──(force_state)──▶ COMPLETED
+CREATED ──search──▶ SEARCHING ──▶ PAPERS_RETRIEVED
                                   │
-                                  └─ renders PDF (reportlab)
-                                  └─ persists on session (PublishedReport)
-                                  └─ serves via GET /workspaces/{id}/published-report.pdf
+                                  ├─summarize──▶ SUMMARIZING ──▶ SUMMARIZED
+                                  │
+                                  └─report (one-click)─▶ REPORTING ──▶ REPORTED ──publish──▶ PUBLISHING ──▶ COMPLETED
+                                              (auto-summarises
+                                               if needed — ADR-008)
 ```
 
-`PUBLISHING` is transient — added to `_TRANSIENT_STATES` so the workspace-status strip treats it like `SEARCHING` or `REPORTING`. The user only sees `COMPLETED` once the network round-trip resolves.
+The FSM is **linear** since 2026-08-30 (ADR-016). Eleven states
+collapsed to nine; the cross-paper evidence-comparison
+intermediate (COMPARING → COMPARED) was removed because the
+report generator never consumed the comparison as input.
+From `SUMMARIZED` the next action is `report`; from
+`PAPERS_RETRIEVED` the user can also jump straight to `report`
+because the orchestrator auto-summarises (ADR-008).
+
+`REPORTING` and `PUBLISHING` are transient — listed in
+`_TRANSIENT_STATES` so the workspace-status strip treats them
+like `SEARCHING` or `SUMMARIZING`. The user only sees the next
+durable state (`REPORTED` or `COMPLETED`) once the network
+round-trip resolves.
 
 Every state transition records a `StateTransition` with `(action, reason)` for the audit trail. The four-layer audit pattern (FSM table → orchestrator → structural → frontend wire-format) is the standing recipe for any new FSM action.
 

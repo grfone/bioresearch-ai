@@ -623,5 +623,5 @@ def test_pre_v5_database_reads_as_no_last_error_at(tmp_path) -> None:
             row[1]
             for row in conn.execute("PRAGMA table_info(workspaces)").fetchall()
         ]
-    assert version == 6
+    assert version == 7
     assert "last_error_at" in cols

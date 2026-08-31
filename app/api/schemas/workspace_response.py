@@ -131,7 +131,6 @@ class WorkspaceResponse(BaseModel):
             "CREATED",
             "PAPERS_RETRIEVED",
             "SUMMARIZED",
-            "COMPARED",
             "REPORTED",
             "COMPLETED",
         ],
@@ -198,11 +197,6 @@ class WorkspaceResponse(BaseModel):
     summary: str | None = Field(
         default=None,
         description="Current evidence synthesis."
-    )
-
-    has_evidence_comparison: bool = Field(
-        default=False,
-        description="Whether a cross-paper evidence comparison exists.",
     )
 
     report_available: bool = Field(
@@ -378,11 +372,6 @@ class WorkspaceResponse(BaseModel):
         elif isinstance(summary, str):
             summary_text = summary
 
-        # Evidence comparison
-        has_evidence_comparison = bool(
-            getattr(session, "evidence_comparison", None)
-        )
-
         # Report availability
         report = getattr(session, "report", None)
         report_available = report is not None
@@ -430,7 +419,6 @@ class WorkspaceResponse(BaseModel):
             papers=paper_responses,
             total_papers=total_papers,
             summary=summary_text,
-            has_evidence_comparison=has_evidence_comparison,
             report_available=report_available,
             published_report_available=published_report_available,
             created_at=created_at,

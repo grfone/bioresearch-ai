@@ -27,12 +27,6 @@ research workflow:
         │
         ▼
     SUMMARIZED
-        │  compare_evidence
-        ▼
-    COMPARING    (transient)
-        │
-        ▼
-    COMPARED
         │  generate_report
         ▼
     REPORTING    (transient)
@@ -47,13 +41,23 @@ research workflow:
 ERROR is reachable from any non-terminal state and can be returned
 from ERROR to the previous state on retry.
 
+Note
+----
+This is a **linear** workflow: search → summarise → report → done.
+The previous cross-paper COMPARING/COMPARED intermediate states
+were removed on 2026-08-30 because (a) the report generator does
+not consume the evidence comparison as input -- it works from the
+summary alone -- and (b) the COMPARE-only panel had no users after
+the REPORT action was bundled to auto-summarise (see ADR-008).
+Removing the COMPARED state shortens the lifecycle from eleven to
+nine states without losing any user-visible capability.
+
 Author
 ------
 Guillermo Ramajo Fernández
 """
 
 from __future__ import annotations
-
 from enum import Enum
 
 
@@ -80,13 +84,7 @@ class WorkspaceState(str, Enum):
         Evidence summarisation is in flight. Transient.
 
     SUMMARIZED
-        Evidence summary exists. No cross-paper comparison yet.
-
-    COMPARING
-        Cross-paper evidence comparison is in flight. Transient.
-
-    COMPARED
-        Cross-paper comparison exists. No final report yet.
+        Evidence summary exists. No final report yet.
 
     REPORTING
         Final report generation is in flight. Transient.
@@ -116,8 +114,6 @@ class WorkspaceState(str, Enum):
     PAPERS_RETRIEVED = "PAPERS_RETRIEVED"
     SUMMARIZING = "SUMMARIZING"
     SUMMARIZED = "SUMMARIZED"
-    COMPARING = "COMPARING"
-    COMPARED = "COMPARED"
     REPORTING = "REPORTING"
     REPORTED = "REPORTED"
     PUBLISHING = "PUBLISHING"
@@ -129,7 +125,7 @@ class WorkspaceState(str, Enum):
         """
         Whether the state represents an in-flight operation.
 
-        Transient states (SEARCHING, SUMMARIZING, COMPARING, REPORTING)
+        Transient states (SEARCHING, SUMMARIZING, REPORTING)
         are not durable end states. They describe the system while an
         external request is running.
 
@@ -157,7 +153,6 @@ _TRANSIENT_STATES: frozenset[WorkspaceState] = frozenset(
     {
         WorkspaceState.SEARCHING,
         WorkspaceState.SUMMARIZING,
-        WorkspaceState.COMPARING,
         WorkspaceState.REPORTING,
         WorkspaceState.PUBLISHING,
     }
@@ -189,10 +184,6 @@ class WorkspaceAction(str, Enum):
     SUMMARIZE
         Synthesise the current papers into an evidence summary.
 
-    COMPARE
-        Cross-paper evidence comparison (consensus, contradictions,
-        gaps, future directions).
-
     REPORT
         Generate the final structured research report.
 
@@ -222,7 +213,6 @@ class WorkspaceAction(str, Enum):
 
     SEARCH = "search"
     SUMMARIZE = "summarize"
-    COMPARE = "compare"
     REPORT = "report"
     COMPLETE = "complete"
     PUBLISH = "publish"
@@ -273,28 +263,15 @@ TRANSITIONS: dict[WorkspaceState, dict[WorkspaceAction, WorkspaceState]] = {
     WorkspaceState.SUMMARIZED: {
         WorkspaceAction.SUMMARIZE: WorkspaceState.SUMMARIZING,
         WorkspaceAction.SEARCH: WorkspaceState.SEARCHING,
-        WorkspaceAction.COMPARE: WorkspaceState.COMPARING,
         WorkspaceAction.REPORT: WorkspaceState.REPORTING,
         WorkspaceAction.ADD_PAPER: WorkspaceState.SUMMARIZED,
         WorkspaceAction.REMOVE_PAPER: WorkspaceState.SUMMARIZED,
     },
-    WorkspaceState.COMPARING: {
-        WorkspaceAction.RETRY: WorkspaceState.SUMMARIZED,
-    },
-    WorkspaceState.COMPARED: {
-        WorkspaceAction.COMPARE: WorkspaceState.COMPARING,
-        WorkspaceAction.SUMMARIZE: WorkspaceState.SUMMARIZING,
-        WorkspaceAction.SEARCH: WorkspaceState.SEARCHING,
-        WorkspaceAction.REPORT: WorkspaceState.REPORTING,
-        WorkspaceAction.ADD_PAPER: WorkspaceState.COMPARED,
-        WorkspaceAction.REMOVE_PAPER: WorkspaceState.COMPARED,
-    },
     WorkspaceState.REPORTING: {
-        WorkspaceAction.RETRY: WorkspaceState.COMPARED,
+        WorkspaceAction.RETRY: WorkspaceState.SUMMARIZED,
     },
     WorkspaceState.REPORTED: {
         WorkspaceAction.SUMMARIZE: WorkspaceState.SUMMARIZING,
-        WorkspaceAction.COMPARE: WorkspaceState.COMPARING,
         WorkspaceAction.SEARCH: WorkspaceState.SEARCHING,
         WorkspaceAction.REPORT: WorkspaceState.REPORTING,
         WorkspaceAction.COMPLETE: WorkspaceState.COMPLETED,

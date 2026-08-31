@@ -22,18 +22,25 @@ ValueError when expected entities are not found.
 
 Additive migration
 ------------------
-The schema introduced by the FSM refactor adds four columns:
+The schema introduced by the FSM refactor adds three columns:
 
 - ``state``: the FSM state of the workspace (text).
 - ``state_history``: ordered list of state transitions (JSON).
-- ``evidence_comparison``: serialised EvidenceComparison (JSON).
-- ``evidence_matrix``: serialised EvidenceMatrix (JSON).
+- ``published_report``: serialised PDF bytes (JSON, v3+).
+- ``last_error``: human-readable error string for ERROR-state
+  workspaces (v4+).
+- ``last_error_at``: UTC timestamp paired with ``last_error`` (v5+).
+
+The v7 migration (2026-08-30) DROPs the previously-added
+``evidence_comparison`` column because the cross-paper
+comparison state was removed from the FSM (see ADR for details).
 
 Existing rows are upgraded on read by the ``_row_to_workspace``
 helper: the inferred state is computed from the row's existing
 fields (workspaces with a report are REPORTED, with a summary are
 SUMMARIZED, with papers are PAPERS_RETRIEVED, otherwise CREATED).
 This keeps the migration fully backward compatible.
+
 
 Architecture
 ------------
@@ -60,9 +67,6 @@ from uuid import UUID
 
 from app.core.enums.workspace_state import WorkspaceState
 from app.core.enums.citation_style import CitationStyleEnum
-from app.domain.entities.evidence_comparison import EvidenceComparison
-from app.domain.entities.evidence_matrix import EvidenceMatrix, MatrixCell
-from app.domain.entities.finding import Contradiction, Finding
 from app.domain.entities.author import Author
 from app.domain.entities.citation import Citation
 from app.domain.entities.journal import Journal
@@ -159,7 +163,7 @@ def _rewrite_legacy_summary_in_blob(blob: dict) -> bool:
 # Schema constants
 # ---------------------------------------------------------------------------
 
-LATEST_SCHEMA_VERSION = 6
+LATEST_SCHEMA_VERSION = 7
 
 
 # Columns that were added in each schema version. The repository
@@ -244,6 +248,21 @@ _V5_COLUMNS = (
 _V6_DATA_MIGRATION = (
     "summary_text_to_body",
 )
+# v7: drop ``evidence_comparison`` column.
+#
+# The COMPARING/COMPARED FSM states and the cross-paper
+# ``EvidenceComparison`` entity were removed on 2026-08-30.
+# The persisted column is now dead weight. SQLite supports
+# ``ALTER TABLE ... DROP COLUMN`` since 3.35 (2021); the
+# Docker image (Debian Bookworm, libsqlite3 3.40+) supports
+# it. The migration is idempotent: if the column is already
+# gone (fresh installs on this version, or operator-removed
+# by hand), the ``PRAGMA table_info`` check below skips the
+# DROP. Existing rows simply lose the JSON blob, which is
+# content we no longer read.
+_V7_DROP_COLUMNS = (
+    "evidence_comparison",
+)
 
 
 class SqliteWorkspaceRepository(WorkspaceRepository):
@@ -298,7 +317,7 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         # v6 in-place data migration: rewrite every legacy
         # Summary blob (``{"text": ...}``) to the new
         # ``{"body": ...}`` shape. This is wired into the
-        # schema-version flow (``LATEST_SCHEMA_VERSION = 6``)
+        # schema-version flow (``LATEST_SCHEMA_VERSION = 7``)
         # so the schema-version pragma tracks whether data
         # migration has run, not just whether columns are
         # up to date.
@@ -373,7 +392,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     updated_at TEXT NOT NULL,
                     state TEXT NOT NULL DEFAULT 'CREATED',
                     state_history TEXT,
-                    evidence_comparison TEXT,
                     published_report TEXT,
                     last_error TEXT,
                     last_error_at TEXT
@@ -454,6 +472,25 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                 cursor.execute(
                     f"ALTER TABLE workspaces ADD COLUMN {column_name} {column_def}"
                 )
+
+        # v7: drop the ``evidence_comparison`` column. See
+        # ``_V7_DROP_COLUMNS`` for the rationale. We re-read
+        # ``table_info`` here because we want a fresh view
+        # after the earlier ALTER TABLE calls. The
+        # ``IF EXISTS`` clause keeps this idempotent for
+        # databases that started life on v7.
+        if current < 7:
+            current_columns = {
+                row[1]
+                for row in cursor.execute(
+                    "PRAGMA table_info(workspaces)"
+                ).fetchall()
+            }
+            for column_name in _V7_DROP_COLUMNS:
+                if column_name in current_columns:
+                    cursor.execute(
+                        f"ALTER TABLE workspaces DROP COLUMN {column_name}"
+                    )
 
         # Bump the schema version -- this happens BEFORE v6
         # because v6 is a (potentially slow) data rewrite
@@ -617,9 +654,9 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                 INSERT OR REPLACE INTO workspaces (
                     id, question, papers, summary, report, notes,
                     metadata, created_at, updated_at,
-                    state, state_history, evidence_comparison,
+                    state, state_history,
                     published_report, last_error, last_error_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(workspace.id),
@@ -633,7 +670,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                     workspace.updated_at.isoformat(),
                     workspace.state.value,
                     self._serialize_state_history(workspace.state_history),
-                    self._serialize_evidence_comparison(workspace.evidence_comparison),
                     self._serialize_published_report(
                         workspace.published_report
                     ),
@@ -803,64 +839,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         ]
         return json.dumps(items)
 
-    def _serialize_evidence_comparison(
-        self,
-        comparison: Optional[EvidenceComparison],
-    ) -> Optional[str]:
-        if comparison is None:
-            return "null"
-        return json.dumps(
-            {
-                "consensus": [
-                    {
-                        "claim": f.claim,
-                        "paper_ids": f.paper_ids,
-                        "evidence_strength": f.evidence_strength,
-                        "notes": f.notes,
-                    }
-                    for f in comparison.consensus
-                ],
-                "contradictions": [
-                    {
-                        "topic": c.topic,
-                        "description": c.description,
-                        "paper_ids": c.paper_ids,
-                        "severity": c.severity,
-                    }
-                    for c in comparison.contradictions
-                ],
-                "research_gaps": comparison.research_gaps,
-                "future_directions": comparison.future_directions,
-                "used_paper_ids": comparison.used_paper_ids,
-                "matrix": self._matrix_to_dict(comparison.matrix),
-                "metadata": comparison.metadata,
-            }
-        )
-
-    def _serialize_evidence_matrix(
-        self,
-        matrix: Optional[EvidenceMatrix],
-    ) -> Optional[str]:
-        if matrix is None:
-            return "null"
-        return json.dumps(self._matrix_to_dict(matrix))
-
-    @staticmethod
-    def _matrix_to_dict(matrix: Optional[EvidenceMatrix]) -> Optional[Dict[str, Any]]:
-        if matrix is None:
-            return None
-        return {
-            "columns": matrix.columns,
-            "rows": [
-                {
-                    "paper_id": cell.paper_id,
-                    **cell.facets,
-                }
-                for cell in matrix.rows
-            ],
-            "used_paper_ids": matrix.used_paper_ids,
-        }
-
     # ------------------------------------------------------------------
     # Deserialisation
     # ------------------------------------------------------------------
@@ -881,12 +859,12 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
     def _row_to_dict(self, row: tuple) -> Dict[str, Any]:
         # Some columns may be missing in older database files; pad
         # the row defensively so the deserialiser is forward
-        # compatible. The actual schema has 15 columns (after
-        # the v5 ``last_error_at`` migration); we pad to 16 so the
-        # legacy ``padded[12] = evidence_matrix`` placeholder
-        # slot stays ``None`` without raising IndexError.
+        # compatible. The current schema has 14 columns
+        # (after the v7 ``DROP evidence_comparison`` migration);
+        # we pad to 15 so a database that started life on v5
+        # (no last_error_at, 13 columns) still deserialises.
         #
-        # Index map (after v5 migration):
+        # Index map (after v7 migration):
         #   0  id
         #   1  question
         #   2  papers
@@ -898,19 +876,28 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         #   8  updated_at
         #   9  state
         #   10 state_history
-        #   11 evidence_comparison
-        #   12 published_report       (v3 column; the legacy
-        #                             evidence_matrix placeholder
-        #                             never had a real column)
-        #   13 last_error             (v4 column)
-        #   14 last_error_at          (v5 column)
+        #   11 published_report       (v3 column)
+        #   12 last_error             (v4 column)
+        #   13 last_error_at          (v5 column)
         #
-        # Pre-v4 databases have 13 columns (no last_error) so
-        # ``padded[13]`` and ``padded[14]`` both resolve to the
-        # padding ``None`` -- the deserialiser treats both as
-        # "no error". Pre-v5 databases have 14 columns so only
-        # ``padded[14]`` resolves to the padding ``None``.
-        padded: list[Any] = list(row) + [None] * (16 - len(row))
+        # Pre-v4 databases have 12 columns (no last_error); the
+        # padding fills ``padded[12]`` and ``padded[13]`` with
+        # ``None`` -- both map to "no error".
+        # Pre-v5 databases have 13 columns so only ``padded[13]``
+        # resolves to the padding ``None``.
+        #
+        # Note: pre-v7 databases had an ``evidence_comparison``
+        # column at index 11, which the v7 migration drops on
+        # connect. The deserialiser no longer reads that index
+        # at all -- the field is gone from the entity and the
+        # API response. Workspaces that were in COMPARING/COMPARED
+        # when the operator upgraded are "elevated" via
+        # ``_infer_state`` (the raw ``COMPARING``/``COMPARED``
+        # enum value raises ``ValueError`` and the workspace
+        # falls back to data-driven inference -- typically
+        # REPORTED because the comparison was always followed by
+        # a report).
+        padded: list[Any] = list(row) + [None] * (15 - len(row))
         return {
             "id": padded[0],
             "question": padded[1],
@@ -923,31 +910,22 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             "updated_at": padded[8],
             "state": padded[9],
             "state_history": padded[10],
-            "evidence_comparison": padded[11],
-            # ``evidence_matrix`` was historically referenced
-            # as ``padded[12]`` even though no schema column
-            # existed; the legacy padding kept that index
-            # valid. We keep the field as ``None`` here so any
-            # downstream code that still reads it doesn't
-            # crash on a missing key.
-            "evidence_matrix": None,
-            # v3: PUBLISH action support. The PDF blob is
-            # at index 12 (the slot the legacy code imagined
-            # was evidence_matrix). For databases that never
-            # ran the v3 migration this will be ``None``,
-            # which the deserialiser turns into
-            # ``PublishedReport | None`` on the session.
-            "published_report": padded[12],
-            # v4: ``last_error`` persistence. Index 13, so
+            # v3: PUBLISH action support. The PDF blob is at
+            # index 11 (post-v7). Pre-v7 databases had
+            # ``evidence_comparison`` here -- the v7 DROP
+            # COLUMN migration shifted published_report from
+            # index 12 to index 11 on connect.
+            "published_report": padded[11],
+            # v4: ``last_error`` persistence. Index 12, so
             # pre-v4 databases (no column here) read as
             # ``None`` -- the existing behaviour (no
             # ``last_error`` exposed in the API response).
-            "last_error": padded[13],
+            "last_error": padded[12],
             # v5: ``last_error_at`` (ISO-8601 text or None).
-            # Index 14, so pre-v5 databases (no column here)
+            # Index 13, so pre-v5 databases (no column here)
             # read as ``None`` -- matching the v4 padding
             # behaviour for the error string itself.
-            "last_error_at": padded[14],
+            "last_error_at": padded[13],
         }
 
     def _dict_to_workspace(self, row_dict: Dict[str, Any]) -> ResearchSession:
@@ -976,10 +954,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         state = self._infer_state(row_dict, papers, summary, report)
         state_history = self._deserialize_state_history(
             row_dict.get("state_history"), state
-        )
-        evidence_comparison = self._deserialize_evidence_comparison(
-            row_dict.get("evidence_comparison"),
-            row_dict.get("evidence_matrix"),
         )
 
         # v3: PublishedReport. The column is nullable so we
@@ -1023,7 +997,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             state=state,
             papers=papers,
             summary=summary,
-            evidence_comparison=evidence_comparison,
             report=report,
             notes=notes,
             state_history=state_history,
@@ -1216,81 +1189,6 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
                 )
             ]
         return history
-
-    def _deserialize_evidence_comparison(
-        self,
-        comparison_json: Optional[str],
-        matrix_json: Optional[str],
-    ) -> Optional[EvidenceComparison]:
-        if not comparison_json or comparison_json == "null":
-            return None
-        data = json.loads(comparison_json)
-        consensus = [
-            Finding(
-                claim=f["claim"],
-                paper_ids=f.get("paper_ids", []),
-                evidence_strength=f.get("evidence_strength"),
-                notes=f.get("notes"),
-            )
-            for f in data.get("consensus", [])
-        ]
-        contradictions = [
-            Contradiction(
-                topic=c["topic"],
-                description=c["description"],
-                paper_ids=c.get("paper_ids", []),
-                severity=c.get("severity"),
-            )
-            for c in data.get("contradictions", [])
-        ]
-        matrix = self._deserialize_matrix(
-            data.get("matrix") if data.get("matrix") else matrix_json
-        )
-        return EvidenceComparison(
-            consensus=consensus,
-            contradictions=contradictions,
-            research_gaps=data.get("research_gaps", []),
-            future_directions=data.get("future_directions", []),
-            used_paper_ids=data.get("used_paper_ids", []),
-            matrix=matrix,
-            metadata=data.get("metadata", {}),
-        )
-
-    def _deserialize_matrix(
-        self,
-        matrix_payload: Optional[Any],
-    ) -> Optional[EvidenceMatrix]:
-        if not matrix_payload:
-            return None
-        if isinstance(matrix_payload, str):
-            if matrix_payload == "null":
-                return None
-            matrix_payload = json.loads(matrix_payload)
-        if not isinstance(matrix_payload, dict):
-            return None
-        columns = [str(c) for c in matrix_payload.get("columns", [])]
-        rows: List[MatrixCell] = []
-        for row in matrix_payload.get("rows", []):
-            if not isinstance(row, dict):
-                continue
-            paper_id = str(
-                row.get("paper_id") or row.get("pmid") or row.get("doi") or ""
-            )
-            if not paper_id:
-                continue
-            facets = {
-                str(k): str(v)
-                for k, v in row.items()
-                if k not in {"paper_id", "pmid", "doi"} and v is not None
-            }
-            rows.append(MatrixCell(paper_id=paper_id, facets=facets))
-        if not rows and not columns:
-            return None
-        return EvidenceMatrix(
-            columns=columns,
-            rows=rows,
-            used_paper_ids=[cell.paper_id for cell in rows],
-        )
 
     # ------------------------------------------------------------------
     # State inference for legacy rows

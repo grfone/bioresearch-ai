@@ -8,12 +8,7 @@
  * defined in `workspace_request.py` and `workspace_response.py`.
  *
  * A Workspace represents the persistent state of a biomedical investigation,
- * including the research question, retrieved papers, summaries, comparison,
- * and reports.
- *
- * The Workspace object now exposes the FSM lifecycle fields:
- * - `state`, `allowed_actions`, `progress`, `state_history`, `last_error`,
- *   `has_evidence_comparison`.
+ * including the research question, retrieved papers, summaries, and reports.
  *
  * @module models/workspace
  */
@@ -33,8 +28,12 @@ export interface WorkspaceRequest {
  *
  * The state is the authoritative source of truth for "what can happen
  * next". The label is the enum value serialised by the backend FSM
- * (e.g. "CREATED", "PAPERS_RETRIEVED", "SUMMARIZED", "COMPARED",
- * "REPORTED", "COMPLETED", "ERROR").
+ * (e.g. "CREATED", "PAPERS_RETRIEVED", "SUMMARIZED", "REPORTED",
+ * "COMPLETED", "ERROR").
+ *
+ * Note: the cross-paper COMPARING/COMPARED intermediate states were
+ * removed on 2026-08-30 — the FSM is now linear: search → summarise
+ * → report → done.
  */
 export type WorkspaceState =
   | 'CREATED'
@@ -42,10 +41,9 @@ export type WorkspaceState =
   | 'PAPERS_RETRIEVED'
   | 'SUMMARIZING'
   | 'SUMMARIZED'
-  | 'COMPARING'
-  | 'COMPARED'
   | 'REPORTING'
   | 'REPORTED'
+  | 'PUBLISHING'
   | 'COMPLETED'
   | 'ERROR';
 
@@ -54,11 +52,12 @@ export type WorkspaceState =
  *
  * The UI uses these verbs to call the orchestrator. The backend
  * rejects illegal actions with HTTP 409.
+ *
+ * Note: the COMPARE action was removed on 2026-08-30.
  */
 export type WorkspaceAction =
   | 'search'
   | 'summarize'
-  | 'compare'
   | 'report'
   | 'complete'
   | 'publish'
@@ -115,9 +114,13 @@ export interface WorkspaceResponse {
   total_papers: number;
   /** Evidence summary generated from the papers, if available */
   summary: string | null;
-  /** Whether a cross-paper evidence comparison exists */
-  has_evidence_comparison: boolean;
-  /** Whether a final research report has been generated */
+  /**
+   * Whether a final research report has been generated.
+   *
+   * Note: ``has_evidence_comparison`` was retired on 2026-08-30
+   * alongside the COMPARE action. The cross-paper comparison is
+   * no longer a distinct FSM step.
+   */
   report_available: boolean;
   /** Whether a PDF has been rendered for download by the PUBLISH
    * action. Independent of ``report_available``: a workspace may
@@ -168,13 +171,6 @@ export function hasPapers(workspace: WorkspaceResponse): boolean {
  */
 export function hasSummary(workspace: WorkspaceResponse): boolean {
   return !!workspace.summary && workspace.summary.trim().length > 0;
-}
-
-/**
- * Type guard to check if a workspace has an evidence comparison.
- */
-export function hasEvidenceComparison(workspace: WorkspaceResponse): boolean {
-  return workspace.has_evidence_comparison;
 }
 
 /**

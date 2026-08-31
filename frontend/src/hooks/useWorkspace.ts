@@ -33,9 +33,6 @@ import type {
   WorkspaceRequest,
   WorkspaceStatusResponse,
 } from '../models/workspace';
-import type {
-  EvidenceComparisonResponse,
-} from '../models/comparison';
 import type { ReportRequest, ReportResponse } from '../models/report';
 import { useWorkspaceStore } from '../state/workspaceStore';
 
@@ -110,8 +107,6 @@ interface UseWorkspaceResult {
   ) => Promise<WorkspaceResponse | ReportResponse>;
   /** Fetch the FSM status (state, allowed_actions, history). */
   fetchTransitions: () => Promise<WorkspaceStatusResponse>;
-  /** Fetch the stored evidence comparison. */
-  fetchEvidenceComparison: () => Promise<EvidenceComparisonResponse>;
   /**
    * Generate a report for the workspace.
    *
@@ -271,9 +266,6 @@ export function useWorkspace(
           case 'summarize':
             data = await api.runSummarizeAction(workspaceId);
             break;
-          case 'compare':
-            data = await api.runCompareAction(workspaceId);
-            break;
           case 'complete':
             data = await api.runCompleteAction(workspaceId);
             break;
@@ -313,14 +305,6 @@ export function useWorkspace(
       throw new Error('No workspace ID available.');
     }
     return api.getTransitions(workspaceId);
-  }, [workspaceId]);
-
-  // Fetch the stored evidence comparison.
-  const fetchEvidenceComparison = useCallback(async () => {
-    if (!workspaceId) {
-      throw new Error('No workspace ID available.');
-    }
-    return api.getEvidenceComparison(workspaceId);
   }, [workspaceId]);
 
   // Generate report (legacy — kept for the existing Report page).
@@ -363,7 +347,6 @@ export function useWorkspace(
     searchAndAddPapers,
     runAction,
     fetchTransitions,
-    fetchEvidenceComparison,
     generateReport,
   };
 }

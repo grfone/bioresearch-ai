@@ -114,7 +114,6 @@ function nextAllowedActions(
 ): Array<
   | 'search'
   | 'summarize'
-  | 'compare'
   | 'report'
   | 'complete'
   | 'retry'
@@ -127,8 +126,6 @@ function nextAllowedActions(
     case 'PAPERS_RETRIEVED':
       return ['add_paper', 'remove_paper', 'search', 'summarize'];
     case 'SUMMARIZED':
-      return ['add_paper', 'compare', 'remove_paper', 'search'];
-    case 'COMPARED':
       return ['add_paper', 'remove_paper', 'report', 'search'];
     case 'REPORTED':
       return ['complete', 'remove_paper', 'search'];

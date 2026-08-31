@@ -50,7 +50,6 @@ from app.core.enums.workspace_state import (
     next_state as _next_state,
 )
 from app.core.exceptions import IllegalWorkspaceActionError
-from app.domain.entities.evidence_comparison import EvidenceComparison
 from app.domain.entities.paper import Paper
 from app.domain.entities.research_question import ResearchQuestion
 from app.domain.entities.research_report import ResearchReport
@@ -143,9 +142,6 @@ class ResearchSession:
     summary : Summary | None
         Synthesized evidence generated from the retrieved papers.
 
-    evidence_comparison : EvidenceComparison | None
-        Cross-paper comparison produced after summarization.
-
     report : ResearchReport | None
         Final structured report generated from the evidence.
 
@@ -209,8 +205,6 @@ class ResearchSession:
 
     summary: Summary | None = None
 
-    evidence_comparison: EvidenceComparison | None = None
-
     report: ResearchReport | None = None
 
     published_report: "PublishedReport | None" = None
@@ -260,11 +254,6 @@ class ResearchSession:
         return self.summary is not None
 
     @property
-    def has_evidence_comparison(self) -> bool:
-        """Whether a cross-paper evidence comparison exists."""
-        return self.evidence_comparison is not None
-
-    @property
     def has_report(self) -> bool:
         """Whether a final research report has been generated."""
         return self.report is not None
@@ -302,9 +291,7 @@ class ResearchSession:
             WorkspaceState.SEARCHING: 0.1,
             WorkspaceState.PAPERS_RETRIEVED: 0.2,
             WorkspaceState.SUMMARIZING: 0.3,
-            WorkspaceState.SUMMARIZED: 0.45,
-            WorkspaceState.COMPARING: 0.55,
-            WorkspaceState.COMPARED: 0.7,
+            WorkspaceState.SUMMARIZED: 0.5,
             WorkspaceState.REPORTING: 0.8,
             WorkspaceState.REPORTED: 0.95,
             WorkspaceState.COMPLETED: 1.0,
@@ -658,21 +645,6 @@ class ResearchSession:
             AI-generated synthesis of the retrieved literature.
         """
         self.summary = summary
-        self.touch()
-
-    def set_evidence_comparison(
-        self,
-        comparison: EvidenceComparison,
-    ) -> None:
-        """
-        Store the cross-paper evidence comparison.
-
-        Parameters
-        ----------
-        comparison : EvidenceComparison
-            Structured cross-paper synthesis.
-        """
-        self.evidence_comparison = comparison
         self.touch()
 
     def set_report(self, report: ResearchReport) -> None:

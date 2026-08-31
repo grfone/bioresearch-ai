@@ -19,9 +19,6 @@ POST /workspaces/{id}/actions/search
 POST /workspaces/{id}/actions/summarize
     Run the SUMMARIZE action (evidence synthesis).
 
-POST /workspaces/{id}/actions/compare
-    Run the COMPARE action (cross-paper evidence comparison).
-
 POST /workspaces/{id}/actions/report
     Run the REPORT action (final report generation).
 
@@ -44,9 +41,6 @@ GET /workspaces/{id}/transitions
     Return the FSM status of the workspace (state, allowed
     actions, history).
 
-GET /workspaces/{id}/evidence-comparison
-    Return the stored evidence comparison (if any).
-
 Author
 ------
 Guillermo Ramajo Fernández
@@ -68,9 +62,6 @@ from fastapi import (
     status,
 )
 
-from app.api.schemas.evidence_comparison_response import (
-    EvidenceComparisonResponse,
-)
 from app.api.schemas.find_by_title_request import FindByTitleRequest
 from app.api.schemas.paper_request import PaperRequest
 from app.api.schemas.resolve_request import (
@@ -303,26 +294,6 @@ def summarize_action(
 
 
 @router.post(
-    "/{workspace_id}/actions/compare",
-    response_model=WorkspaceResponse,
-    summary="Generate a cross-paper evidence comparison.",
-)
-def compare_action(
-    workspace_id: UUID,
-    orchestrator: WorkspaceOrchestrator = Depends(
-        get_workspace_orchestrator
-    ),
-) -> WorkspaceResponse:
-    """Run the COMPARE action."""
-    return _run_action(
-        orchestrator,
-        workspace_id,
-        WorkspaceAction.COMPARE.value,
-        orchestrator.compare,
-    )
-
-
-@router.post(
     "/{workspace_id}/actions/report",
     response_model=ReportResponse,
     status_code=status.HTTP_201_CREATED,
@@ -544,31 +515,6 @@ def transitions(
 
 
 @router.get(
-    "/{workspace_id}/evidence-comparison",
-    response_model=EvidenceComparisonResponse,
-    summary="Return the stored evidence comparison.",
-)
-def evidence_comparison(
-    workspace_id: UUID,
-    orchestrator: WorkspaceOrchestrator = Depends(
-        get_workspace_orchestrator
-    ),
-) -> EvidenceComparisonResponse:
-    workspace = orchestrator.get_workspace(workspace_id)
-    if workspace.evidence_comparison is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                "No evidence comparison has been generated for this "
-                "workspace. Run the COMPARE action first."
-            ),
-        )
-    return EvidenceComparisonResponse.from_domain(
-        workspace.evidence_comparison
-    )
-
-
-@router.get(
     "/{workspace_id}/published-report.pdf",
     summary="Download the published PDF.",
     responses={
@@ -619,9 +565,7 @@ def published_report_pdf(
     Note
     ----
     This endpoint is *not* part of the FSM action surface -- it
-    doesn't mutate any state. It sits alongside
-    ``GET /workspaces/{id}/evidence-comparison`` which is also
-    a read-only download of stored artefacts.
+    doesn't mutate any state.
     """
     workspace = orchestrator.get_workspace(workspace_id)
     if workspace.published_report is None:

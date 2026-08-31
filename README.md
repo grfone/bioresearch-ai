@@ -470,6 +470,7 @@ We capture every non-trivial architectural decision in an Architecture Decision 
 | [ADR-013](docs/adr/ADR-013-h1-title-fallback.md) | H1 title fallback when the synthesis LLM omits the heading | Accepted |
 | [ADR-014](docs/adr/ADR-014-prometheus-metrics-health-probes.md) | Prometheus `/metrics` exposition + JSON `/health/*` probes | Accepted |
 | [ADR-015](docs/adr/ADR-015-bootstrap-dns-ipv6-retry-auto-fix.md) | Bootstrap DNS + IPv6 retry with opt-in auto-fix | Accepted |
+| [ADR-016](docs/adr/ADR-016-remove-compared-state.md) | Remove the COMPARING/COMPARED FSM states — see ADR for the four-layer audit | Accepted |
 
 Five ADRs are particularly worth reading for new contributors:
 

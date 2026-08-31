@@ -30,6 +30,8 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.exceptions import IllegalWorkspaceActionError
+
 
 # ---------------------------------------------------------------------------
 # Shared in-memory state
@@ -100,13 +102,16 @@ def _make_state():
             return session
 
         def compare(self, wid: UUID) -> ResearchSession:
-            session = _get(wid)
-            session.transition_to(WorkspaceAction.COMPARE)
-            session.force_state(
-                WorkspaceState.COMPARED,
-                reason="stub-compare",
+            # COMPARE action removed on 2026-08-30. The stub
+            # raises the same ``IllegalWorkspaceActionError``
+            # so any test that exercises the COMPARE endpoint
+            # gets a 409 response (FSM-illegal) rather than a
+            # silent success.
+            raise IllegalWorkspaceActionError(
+                current_state="ANY",
+                action="compare",
+                allowed=[],
             )
-            return session
 
         def report(self, wid: UUID) -> ResearchSession:
             session = _get(wid)
@@ -294,13 +299,21 @@ def test_routes_are_registered(app_with_stubs) -> None:
     paths = {r.path for r in app.routes if hasattr(r, "path")}
     assert "/workspaces/{workspace_id}/actions/search" in paths
     assert "/workspaces/{workspace_id}/actions/summarize" in paths
-    assert "/workspaces/{workspace_id}/actions/compare" in paths
+    # ``/actions/compare`` is intentionally NOT a registered
+    # endpoint — the COMPARE action was removed from the FSM
+    # on 2026-08-30. We assert the route is *absent* so any
+    # future refactor that accidentally re-introduces it
+    # fails loudly here.
+    assert "/workspaces/{workspace_id}/actions/compare" not in paths
     assert "/workspaces/{workspace_id}/actions/report" in paths
     assert "/workspaces/{workspace_id}/actions/complete" in paths
     assert "/workspaces/{workspace_id}/actions/publish" in paths
     assert "/workspaces/{workspace_id}/actions/retry" in paths
     assert "/workspaces/{workspace_id}/transitions" in paths
-    assert "/workspaces/{workspace_id}/evidence-comparison" in paths
+    # Same rationale as /actions/compare: the legacy
+    # ``GET /workspaces/{id}/evidence-comparison`` endpoint
+    # was retired alongside the COMPARE action.
+    assert "/workspaces/{workspace_id}/evidence-comparison" not in paths
     # The PDF download companion to PUBLISH -- distinct
     # route, GET method, registered alongside the action
     # surface. Without this assertion, a future refactor
@@ -333,7 +346,8 @@ def test_summarize_action_advances_state(app_with_stubs) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["state"] == "SUMMARIZED"
-    assert "compare" in body["allowed_actions"]
+    # COMPARE was removed from the FSM on 2026-08-30.
+    assert "compare" not in body["allowed_actions"]
     assert "report" in body["allowed_actions"]
 
 
@@ -366,16 +380,32 @@ def test_illegal_action_returns_409(app_with_stubs) -> None:
     assert "complete" not in detail["allowed_actions"]
 
 
-def test_compare_action_endpoint_reachable(app_with_stubs) -> None:
-    """Run summarize then compare — both should advance the state."""
+def test_compare_endpoint_is_retired(app_with_stubs) -> None:
+    """The COMPARE endpoint was retired alongside the FSM action.
+
+    Posting to ``/workspaces/{id}/actions/compare`` returns 405
+    (Method Not Allowed) — the URL doesn't match any registered
+    route because the COMPARE action was removed from the FSM
+    on 2026-08-30. The 405 rather than 404 response is FastAPI's
+    automatic behaviour: it sees the ``/actions/{name}`` URL
+    pattern would be matched by other action endpoints (search,
+    summarize, etc.) but no ``compare`` handler is registered.
+
+    This test documents the retirement. Any future refactor that
+    silently re-introduces the COMPARE endpoint will fail this
+    test.
+    """
     app, _, workspaces = app_with_stubs
     client = TestClient(app)
     wid = next(iter(workspaces))
+    # Bring the workspace to SUMMARIZED so we'd be in the
+    # state from which COMPARE used to be legal.
     r1 = client.post(f"/workspaces/{wid}/actions/summarize")
     assert r1.status_code == 200
+    # The endpoint should now be 405 — the route is gone but
+    # FastAPI still matches the path-pattern prefix.
     r2 = client.post(f"/workspaces/{wid}/actions/compare")
-    assert r2.status_code == 200
-    assert r2.json()["state"] == "COMPARED"
+    assert r2.status_code == 405
 
 
 def test_workspace_response_exposes_workspace_fsm_fields(app_with_stubs) -> None:
@@ -389,8 +419,9 @@ def test_workspace_response_exposes_workspace_fsm_fields(app_with_stubs) -> None
     assert body["state"] == "PAPERS_RETRIEVED"
     assert "allowed_actions" in body
     assert "progress" in body
-    assert "has_evidence_comparison" in body
-    assert body["has_evidence_comparison"] is False
+    # The ``has_evidence_comparison`` field was retired
+    # alongside the COMPARE action on 2026-08-30.
+    assert "has_evidence_comparison" not in body
 
 
 def test_legacy_report_generate_is_wired_to_orchestrator(app_with_stubs) -> None:

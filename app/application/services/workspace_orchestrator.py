@@ -42,7 +42,6 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from app.application.use_cases.compare_evidence import CompareEvidenceUseCase
 from app.application.use_cases.generate_report import GenerateReportUseCase
 from app.application.use_cases.search_literature import SearchLiteratureUseCase
 from app.application.use_cases.summarize_papers import SummarizePapersUseCase
@@ -54,7 +53,6 @@ from app.core.enums.workspace_state import (
     next_state,
 )
 from app.core.exceptions import IllegalWorkspaceActionError
-from app.domain.entities.evidence_comparison import EvidenceComparison
 from app.domain.entities.paper import Paper
 from app.domain.entities.published_report import PublishedReport
 from app.domain.entities.research_question import ResearchQuestion
@@ -143,9 +141,6 @@ class WorkspaceOrchestrator:
     report_generator : ReportGenerator
         Generator used by the REPORT action.
 
-    comparison_generator : ComparisonGenerator
-        Generator used by the COMPARE action.
-
     pdf_generator : PDFGenerator
         Generator used by the PUBLISH action. Renders a
         :class:`ResearchReport` to PDF bytes. Required -- the
@@ -160,13 +155,11 @@ class WorkspaceOrchestrator:
         literature_searcher: LiteratureSearcher,
         llm_provider: LLMProvider,
         report_generator: ReportGenerator,
-        comparison_generator: "ComparisonGenerator",
         pdf_generator: PDFGenerator,
     ) -> None:
         self._repository = workspace_repository
         self._literature_searcher = literature_searcher
         self._report_generator = report_generator
-        self._comparison_generator = comparison_generator
         self._pdf_generator = pdf_generator
 
         # Use cases are constructed here (composition root concern
@@ -177,9 +170,6 @@ class WorkspaceOrchestrator:
         )
         self._summarize_use_case = SummarizePapersUseCase(
             llm_provider=llm_provider,
-        )
-        self._compare_use_case = CompareEvidenceUseCase(
-            comparison_generator=comparison_generator,
         )
         self._generate_report_use_case = GenerateReportUseCase(
             report_generator=report_generator,
@@ -629,42 +619,28 @@ class WorkspaceOrchestrator:
 
     def compare(self, workspace_id: UUID) -> ResearchSession:
         """
-        Run the COMPARE action.
+        COMPARE action — REMOVED on 2026-08-30.
 
-        The workspace is advanced to COMPARING, the cross-paper
-        comparison use case is executed against the workspace's
-        current papers, and the validated result is stored. The
-        final state is COMPARED on success or ERROR on failure.
+        The cross-paper evidence-comparison intermediate state was
+        deleted from the FSM because the report generator does not
+        consume the evidence comparison as input (it works from the
+        summary alone). This stub remains so the public orchestrator
+        surface is unchanged, but it raises
+        ``IllegalWorkspaceActionError`` for any caller — including
+        stale frontend code, abandoned LangGraph nodes, or
+        integration tests that haven't been updated yet.
 
-        Parameters
-        ----------
-        workspace_id : UUID
-            Workspace identifier.
-
-        Returns
-        -------
-        ResearchSession
-            The updated workspace.
+        The method will be deleted in a follow-up commit once the
+        HTTP route handler
+        ``POST /workspaces/{id}/actions/compare``
+        is also removed (see ``app/api/routes/workspace_actions.py``).
         """
-        session = self._repository.get(workspace_id)
-        self._enter_action(session, WorkspaceAction.COMPARE)
-
-        try:
-            comparison: EvidenceComparison = self._compare_use_case.execute(
-                session.question,
-                session.papers,
-            )
-        except Exception as exc:
-            logger.exception("COMPARE failed for workspace %s", workspace_id)
-            self._fail(session, exc)
-            raise
-
-        session.set_evidence_comparison(comparison)
-        session.force_state(
-            WorkspaceState.COMPARED,
-            reason="Comparison validated",
+        del workspace_id  # unused
+        raise IllegalWorkspaceActionError(
+            current_state="ANY",
+            action="compare",
+            allowed=[],
         )
-        return self._repository.update(session)
 
     def report(self, workspace_id: UUID) -> ResearchSession:
         """

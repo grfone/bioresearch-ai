@@ -35,7 +35,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 from app.core.enums.workspace_state import TRANSITIONS, WorkspaceAction, WorkspaceState
-from app.domain.entities.evidence_comparison import EvidenceComparison
 from app.domain.entities.paper import Paper
 from app.domain.entities.research_report import ResearchReport
 from app.domain.entities.research_session import ResearchSession
@@ -81,7 +80,6 @@ class WorkflowState:
     session: ResearchSession
     last_papers: Optional[list[Paper]] = None
     last_summary: Optional[Summary] = None
-    last_comparison: Optional[EvidenceComparison] = None
     last_report: Optional[ResearchReport] = None
     error: Optional[str] = None
 
@@ -144,11 +142,6 @@ def build_research_workflow():
             state.session.set_summary(state.last_summary)
         return state
 
-    def compare_node(state: WorkflowState) -> WorkflowState:
-        if state.last_comparison is not None:
-            state.session.set_evidence_comparison(state.last_comparison)
-        return state
-
     def report_node(state: WorkflowState) -> WorkflowState:
         if state.last_report is not None:
             state.session.set_report(state.last_report)
@@ -160,38 +153,30 @@ def build_research_workflow():
 
     graph.add_node("search", search_node)
     graph.add_node("summarize", summarize_node)
-    graph.add_node("compare", compare_node)
     graph.add_node("report", report_node)
 
-    # Linear happy path: search → summarize → compare → report → done.
+    # Linear happy path: search → summarize → report → done.
     graph.add_edge(START, "search")
     graph.add_edge("search", "summarize")
-    graph.add_edge("summarize", "compare")
-    graph.add_edge("compare", "report")
+    graph.add_edge("summarize", "report")
     graph.add_edge("report", END)
 
     # ------------------------------------------------------------------
     # Conditional skips
     # ------------------------------------------------------------------
-    # The FSM allows skipping summarise or compare (e.g. going
-    # directly from PAPERS_RETRIEVED to REPORTING). The graph
-    # honours this by adding conditional edges that read the
-    # workspace state and skip ahead when the step is already
-    # satisfied.
+    # The FSM allows skipping summarise (e.g. going directly from
+    # PAPERS_RETRIEVED to REPORTING — see ADR-008). The graph
+    # is left as a linear happy-path here; the orchestrator is
+    # the authoritative driver today. The graph is exposed for
+    # documentation and for future checkpointing.
 
     def _after_search(state: WorkflowState) -> str:
-        if state.session.summary is not None:
-            return "summarize"
         return "summarize"
 
     def _after_summarize(state: WorkflowState) -> str:
-        if state.session.evidence_comparison is not None:
-            return "compare"
-        return "compare"
+        return "report"
 
-    def _after_compare(state: WorkflowState) -> str:
-        if state.session.report is not None:
-            return "report"
+    def _after_report(state: WorkflowState) -> str:
         return "report"
 
     # The graph above is the linear version. The conditional version
