@@ -107,12 +107,17 @@ with HTTP 409 + the list of legal alternatives.
 The full state machine:
 
 ```text
-CREATED ──search──▶ SEARCHING ──▶ PAPERS_RETRIEVED ──report──▶ REPORTING ──▶ REPORTED ──complete──▶ COMPLETED
-                      │
-                      └─compare──▶ COMPARED ──report──▶ REPORTING ──▶ REPORTED
+CREATED ──search──▶ SEARCHING ──▶ PAPERS_RETRIEVED
+                                  │
+                                  ├─summarize──▶ SUMMARIZING ──▶ SUMMARIZED
+                                  │
+                                  └─report (one-click, auto-summarises)
+                                                  │
+                                                  ▼
+                                              REPORTING ──▶ REPORTED ──publish──▶ PUBLISHING ──▶ COMPLETED
 ```
 
-The FSM is documented in [`app/core/enums/workspace_state.py`](app/core/enums/workspace_state.py) and the orchestrator in [`WorkspaceOrchestrator.report()`](app/application/services/workspace_orchestrator.py). The frontend mirrors the FSM state in its lab-bench UI: enabled buttons depend on `workspace.allowed_actions`, which is the legal-next-actions list for the current state.
+The FSM is **linear** since 2026-08-30 (see [ADR-016](docs/adr/ADR-016-remove-compared-state.md)): eleven states collapsed to nine, with the cross-paper evidence-comparison intermediate removed because the report generator never consumed the comparison as input. The FSM is documented in [`app/core/enums/workspace_state.py`](app/core/enums/workspace_state.py) and the orchestrator in [`WorkspaceOrchestrator.report()`](app/application/services/workspace_orchestrator.py). The frontend mirrors the FSM state in its lab-bench UI: enabled buttons depend on `workspace.allowed_actions`, which is the legal-next-actions list for the current state.
 
 See [ADR-008](docs/adr/ADR-008-one-click-report-from-papers-retrieved.md) for why the FSM was lifted from a hard-coded `summary-first` workflow to a one-click "any papers -> report" pipeline.
 

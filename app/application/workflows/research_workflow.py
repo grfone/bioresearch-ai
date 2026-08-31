@@ -67,9 +67,6 @@ class WorkflowState:
     last_summary : Summary | None
         Summary returned by the most recent SUMMARIZE node.
 
-    last_comparison : EvidenceComparison | None
-        Comparison returned by the most recent COMPARE node.
-
     last_report : ResearchReport | None
         Report returned by the most recent REPORT node.
 

@@ -77,8 +77,7 @@ app/
 ├── application/
 │   ├── agents/                 # LangGraph research-pipeline agents
 │   ├── prompts/
-│   │   ├── __init__.py
-│   │   └── comparison_prompt
+│   │   └── __init__.py
 │   │
 │   ├── services/
 │   │   ├── __init__.py

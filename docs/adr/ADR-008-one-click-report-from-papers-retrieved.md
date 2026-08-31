@@ -2,7 +2,18 @@
 
 ## Status
 
-Accepted
+Accepted — superseded in part by
+[ADR-016](ADR-016-remove-compared-state.md) (2026-08-30)
+
+> **Note on historical accuracy.** ADR-008 was written when
+> the FSM had a cross-paper `COMPARING → COMPARED`
+> intermediate between `SUMMARIZED` and `REPORTING`. On
+> 2026-08-30 those states were removed (see ADR-016)
+> because the report generator never consumed the
+> comparison as input. The one-click REPORT action described
+> below remains valid — the orchestrator still auto-summarises
+> when `session.summary is None`. The FSM is now linear
+> with nine stable states.
 
 ## Context
 

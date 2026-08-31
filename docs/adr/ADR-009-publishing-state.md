@@ -2,7 +2,18 @@
 
 ## Status
 
-Accepted
+Accepted — superseded in part by
+[ADR-016](ADR-016-remove-compared-state.md) (2026-08-30)
+
+> **Note on historical accuracy.** ADR-009 was written when
+> the FSM had eleven stable states (including the
+> `COMPARING`/`COMPARED` cross-paper evidence-comparison
+> intermediate). On 2026-08-30 those states were removed
+> because the report generator never consumed the evidence
+> comparison as input (see ADR-016 for the four-layer
+> audit). The **PUBLISHING** state and the four-layer audit
+> pattern described below remain valid; the FSM is now
+> linear with **nine** stable states.
 
 ## Context
 
@@ -185,9 +196,13 @@ for the backend, once for the frontend):
    `state_history` records both transitions with the
    correct `reason` strings.
 3. **Negative** — `test_publish_from_other_states_raises_illegal_action`:
-   PUBLISH from CREATED, PAPERS_RETRIEVED, SUMMARIZED, and
-   COMPARING all raise `IllegalWorkspaceActionError` with
-   `"publish"` absent from `allowed_actions`.
+   PUBLISH from `CREATED`, `PAPERS_RETRIEVED`, `SUMMARIZED`,
+   and (historically) `COMPARING` all raise
+   `IllegalWorkspaceActionError` with `"publish"` absent from
+   `allowed_actions`. As of 2026-08-30 the
+   `COMPARING → COMPARED` arm of this test was removed
+   (ADR-016); the assertion now covers the three remaining
+   illegal states.
 4. **Structural pin** — `test_publish_persists_pdf_in_repository`:
    PDF bytes survive a refetch through the repository's
    `update → get` cycle.

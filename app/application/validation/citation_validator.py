@@ -8,9 +8,9 @@ Purpose
 -------
 The LLM is given a closed set of papers and instructed to cite only
 those papers. The validator is the second half of that contract: it
-takes an AI-generated artefact (an EvidenceComparison, a
-ResearchReport, an EvidenceMatrix) and verifies that every paper
-ID it references actually belongs to the input set.
+takes an AI-generated artefact (a Finding on a Summary, or a
+ResearchReport) and verifies that every paper ID
+it references actually belongs to the input set.
 
 This is the difference between a system that *hopes* the LLM behaves
 and a system that *enforces* it. Without the validator, the response
