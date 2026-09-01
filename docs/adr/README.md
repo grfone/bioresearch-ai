@@ -70,6 +70,18 @@ These documents serve as long-term project documentation and help future contrib
   new `page` field so the SPA can route without parsing the
   FSM state. v8 migration adds the `last_known_state` column
   so `retry` from `ERROR` can restore the pre-error state.
+- [ADR-018: Context-aware FSM transitions via callable resolvers](ADR-018-context-aware-fsm-transitions.md) —
+  closes the ADR-017 TODO. The FSM transition table now
+  accepts callable resolvers of the form
+  `Callable[[ResearchSession], WorkspaceState]` for entries
+  that depend on session context (papers, summary, last
+  known state). The first such entry is `ERROR + RETRY →
+  _retry_target`, which replaces the static `INITIAL`
+  fallback + `force_state` override pattern. The orchestrator's
+  `retry()` method reduces to a single `transition_to` call,
+  the audit trail records one transition per retry instead of
+  two, and `force_state` is again reserved for its documented
+  purpose (deserialization, action-outcome recording).
 
 ## Every ADR follows the same format:
 

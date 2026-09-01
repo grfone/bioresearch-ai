@@ -477,6 +477,19 @@ the contract. 389/389 backend tests pass.
   `last_known_state` column lets `retry` from `ERROR` restore
   the pre-error state.
 
+* **Context-aware FSM transitions via callable resolvers**
+  (see [ADR-018](../docs/adr/ADR-018-context-aware-fsm-transitions.md)).
+  Closes the TODO left by ADR-017. The FSM transition table
+  now accepts `Callable[[ResearchSession], WorkspaceState]`
+  as a target value alongside the fixed `WorkspaceState`
+  constants. The first such resolver is `_retry_target`, which
+  replaces the static `ERROR + RETRY → INITIAL` entry plus
+  `force_state` override that the orchestrator used to do.
+  The orchestrator's `retry()` method reduces from ~22 lines
+  to ~5 (a single `transition_to(RETRY)` call), the audit
+  trail records one transition per retry instead of two, and
+  `force_state` is again reserved for its documented purpose.
+
 ### Changed
 
 * **Workspace.tsx — identifier naming.** ``identifierInputRef``

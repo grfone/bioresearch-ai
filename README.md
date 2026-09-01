@@ -500,6 +500,7 @@ We capture every non-trivial architectural decision in an Architecture Decision 
 | [ADR-015](docs/adr/ADR-015-bootstrap-dns-ipv6-retry-auto-fix.md) | Bootstrap DNS + IPv6 retry with opt-in auto-fix | Accepted |
 | [ADR-016](docs/adr/ADR-016-remove-compared-state.md) | Remove the COMPARING/COMPARED FSM states — see ADR for the four-layer audit | Accepted |
 | [ADR-017](docs/adr/ADR-017-three-page-fsm.md) | Collapse the FSM to four states mapped 1:1 to the three pages (Home / Workspace / Report) | Accepted |
+| [ADR-018](docs/adr/ADR-018-context-aware-fsm-transitions.md) | Context-aware FSM transitions via callable resolvers (closes the ADR-017 TODO) | Accepted |
 
 Five ADRs are particularly worth reading for new contributors:
 

@@ -80,11 +80,89 @@ def test_allowed_actions_sorted() -> None:
 
 
 def test_retry_recovers_from_error() -> None:
-    """ERROR → RETRY recovers to INITIAL (the safe default)."""
-    assert (
+    """ERROR + RETRY is a session-aware resolver.
+
+    The destination depends on ``session.last_known_state``;
+    the resolver reads it directly. Without a session, the
+    table raises ``TypeError`` (a programmer error, not a
+    runtime FSM ambiguity) so silent misuse can't happen.
+    """
+    import pytest
+    from app.core.enums.workspace_state import _retry_target
+
+    # Without a session argument, the caller forgot to thread
+    # the session through; this is a programmer error.
+    with pytest.raises(TypeError, match="session"):
         next_state(WorkspaceState.ERROR, WorkspaceAction.RETRY)
-        is WorkspaceState.INITIAL
+
+    # ``last_known_state`` is the destination when present,
+    # regardless of which state was the "fallback" before the
+    # resolver was extracted from the orchestrator.
+    from app.domain.entities.research_session import ResearchSession
+    from app.domain.entities.research_question import ResearchQuestion
+    for last_known, expected in (
+        (WorkspaceState.INITIAL, WorkspaceState.INITIAL),
+        (WorkspaceState.INTERMEDIATE, WorkspaceState.INTERMEDIATE),
+    ):
+        session = ResearchSession(
+            question=ResearchQuestion(question="x"),
+            state=WorkspaceState.ERROR,
+            last_known_state=last_known,
+        )
+        # Call ``next_state`` through the entity's
+        # ``transition_to`` so the audit path is exercised
+        # end-to-end (entity -> FSM table -> resolver).
+        session.transition_to(WorkspaceAction.RETRY)
+        assert session.state is expected
+
+    # Direct resolver invocation is also part of the
+    # public contract -- it's the unit-test entry point.
+    session = ResearchSession(
+        question=ResearchQuestion(question="x"),
+        state=WorkspaceState.ERROR,
+        last_known_state=None,
     )
+    # Heuristic: no papers -> INITIAL (pre-v8 row with no
+    # recorded pre-error state).
+    assert _retry_target(session) is WorkspaceState.INITIAL
+    # The "papers" branch of the heuristic is exercised by
+    # the orchestrator test suite (``test_retry_recovers_to_
+    # intermediate_when_papers_exist``) -- we don't need
+    # to construct a Paper here just to flip ``bool(papers)``.
+
+
+def test_retry_resolver_uses_papers_heuristic_when_last_known_missing() -> None:
+    """When ``last_known_state`` is None, the resolver falls
+    back to the papers heuristic.
+
+    Specifically: a workspace with papers should retry to
+    INTERMEDIATE (the user was mid-generation, the corpus
+    is salvageable); a workspace without papers should retry
+    to INITIAL (the user was trying to start a fresh search,
+    there's nothing to preserve).
+    """
+    from app.core.enums.workspace_state import _retry_target
+    from app.domain.entities.research_session import ResearchSession
+    from app.domain.entities.research_question import ResearchQuestion
+    from app.domain.entities.paper import Paper
+    from app.domain.entities.author import Author
+
+    session = ResearchSession(
+        question=ResearchQuestion(question="x"),
+        state=WorkspaceState.ERROR,
+        last_known_state=None,
+    )
+    assert _retry_target(session) is WorkspaceState.INITIAL
+
+    session.add_papers([
+        Paper(
+            pmid="12345",
+            title="A real paper",
+            authors=[Author(first_name="Jane", last_name="Doe")],
+            abstract="An abstract.",
+        )
+    ])
+    assert _retry_target(session) is WorkspaceState.INTERMEDIATE
 
 
 def test_final_is_terminal() -> None:

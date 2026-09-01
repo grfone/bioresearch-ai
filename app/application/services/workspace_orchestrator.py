@@ -716,19 +716,29 @@ class WorkspaceOrchestrator:
         Recover a workspace from the ERROR state.
 
         The RETRY action moves the workspace back to the
-        previous state. The orchestrator remembers the
-        pre-error state via ``session.last_known_state``
-        (set by ``_fail`` when ERROR is entered) and restores
-        it here.
+        previous state. The destination is determined by the
+        FSM table (``ERROR + RETRY → _retry_target``), which
+        reads ``session.last_known_state`` (set by
+        ``_fail`` when ERROR is entered) and falls back to
+        a papers-based heuristic for pre-v8 rows.
 
-        The destination of RETRY depends on what the user
+        The destination therefore depends on what the user
         was trying to do:
+
           - If the search failed (workspace has no papers,
             last_known_state was INITIAL) → INITIAL.
           - If the generation failed (workspace has papers,
             last_known_state was INTERMEDIATE) → INTERMEDIATE.
-          - If ``last_known_state`` is missing (corrupted
-            state) → INITIAL as a safe default.
+
+        This used to require an explicit ``force_state``
+        override in the orchestrator to land on the right
+        page; the FSM table is now context-aware (see the
+        ``TransitionTarget`` type alias in
+        ``app/core/enums/workspace_state.py``) and the
+        orchestrator can rely on a single ``transition_to``
+        call. The audit trail shows one transition
+        (``ERROR → <destination>``) instead of two
+        (``ERROR → INITIAL``, then ``INITIAL → INTERMEDIATE``).
 
         Parameters
         ----------
@@ -741,20 +751,12 @@ class WorkspaceOrchestrator:
             The updated workspace.
         """
         session = self._repository.get(workspace_id)
-        target = getattr(session, "last_known_state", None) or (
-            WorkspaceState.INTERMEDIATE if session.papers else WorkspaceState.INITIAL
-        )
+        # ``transition_to`` consults the FSM table, which routes
+        # ``ERROR + RETRY`` through the ``_retry_target`` resolver.
+        # The resolver is session-aware and reads
+        # ``session.last_known_state`` + ``session.papers``
+        # directly; we don't need to compute the target here.
         session.transition_to(WorkspaceAction.RETRY)
-        # ``transition_to`` already moves us to ``target`` (per
-        # the TRANSITIONS table, which routes ``ERROR → retry
-        # → INITIAL`` for now — see ADR-017 TODO for the
-        # context-aware retry). Force the desired state so the
-        # user lands on the right page.
-        if session.state != target:
-            session.force_state(
-                target,
-                reason=f"Retry: returning to {target.value}",
-            )
         return self._repository.update(session)
 
     def back_to_workspace(self, workspace_id: UUID) -> ResearchSession:

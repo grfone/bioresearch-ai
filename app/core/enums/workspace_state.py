@@ -50,7 +50,9 @@ Guillermo Ramajo Fernández
 """
 
 from __future__ import annotations
+from collections.abc import Callable
 from enum import Enum
+from typing import Any
 
 
 class WorkspaceState(str, Enum):
@@ -214,14 +216,87 @@ class WorkspaceAction(str, Enum):
 # Transition table
 # ---------------------------------------------------------------------------
 #
-# Keys are the current state, values are {action: next_state}. Actions
-# absent from a state's mapping are illegal. The transition table is the
-# authoritative FSM specification and is consumed by both the
-# ResearchSession (pure domain) and the WorkspaceOrchestrator
+# Keys are the current state, values are ``{action: target}``. The target
+# is either:
+#
+# 1. A ``WorkspaceState`` constant — the new state is the same regardless
+#    of session context. Used for actions whose outcome is purely a
+#    function of the current state (search, generate, back_to_*,
+#    add_paper, remove_paper, complete).
+#
+# 2. A ``Callable[[ResearchSession], WorkspaceState]`` — the new state
+#    depends on session context (papers, summary, etc.). Used when the
+#    FSM's decision needs more than the current state to make. The only
+#    caller today is ``RETRY`` from ``ERROR``, which lands on
+#    ``INTERMEDIATE`` if the workspace has papers (the user was
+#    mid-generation) and ``INITIAL`` otherwise (the user was trying to
+#    start a fresh search).
+#
+# The callable form is the **first-class way** to express
+# context-sensitive transitions. We previously used a static
+# ``INITIAL`` entry + ``force_state`` override in the orchestrator,
+# but that left the audit trail with two transitions
+# (``ERROR → INITIAL`` from the table, then ``INITIAL → INTERMEDIATE``
+# from the override) instead of one and required a
+# documented-as-private ``force_state`` API to escape the FSM.
+#
+# Actions absent from a state's mapping are illegal. The transition
+# table is the authoritative FSM specification and is consumed by
+# both the ResearchSession (pure domain) and the WorkspaceOrchestrator
 # (application). Keeping it in one module makes the FSM auditable.
 # ---------------------------------------------------------------------------
 
-TRANSITIONS: dict[WorkspaceState, dict[WorkspaceAction, WorkspaceState]] = {
+#: A transition target is either a fixed state or a resolver callable
+#: that takes the session and returns the new state. The resolver
+#: receives the full ResearchSession (not just the FSM state) so it
+#: can inspect papers, summary, report, etc. when deciding the
+#: destination. Resolvers MUST be pure functions of the session —
+#: they MUST NOT mutate it or call repository operations.
+TransitionTarget = (
+    "WorkspaceState "
+    "| Callable[[ResearchSession], WorkspaceState]"
+)
+
+def _retry_target(session: Any) -> WorkspaceState:
+    """Session-aware resolver for the ``ERROR + RETRY`` transition.
+
+    Picks the destination state based on the session's
+    ``last_known_state`` (set by :meth:`ResearchSession.fail` /
+    the orchestrator's ``_fail()`` helper). Falls back to a
+    papers-based heuristic when ``last_known_state`` is missing
+    (e.g. for pre-v8 upgraded rows where the column was NULL).
+
+    The resolver is a pure function of the session — it MUST NOT
+    mutate the session or call repository operations. The orchestrator
+    persists the new state via ``_repository.update()`` after this
+    returns.
+
+    Parameters
+    ----------
+    session : ResearchSession
+        The session being transitioned. The function only reads
+        ``last_known_state`` and ``papers``; it never writes.
+
+    Returns
+    -------
+    WorkspaceState
+        The destination state. ``INTERMEDIATE`` if the workspace
+        had papers before the error (user was mid-generation);
+        ``INITIAL`` otherwise.
+    """
+    last_known = getattr(session, "last_known_state", None)
+    if last_known is not None:
+        return last_known
+    # Corrupted / pre-v8 row -- fall back to the papers heuristic.
+    # ``session.papers`` may be ``None`` (test fixtures seed it
+    # explicitly) so we tolerate that.
+    has_papers = bool(getattr(session, "papers", None))
+    return WorkspaceState.INTERMEDIATE if has_papers else WorkspaceState.INITIAL
+
+TRANSITIONS: dict[
+    WorkspaceState,
+    dict[WorkspaceAction, "WorkspaceState | Callable[[ResearchSession], WorkspaceState]"],
+] = {
     # Home page: only "search" advances the workflow.
     WorkspaceState.INITIAL: {
         WorkspaceAction.SEARCH: WorkspaceState.INTERMEDIATE,
@@ -249,14 +324,37 @@ TRANSITIONS: dict[WorkspaceState, dict[WorkspaceAction, WorkspaceState]] = {
     },
     # Error page: only "retry" (back to where we were) makes sense.
     WorkspaceState.ERROR: {
-        # ERROR → INITIAL: covers a failed search (no workspace yet,
-        # or a fresh workspace). The orchestrator decides the
-        # destination based on whether the workspace has papers.
-        WorkspaceAction.RETRY: WorkspaceState.INITIAL,
+        # ERROR → retry is **session-aware**: the destination
+        # depends on where the workspace was before the error
+        # was entered. The ``_retry_target`` resolver reads
+        # ``ResearchSession.last_known_state`` (set by the
+        # orchestrator's ``_fail()`` helper when ERROR is
+        # entered) and falls back to a heuristic based on
+        # whether the workspace has any papers:
+        #
+        #   last_known_state == INTERMEDIATE → INTERMEDIATE
+        #     (the user was mid-generation; we keep their
+        #     corpus and let them try again).
+        #
+        #   last_known_state == INITIAL      → INITIAL
+        #     (the user was trying to start a fresh search;
+        #     nothing to preserve).
+        #
+        #   last_known_state is None (corrupted or
+        #     pre-v8 row) → heuristic: INTERMEDIATE if the
+        #     workspace has papers, INITIAL otherwise. This
+        #     is the same fallback the orchestrator's
+        #     ``retry()`` used to do before the FSM became
+        #     context-aware; preserved here so the FSM table
+        #     continues to encode the user-visible behaviour
+        #     rather than overriding it after the fact.
+        WorkspaceAction.RETRY: _retry_target,
         WorkspaceAction.ADD_PAPER: WorkspaceState.ERROR,
         WorkspaceAction.REMOVE_PAPER: WorkspaceState.ERROR,
     },
 }
+
+
 
 
 def allowed_actions(state: WorkspaceState) -> list[WorkspaceAction]:
@@ -279,6 +377,8 @@ def allowed_actions(state: WorkspaceState) -> list[WorkspaceAction]:
 def next_state(
     current: WorkspaceState,
     action: WorkspaceAction,
+    *,
+    session: Any | None = None,
 ) -> WorkspaceState:
     """
     Compute the next state for a given action.
@@ -290,6 +390,19 @@ def next_state(
 
     action : WorkspaceAction
         Action being requested.
+
+    session : Any | None
+        The :class:`ResearchSession` (or any object exposing the
+        fields the resolver needs). Required when the table entry
+        is a callable resolver (currently only ``RETRY`` from
+        ``ERROR``); ignored for fixed-target entries. Kept as
+        ``Any`` to avoid an import cycle (this module is imported
+        by the entity layer, which can't import this module back).
+
+        The orchestrator always passes the session; the entity's
+        :meth:`ResearchSession.transition_to` passes ``self``. The
+        test layer may omit it when exercising fixed-target
+        entries.
 
     Returns
     -------
@@ -310,4 +423,17 @@ def next_state(
             action=action.value,
             allowed=[a.value for a in allowed_actions(current)],
         )
-    return transitions[action]
+    target = transitions[action]
+    if callable(target):
+        # ``target`` is a session-aware resolver. The session
+        # argument is mandatory for callable targets; if the
+        # caller forgot to pass it, that's a programmer error,
+        # not a runtime FSM ambiguity.
+        if session is None:
+            raise TypeError(
+                f"FSM transition {current.value} + {action.value} "
+                f"is session-aware (resolver={getattr(target, '__name__', target)!r}); "
+                "next_state() requires the session argument."
+            )
+        return target(session)
+    return target

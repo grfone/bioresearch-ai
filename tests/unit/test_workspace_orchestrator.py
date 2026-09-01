@@ -567,6 +567,75 @@ def test_retry_recovers_to_intermediate_when_papers_exist(
     assert result.state is WorkspaceState.INTERMEDIATE
 
 
+def test_retry_records_single_transition_in_audit_trail(
+    repo: InMemoryRepository, stub_papers: list[Paper],
+) -> None:
+    """RETRY produces a SINGLE audit-trail entry, not two.
+
+    Before the FSM became session-aware (ADR-017 + the
+    TransitionTarget resolver hook), retry did:
+
+      1. ``transition_to(RETRY)`` -> moved to INITIAL per
+         the static table.
+      2. ``force_state(target)`` -> overrode to the
+         user-correct destination.
+
+    The audit trail showed both transitions and the
+    ``force_state`` was a documented-as-private escape
+    hatch used to compensate for the table's ignorance of
+    session context.
+
+    After this commit:
+
+      1. ``transition_to(RETRY)`` consults the
+         ``_retry_target`` resolver via the FSM table.
+      2. The resolver picks the destination directly. No
+         override needed.
+
+    This test pins the new behavior so any future
+    regression that re-introduces a double-transition is
+    caught immediately.
+    """
+    orch = WorkspaceOrchestrator(
+        workspace_repository=repo,
+        literature_searcher=StubPubMed(stub_papers),
+        llm_provider=StubLLM(),
+        report_generator=StubReportGenerator(),
+        pdf_generator=StubPDFGenerator(),
+    )
+    ws = ResearchSession(
+        question=ResearchQuestion(question="x"),
+        state=WorkspaceState.ERROR,
+        last_known_state=WorkspaceState.INTERMEDIATE,
+    )
+    ws.add_papers(stub_papers)
+    history_before = list(ws.state_history)
+    repo.create(ws)
+
+    result = orch.retry(ws.id)
+
+    # Exactly ONE new audit entry was appended, not two.
+    appended = result.state_history[len(history_before):]
+    assert len(appended) == 1, (
+        f"retry() should append one transition, not {len(appended)}; "
+        f"appended: {[(t.from_state.value, t.to_state.value) for t in appended]}"
+    )
+    only = appended[0]
+    assert only.from_state is WorkspaceState.ERROR
+    assert only.to_state is WorkspaceState.INTERMEDIATE
+    assert only.action is WorkspaceAction.RETRY
+    # The audit-trail entry MUST be a plain transition_to,
+    # not a force_state hop. There's no marker on
+    # StateTransition for "this was a force_state call",
+    # but the implementation invariant we care about is
+    # that the resulting state matches ``last_known_state``
+    # in a single step. If a future refactor re-introduces
+    # force_state override, the assertions above would
+    # still pass but the audit log would gain a noisy
+    # extra entry. Detect that here.
+    assert result.state is WorkspaceState.INTERMEDIATE
+
+
 def test_fail_records_last_known_state(
     repo: InMemoryRepository, stub_papers: list[Paper],
 ) -> None:

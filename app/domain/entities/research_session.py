@@ -370,7 +370,11 @@ class ResearchSession:
         IllegalWorkspaceActionError
             If the action is not legal from the current state.
         """
-        new_state = _next_state(self.state, action)
+        new_state = _next_state(
+            self.state,
+            action,
+            session=self,
+        )
 
         previous = self.state
         self.state_history.append(
