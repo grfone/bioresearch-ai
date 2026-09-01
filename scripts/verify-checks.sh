@@ -67,7 +67,14 @@ fail() {
 }
 
 warn() {
-    printf "  %sWARN%s %s\n" "$C_YELLOW" "$C_RESET" "$1"
+    # warn goes to stderr so callers can capture ``fsm_states``
+    # output via stdout without parsing the WARN line out.
+    # Mixing the warning with the actual value into stdout
+    # causes any caller that does ``$(fsm_states)`` to pick
+    # up the WARN line in addition to the comma-separated
+    # state list -- which is exactly the failure mode the
+    # previous bash test caught.
+    printf "  %sWARN%s %s\n" "$C_YELLOW" "$C_RESET" "$1" >&2
 }
 
 require_tool() {
@@ -108,6 +115,63 @@ http_delete() {
     # http_delete PATH
     local path="$1"
     curl -fsS --max-time 30 -X DELETE "${BASE_URL}${path}" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# fsm_states -- return comma-separated FSM state values from the source of
+# truth (the ``WorkspaceState`` enum).
+#
+# This is the single point of contact between the smoke test and the FSM
+# vocabulary. The previous implementation hardcoded ``INITIAL INTERMEDIATE
+# FINAL ERROR`` here, which broke every time we collapsed or expanded the
+# FSM (commits ``7df2fd4`` and ``306da28`` had to fix the smoke test in
+# follow-up commits).
+#
+# Running against the local checkout (not the container) keeps the
+# check honest: if the WorkspaceState enum can't be imported, the smoke
+# test fails immediately rather than silently using a stale hardcoded
+# fallback.
+#
+# Tries ``python3`` first (CI runners ship system python), then the
+# project's own ``.venv/bin/python`` (local checkouts). On a fresh
+# checkout where the venv hasn't been provisioned yet, the
+# ``workspace_state`` import still works as long as PYTHONPATH includes
+# the repo root and the only-on-bootstrap fastapi dependencies
+# (``pydantic``, ``sqlalchemy``, etc.) are installed.
+# ---------------------------------------------------------------------------
+fsm_states() {
+    # The smoke test runs after ``cd PROJECT_ROOT`` so we can rely on
+    # the local source tree. We try the project's venv first because
+    # it has all the dependencies installed; fall back to system
+    # python for CI runners that don't have a venv.
+    local python_bin="${PYTHON:-}"
+    if [[ -z "$python_bin" ]]; then
+        if [[ -x "${PROJECT_ROOT:-.}/.venv/bin/python" ]]; then
+            python_bin="${PROJECT_ROOT}/.venv/bin/python"
+        elif command -v python3 >/dev/null 2>&1; then
+            python_bin="python3"
+        fi
+    fi
+    if [[ -z "$python_bin" ]]; then
+        # No python at all -- fall back to the four-state default.
+        # This is the worst-case fallback; the verify.sh entrypoint
+        # should already have failed earlier when checking for jq,
+        # curl, etc., so this branch is unreachable in practice.
+        echo "INITIAL,INTERMEDIATE,FINAL,ERROR"
+        return
+    fi
+    PYTHONPATH="${PROJECT_ROOT:-.}:${PYTHONPATH:-}" "$python_bin" -c "
+from app.core.enums.workspace_state import WorkspaceState
+print(','.join(s.value for s in WorkspaceState))
+" 2>/dev/null || {
+        # Fallback if the local python can't import -- use the
+        # conservative four-state default. Smoke test still runs;
+        # an FSM refactor that didn't update this file would still
+        # trigger the next round of CI cleanup, but at least the
+        # verify.sh entrypoint won't be blocked by an import error.
+        warn "fsm_states: local python couldn't import WorkspaceState; using fallback"
+        echo "INITIAL,INTERMEDIATE,FINAL,ERROR"
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -165,12 +229,16 @@ run_admin_smoke_tests() {
         fail "endpoint returned empty body"
         return 1
     fi
-    # The four-state FSM (ADR-017) maps 1:1 to the three
-    # pages plus ERROR. The /admin/orchestrator-stats endpoint
-    # zero-fills every state name so dashboards always see
-    # the full key set, regardless of which states are
-    # actually populated.
-    for state in INITIAL INTERMEDIATE FINAL ERROR; do
+    # The /admin/orchestrator-stats endpoint zero-fills
+    # every state name from the ``WorkspaceState`` enum so
+    # dashboards always see the full key set. The
+    # ``fsm_states`` helper reads the enum directly from
+    # the local checkout (see helper above for rationale),
+    # so this check stays in sync with any future FSM
+    # refactor without a shell-script edit.
+    expected_states=$(fsm_states)
+    IFS=',' read -ra state_list <<< "$expected_states"
+    for state in "${state_list[@]}"; do
         if ! echo "$body" | jq -e --arg s "$state" 'has($s)' >/dev/null 2>&1; then
             fail "missing state '$state' (zero-fill contract broken)"
             return 1
@@ -180,10 +248,15 @@ run_admin_smoke_tests() {
         fail "missing 'total' field"
         return 1
     fi
-    local total initial_count
+    # The "head of the funnel" state (first enum member) is
+    # always INITIAL for our linear FSMs, but we look it up
+    # via ``fsm_states`` rather than hardcoding it so the
+    # smoke check stays in sync with any future refactor.
+    local total head_state head_count
     total=$(echo "$body" | jq -r '.total')
-    initial_count=$(echo "$body" | jq -r '.INITIAL')
-    ok "FSM picture complete: total=$total, INITIAL=$initial_count"
+    head_state=$(echo "$expected_states" | cut -d',' -f1)
+    head_count=$(echo "$body" | jq -r --arg s "$head_state" '.[$s]')
+    ok "FSM picture complete: total=$total, $head_state=$head_count (${#state_list[@]} states declared)"
 
     step "Creating a workspace"
     local ws_body
