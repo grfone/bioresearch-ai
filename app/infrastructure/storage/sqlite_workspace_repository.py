@@ -279,6 +279,51 @@ _V8_COLUMNS = (
 )
 
 
+# v8 in-place state-elevation: rewrite every legacy
+# ``state`` string from the previous nine-state linear FSM
+# to its equivalent in the new four-state FSM (ADR-017).
+#
+# The mapping mirrors what ``_infer_state`` would apply on
+# read -- doing it here as a SQL UPDATE keeps the
+# ``/admin/orchestrator-stats`` endpoint honest (it
+# GROUP BY ``state`` without consulting ``_infer_state``)
+# and lets ``last_known_state`` rewrites operate on already
+# upgraded data.
+#
+# Rows whose state is already one of the new four values
+# (``INITIAL``, ``INTERMEDIATE``, ``FINAL``, ``ERROR``) are
+# left untouched; only legacy enum strings are rewritten.
+#
+# ``state`` -> ``last_known_state`` migration: when an
+# ERROR-state workspace is upgraded, we have no record of
+# the state it was in *before* it entered ERROR -- the old
+# state string in the column tells us only that it WAS in
+# ERROR. So ``last_known_state`` stays ``NULL`` for
+# pre-v8 ERROR rows; ``retry`` from ERROR for such rows
+# goes to ``INITIAL`` (the safe default -- the user can
+# always re-search).
+_V8_STATE_ELEVATION: list[tuple[str, str]] = [
+    # Initial cluster -- before any papers exist.
+    ("CREATED", "INITIAL"),
+    ("SEARCHING", "INITIAL"),
+    # Intermediate cluster -- papers exist, no report yet.
+    # Transient in-flight markers collapse to their post-state
+    # because the v8 design has no transients; a workspace
+    # that was mid-summarise at v7 is logically "has papers,
+    # no report" == INTERMEDIATE.
+    ("PAPERS_RETRIEVED", "INTERMEDIATE"),
+    ("SUMMARIZING", "INTERMEDIATE"),
+    ("SUMMARIZED", "INTERMEDIATE"),
+    ("COMPARING", "INTERMEDIATE"),
+    ("COMPARED", "INTERMEDIATE"),
+    ("REPORTING", "INTERMEDIATE"),
+    # Final cluster -- report exists (or was being published).
+    ("REPORTED", "FINAL"),
+    ("PUBLISHING", "FINAL"),
+    ("COMPLETED", "FINAL"),
+]
+
+
 class SqliteWorkspaceRepository(WorkspaceRepository):
     """
     SQLite-based repository for Research Workspaces.
@@ -421,6 +466,15 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
             # connection -- see __init__ docstring.
             migrated_count = self._migrate_v6_data(conn)
 
+            # Apply v8 in-place state-elevation: rewrite every
+            # legacy ``state`` string to its ADR-017 equivalent
+            # so ``GROUP BY state`` queries (notably
+            # ``/admin/orchestrator-stats``) see the four new
+            # values. Runs in the same connection as the schema
+            # migration -- ``v8`` is the data-update version,
+            # not the schema version.
+            migrated_count += self._migrate_v8_state_elevate(conn)
+
             conn.commit()
         return migrated_count
 
@@ -494,7 +548,13 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         # after the earlier ALTER TABLE calls. The
         # ``IF EXISTS`` clause keeps this idempotent for
         # databases that started life on v7.
-        if current < 7:
+        #
+        # We run the DROP for ``current < 8`` (not
+        # ``current < 7``) because the v8 data migration
+        # upgrades existing v7-schema databases -- they
+        # still need their ``evidence_comparison`` column
+        # dropped before we can call this a v8 database.
+        if current < 8:
             current_columns = {
                 row[1]
                 for row in cursor.execute(
@@ -588,6 +648,55 @@ class SqliteWorkspaceRepository(WorkspaceRepository):
         finally:
             if should_close:
                 conn.close()
+
+    def _migrate_v8_state_elevate(self, db_or_conn) -> int:
+        """
+        v8 in-place data migration: rewrite every legacy
+        ``state`` string to its ADR-017 equivalent.
+
+        Runs in the same connection as ``_init_db`` so
+        SQLite in-memory databases (used in CI tests)
+        see the data. Accepts either an open
+        ``sqlite3.Connection`` (preferred) or a
+        ``db_path`` string (legacy pattern, kept for
+        symmetry with ``_migrate_v6_data``).
+
+        The legacy enum values that may appear in the
+        ``state`` column are listed in
+        ``_V8_STATE_ELEVATION`` along with their target
+        value. Rows whose ``state`` is already one of the
+        four new FSM values (``INITIAL``, ``INTERMEDIATE``,
+        ``FINAL``, ``ERROR``) are left untouched, so
+        already-v8 databases skip this migration entirely.
+
+        Returns
+        -------
+        int
+            Number of rows rewritten. Zero on a fresh
+            install or an already-upgraded v8 database.
+        """
+        if isinstance(db_or_conn, str):
+            conn = sqlite3.connect(db_or_conn)
+            should_close = True
+        else:
+            conn = db_or_conn
+            should_close = False
+        try:
+            cursor = conn.cursor()
+            migrated_count = 0
+            for legacy_state, new_state in _V8_STATE_ELEVATION:
+                cursor.execute(
+                    "UPDATE workspaces SET state = ? WHERE state = ?",
+                    (new_state, legacy_state),
+                )
+                migrated_count += cursor.rowcount
+            # SQLite is in autocommit-style within the
+            # transaction here; ``_init_db`` commits at the
+            # end so we don't need to commit explicitly.
+        finally:
+            if should_close:
+                conn.close()
+        return migrated_count
 
     # ------------------------------------------------------------------
     # Repository interface

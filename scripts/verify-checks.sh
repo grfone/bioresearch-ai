@@ -165,7 +165,12 @@ run_admin_smoke_tests() {
         fail "endpoint returned empty body"
         return 1
     fi
-    for state in CREATED SEARCHING PAPERS_RETRIEVED SUMMARIZING SUMMARIZED COMPARING COMPARED REPORTING REPORTED COMPLETED ERROR; do
+    # The four-state FSM (ADR-017) maps 1:1 to the three
+    # pages plus ERROR. The /admin/orchestrator-stats endpoint
+    # zero-fills every state name so dashboards always see
+    # the full key set, regardless of which states are
+    # actually populated.
+    for state in INITIAL INTERMEDIATE FINAL ERROR; do
         if ! echo "$body" | jq -e --arg s "$state" 'has($s)' >/dev/null 2>&1; then
             fail "missing state '$state' (zero-fill contract broken)"
             return 1
@@ -175,10 +180,10 @@ run_admin_smoke_tests() {
         fail "missing 'total' field"
         return 1
     fi
-    local total created
+    local total initial_count
     total=$(echo "$body" | jq -r '.total')
-    created=$(echo "$body" | jq -r '.CREATED')
-    ok "FSM picture complete: total=$total, CREATED=$created"
+    initial_count=$(echo "$body" | jq -r '.INITIAL')
+    ok "FSM picture complete: total=$total, INITIAL=$initial_count"
 
     step "Creating a workspace"
     local ws_body

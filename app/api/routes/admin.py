@@ -112,13 +112,14 @@ def orchestrator_stats() -> dict:
     """Return the count of workspaces in each FSM state.
 
     Useful for:
-    - Spotting stuck transient states (a workspace in
-      SEARCHING/SUMMARIZING/COMPARING/REPORTING for more
-      than a few seconds usually means a request crashed).
+    - Spotting unrecoverable workspaces in ``ERROR`` (a
+      stuck workspace usually means a request crashed or
+      the LLM gave up).
     - Counting the work queue (how many workspaces are
-      waiting for the next FSM step).
-    - Tracking terminal completion rate (COMPLETED count
-      over time).
+      waiting for the next FSM step -- ``INITIAL``
+      workspaces are the head of the funnel, ``FINAL``
+      workspaces are the tail).
+    - Tracking completion rate (``FINAL`` count over time).
 
     Returns
     -------

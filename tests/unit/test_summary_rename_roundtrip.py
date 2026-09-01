@@ -678,3 +678,187 @@ def _seed_v6_row(db_path: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+class TestRepositoryV8StateElevation:
+    """Pin the contract that the v8 migration rewrites every
+    legacy ``state`` string to its ADR-017 equivalent.
+
+    The v8 schema bump (added 2026-08-31 alongside the FSM
+    collapse from nine states to four) introduced the
+    ``last_known_state`` column AND a one-shot SQL
+    ``UPDATE`` that rewrites pre-v8 ``state`` values. Without
+    that data migration the ``/admin/orchestrator-stats``
+    endpoint would expose a mix of legacy and new state
+    names in its response, breaking the smoke-test contract.
+
+    The migration is **idempotent** -- running it twice is a
+    no-op because the WHERE clause only matches legacy state
+    strings, not the four new ones.
+    """
+
+    def test_v8_state_elevation_rewrites_legacy_states(self, tmp_path):
+        """A pre-v8 database with the full legacy FSM enum set
+        is migrated to the four new values in one instantiation.
+        """
+        db_path = str(tmp_path / "v7.db")
+        # Step 1: create a v7-schema database and seed every
+        # legacy state (including ERROR, which is still valid
+        # under v8). We use ``SELECT DISTINCT state`` to
+        # confirm the migration didn't drop or duplicate rows.
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE workspaces (
+                id TEXT PRIMARY KEY,
+                question TEXT NOT NULL,
+                papers TEXT,
+                summary TEXT,
+                report TEXT,
+                notes TEXT,
+                metadata TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'CREATED',
+                state_history TEXT,
+                evidence_comparison TEXT,
+                published_report TEXT,
+                last_error TEXT,
+                last_error_at TEXT
+            )
+        """
+        )
+        cursor.execute("PRAGMA user_version = 7")
+        legacy_states = [
+            "CREATED",
+            "SEARCHING",
+            "PAPERS_RETRIEVED",
+            "SUMMARIZING",
+            "SUMMARIZED",
+            "COMPARING",
+            "COMPARED",
+            "REPORTING",
+            "REPORTED",
+            "PUBLISHING",
+            "COMPLETED",
+            "ERROR",
+        ]
+        for i, legacy_state in enumerate(legacy_states):
+            cursor.execute(
+                "INSERT INTO workspaces ("
+                "id, question, papers, summary, report, notes, "
+                "metadata, created_at, updated_at, state, "
+                "state_history, published_report, last_error, "
+                "last_error_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"ws-{i:03d}",
+                    "q",
+                    "[]",
+                    "null",
+                    "null",
+                    "null",
+                    "{}",
+                    "2026-08-28T00:00:00+00:00",
+                    "2026-08-28T00:00:00+00:00",
+                    legacy_state,
+                    "[]",
+                    "null",
+                    "null",
+                    "null",
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        # Step 2: instantiate the repo. ``__init__`` runs the
+        # v8 data migration (rewriting ``state``) AND the v7
+        # schema migration (dropping ``evidence_comparison``)
+        # AND the v8 schema migration (adding
+        # ``last_known_state``). All three are idempotent.
+        SqliteWorkspaceRepository(db_path=db_path)
+
+        # Step 3: verify the data was rewritten and the
+        # columns match the v8 schema.
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        version = cursor.execute("PRAGMA user_version").fetchone()[0]
+        assert version == 8
+
+        # No legacy state strings should remain. ERROR
+        # survives because it's also a v8 state value.
+        cursor.execute(
+            "SELECT DISTINCT state FROM workspaces WHERE state IN ("
+            "'CREATED', 'SEARCHING', 'PAPERS_RETRIEVED', 'SUMMARIZING', "
+            "'SUMMARIZED', 'COMPARING', 'COMPARED', 'REPORTING', "
+            "'REPORTED', 'PUBLISHING', 'COMPLETED'"
+            ")"
+        )
+        leftover = cursor.fetchall()
+        assert leftover == [], f"legacy states remain: {leftover}"
+
+        # The four-state distribution must equal the count
+        # of rows we seeded (12). CREATED + SEARCHING -> 2
+        # INITIAL; PAPERS_RETRIEVED + SUMMARIZING +
+        # SUMMARIZED + COMPARING + COMPARED + REPORTING -> 6
+        # INTERMEDIATE; REPORTED + PUBLISHING + COMPLETED ->
+        # 3 FINAL; ERROR -> 1 ERROR.
+        cursor.execute(
+            "SELECT state, COUNT(*) FROM workspaces GROUP BY state"
+        )
+        distribution = dict(cursor.fetchall())
+        assert distribution == {
+            "INITIAL": 2,
+            "INTERMEDIATE": 6,
+            "FINAL": 3,
+            "ERROR": 1,
+        }, distribution
+
+        # The ``last_known_state`` column should exist (v8
+        # schema migration).
+        cursor.execute("PRAGMA table_info(workspaces)")
+        cols = {row[1] for row in cursor.fetchall()}
+        assert "last_known_state" in cols
+        # And ``evidence_comparison`` should be gone (v7
+        # schema migration).
+        assert "evidence_comparison" not in cols
+
+        # And ``last_known_state`` should be NULL for every
+        # row -- the upgrade path can't infer the pre-ERROR
+        # state from the legacy enum value alone.
+        cursor.execute(
+            "SELECT COUNT(*) FROM workspaces WHERE last_known_state IS NOT NULL"
+        )
+        nonzero = cursor.fetchone()[0]
+        assert nonzero == 0, (
+            "last_known_state should be NULL for upgraded rows"
+        )
+
+        conn.close()
+
+    def test_v8_state_elevation_is_idempotent(self, tmp_path):
+        """Running the migration twice is a no-op. Already-v8
+        databases skip the rewrite.
+        """
+        db_path = str(tmp_path / "v8-fresh.db")
+
+        # First instantiation: fresh DB, no legacy states to
+        # rewrite, migration is a no-op.
+        repo1 = SqliteWorkspaceRepository(db_path=db_path)
+        counts_before = repo1.workspace_state_counts()
+        assert set(counts_before.keys()) == {
+            "INITIAL",
+            "INTERMEDIATE",
+            "FINAL",
+            "ERROR",
+        }
+
+        # Second instantiation: re-opens the same DB. The
+        # UPDATE WHERE state IN (...) doesn't match any rows
+        # (they're all in the new four-state set), so the
+        # migration is again a no-op. Verify by re-reading
+        # counts.
+        repo2 = SqliteWorkspaceRepository(db_path=db_path)
+        counts_after = repo2.workspace_state_counts()
+        assert counts_after == counts_before

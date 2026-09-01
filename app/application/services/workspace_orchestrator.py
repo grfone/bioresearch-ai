@@ -226,7 +226,7 @@ class WorkspaceOrchestrator:
         Returns
         -------
         dict[str, int]
-            Map of state value (e.g. ``"PAPERS_RETRIEVED"``)
+            Map of state value (e.g. ``"INTERMEDIATE"``)
             to the count of workspaces in that state.
             Includes an entry for every ``WorkspaceState``
             member (zero-filled) so the caller always sees
