@@ -490,6 +490,24 @@ the contract. 389/389 backend tests pass.
   trail records one transition per retry instead of two, and
   `force_state` is again reserved for its documented purpose.
 
+* **Citations are a strict subset of workspace.papers**
+  (see [ADR-019](../docs/adr/ADR-019-citation-subset-invariant.md)).
+  Enforces the user's hard rule "the executive reports can
+  contain only references available at INTERMEDIATE, not more
+  (less is possible, but definitely not more!)" at the entity
+  layer. `ResearchSession.set_summary` and
+  `ResearchSession.set_report` validate that every paper
+  referenced is in `self.papers` (using `_paper_identity` so
+  LLM-rewritten titles still match the corpus); every paper
+  mutation (`add_papers`, `replace_papers`, `remove_paper`)
+  routes through a single `_mutate_papers` helper that clears
+  the stale `summary`, `report`, and `published_report` so the
+  invariant cannot be violated by reading a stale artefact.
+  Violations raise `ValueError`, which the orchestrator's
+  `_fail` helper catches and surfaces as a clear `last_error`
+  (workspace moves to `ERROR`, user retries per ADR-018).
+  Adds 20 tests pinning the invariant.
+
 ### Changed
 
 * **Workspace.tsx — identifier naming.** ``identifierInputRef``

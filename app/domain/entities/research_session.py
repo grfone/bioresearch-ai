@@ -50,6 +50,7 @@ from app.core.enums.workspace_state import (
     next_state as _next_state,
 )
 from app.core.exceptions import IllegalWorkspaceActionError
+from app.domain.entities.citation import Citation
 from app.domain.entities.paper import Paper
 from app.domain.entities.research_question import ResearchQuestion
 from app.domain.entities.research_report import ResearchReport
@@ -484,7 +485,12 @@ class ResearchSession:
 
         Papers are deduplicated by PMID (or DOI/URL as fallback). If
         the deduped result adds at least one new paper, the state is
-        advanced to PAPERS_RETRIEVED if it was CREATED.
+        advanced to INTERMEDIATE if it was INITIAL.
+
+        As of ADR-019 this delegates to
+        :meth:`_mutate_papers` so the invariant
+        "citations ⊆ workspace.papers" is enforced uniformly across
+        every paper-mutation path.
 
         Parameters
         ----------
@@ -501,13 +507,11 @@ class ResearchSession:
         ]
         if not new_papers:
             return
-        self.papers.extend(new_papers)
-        self.touch()
-        if self.state is WorkspaceState.INITIAL:
-            self.force_state(
-                WorkspaceState.INTERMEDIATE,
-                reason="Papers added",
-            )
+        self._mutate_papers(
+            self.papers + new_papers,
+            reason="Papers added",
+            advance_to_intermediate_if_initial=True,
+        )
 
     def replace_papers(
         self,
@@ -517,8 +521,15 @@ class ResearchSession:
         """
         Replace the session's paper collection (used by the
         orchestrator's SEARCH action). The state is forced to
-        PAPERS_RETRIEVED if the new collection is non-empty; otherwise
-        the state is forced back to CREATED.
+        INTERMEDIATE if the new collection is non-empty; otherwise
+        the state is forced back to INITIAL.
+
+        As of ADR-019 this delegates to
+        :meth:`_mutate_papers` so the invariant
+        "citations ⊆ workspace.papers" is enforced uniformly across
+        every paper-mutation path. The previous summary and report
+        (if any) are cleared because their `papers_used` and
+        `citations` no longer match the new corpus.
 
         Parameters
         ----------
@@ -535,19 +546,11 @@ class ResearchSession:
             PubMed path passes ``None`` so the session
             reports no source attribution).
         """
-        self.papers = list(papers)
-        self.paper_sources = dict(paper_sources or {})
-        self.touch()
-        if papers:
-            self.force_state(
-                WorkspaceState.INTERMEDIATE,
-                reason="Papers replaced",
-            )
-        else:
-            self._force_state_regressive(
-                WorkspaceState.INITIAL,
-                reason="No papers remaining",
-            )
+        self._mutate_papers(
+            list(papers),
+            paper_sources=paper_sources,
+            reason="Papers replaced",
+        )
 
     def _force_state_regressive(
         self,
@@ -608,6 +611,13 @@ class ResearchSession:
         """
         Remove a paper from the workspace by PMID or DOI.
 
+        As of ADR-019 this delegates to
+        :meth:`_mutate_papers` so the invariant
+        "citations ⊆ workspace.papers" is enforced uniformly. If
+        the workspace had a summary or report attached, those are
+        cleared because their `papers_used` / `citations` may
+        reference the removed paper.
+
         Parameters
         ----------
         paper_id : str
@@ -622,35 +632,151 @@ class ResearchSession:
         if not target:
             return False
         before = len(self.papers)
-        self.papers = [
+        kept = [
             p for p in self.papers
             if p.pmid != target and p.doi != target
         ]
-        removed = len(self.papers) < before
-        if removed:
-            self.touch()
-            if not self.papers:
-                # Removing the last paper regresses the workspace to
-                # INITIAL. This is a legitimate degradation that the
-                # FSM does not model as a transition (papers can be
-                # removed directly without an action), so we use
-                # _force_state_regressive to bypass the strict
-                # forward-only guard.
-                self._force_state_regressive(
-                    WorkspaceState.INITIAL,
-                    reason="Last paper removed",
+        if len(kept) == before:
+            return False
+        # Removing the last paper regresses the workspace to
+        # INITIAL. This is a legitimate degradation that the FSM
+        # does not model as an action (papers can be removed
+        # directly without an action), so we use
+        # ``_force_state_regressive`` to bypass the strict
+        # forward-only guard. ``_mutate_papers`` honours the
+        # ``regress_to_initial_if_empty`` flag for exactly this
+        # case.
+        self._mutate_papers(
+            kept,
+            reason="Papers removed",
+            regress_to_initial_if_empty=True,
+        )
+        return True
+
+    def _mutate_papers(
+        self,
+        new_papers: list[Paper],
+        *,
+        paper_sources: dict[str, str] | None = None,
+        reason: str | None = None,
+        advance_to_intermediate_if_initial: bool = False,
+        regress_to_initial_if_empty: bool = False,
+    ) -> None:
+        """
+        Single point of mutation for the paper corpus.
+
+        ADR-019 established the invariant that **every report and
+        summary must be a strict subset of the workspace's
+        current paper collection**. This helper enforces the
+        invariant uniformly across ``add_papers``,
+        ``replace_papers``, and ``remove_paper`` by:
+
+        1. Replacing ``self.papers`` with ``new_papers`` (after
+           a defensive copy so the caller can't mutate the
+           stored list through the argument).
+        2. Clearing ``self.summary`` and ``self.report`` and
+           ``self.published_report`` because any of those may
+           reference papers that were just added or removed.
+           The next ``generate()`` rebuilds them from the new
+           corpus.
+        3. Updating ``self.paper_sources`` if supplied; clearing
+           it otherwise.
+        4. Recording ``state_history`` if a state transition
+           fires (``INITIAL → INTERMEDIATE`` for the first
+           papers; ``X → INITIAL`` for an empty corpus).
+        5. Touching the entity so ``updated_at`` advances.
+
+        All five steps happen atomically. No caller can update
+        ``self.papers`` without the helper running, so the
+        invariant cannot be violated by future code.
+
+        Parameters
+        ----------
+        new_papers : list[Paper]
+            The new paper collection. Copied defensively; the
+            caller may keep mutating their own list after the
+            call without affecting the session.
+
+        paper_sources : dict[str, str] | None
+            Optional per-paper source attribution. ``None``
+            clears the existing map (used by the single-source
+            PubMed path). ``advance_to_intermediate_if_initial``
+            and ``regress_to_initial_if_empty`` are mutually
+            exclusive with each other — both default to
+            ``False``, and the caller picks whichever is
+            appropriate for the mutation.
+        """
+        if advance_to_intermediate_if_initial and regress_to_initial_if_empty:
+            raise ValueError(
+                "_mutate_papers: advance_to_intermediate_if_initial "
+                "and regress_to_initial_if_empty are mutually exclusive"
+            )
+
+        # Defensive copy so the caller can't mutate the stored
+        # list through the argument.
+        self.papers = list(new_papers)
+        # Paper sources: ``None`` clears, anything else replaces.
+        self.paper_sources = dict(paper_sources) if paper_sources is not None else {}
+
+        # ADR-019 invariant: stale summary / report / published
+        # report cannot survive a corpus mutation. The user's
+        # rule "report can only contain references available at
+        # INTERMEDIATE" requires this clearing. The next
+        # ``generate()`` rebuilds them from the new corpus.
+        self.summary = None
+        self.report = None
+        self.published_report = None
+
+        self.touch()
+
+        # State-machine side effects. ``force_state`` and
+        # ``_force_state_regressive`` already validate the
+        # transition is legal; we just call them with the right
+        # target.
+        if regress_to_initial_if_empty and not self.papers:
+            self._force_state_regressive(
+                WorkspaceState.INITIAL,
+                reason=reason or "No papers remaining",
+            )
+        elif advance_to_intermediate_if_initial and self.papers:
+            if self.state is WorkspaceState.INITIAL:
+                self.force_state(
+                    WorkspaceState.INTERMEDIATE,
+                    reason=reason or "Papers added",
                 )
-        return removed
 
     def set_summary(self, summary: Summary) -> None:
         """
         Store the synthesized evidence for this session.
 
+        ADR-019 validates that every paper in
+        ``summary.papers_used`` is present in ``self.papers`` --
+        the user's hard rule "report can only contain references
+        available at INTERMEDIATE" applies to the summary as
+        well (the report's bibliography is the summary's
+        ``papers_used``). The validation uses
+        :meth:`_paper_identity` so two papers with the same PMID
+        compare as the same paper, matching the dedup semantics
+        of :meth:`add_papers`.
+
         Parameters
         ----------
         summary : Summary
             AI-generated synthesis of the retrieved literature.
+
+        Raises
+        ------
+        ValueError
+            If any paper in ``summary.papers_used`` is not in
+            ``self.papers``. The orchestrator catches this in
+            its ``_fail()`` helper and transitions the workspace
+            to ``ERROR`` (ADR-009 + ADR-018); the user sees a
+            clear ``last_error`` and can retry.
         """
+        self._assert_papers_within_corpus(
+            list(summary.papers_used or []),
+            context="summary.papers_used",
+        )
         self.summary = summary
         self.touch()
 
@@ -658,11 +784,30 @@ class ResearchSession:
         """
         Store the final research report.
 
+        ADR-019 validates that every citation's ``paper`` is
+        present in ``self.papers``. This is the structural
+        enforcement of the user's rule "the executive reports
+        can contain only references available at INTERMEDIATE,
+        not more (less is possible, but definitely not more!)".
+        Violations raise ``ValueError`` so the orchestrator's
+        ``_fail()`` helper transitions the workspace to ERROR
+        and the user sees a clear ``last_error``.
+
         Parameters
         ----------
         report : ResearchReport
             Structured biomedical research report.
+
+        Raises
+        ------
+        ValueError
+            If any citation's paper is not in ``self.papers``.
         """
+        citation_papers = [c.paper for c in report.citations]
+        self._assert_papers_within_corpus(
+            citation_papers,
+            context="report.citations",
+        )
         self.report = report
         self.touch()
 
@@ -674,13 +819,121 @@ class ResearchSession:
         PDF has been generated. Replacing an existing publication
         is allowed -- a re-publish overwrites the previous artefact.
 
+        ADR-019 invariant enforcement: by the time the PDF is
+        produced, :meth:`set_report` has already validated the
+        report's citations against ``self.papers``. The PDF embeds
+        that report, so its bibliography is also a subset of
+        ``self.papers``. We don't re-validate here (the PDF
+        generator doesn't carry the citation list separately)
+        because the validation has already happened upstream.
+        Defence in depth: if ``self.report`` is None at the time
+        this method is called, something has gone wrong (the
+        orchestrator generated a PDF without a report), and we
+        raise.
+
         Parameters
         ----------
         published_report : PublishedReport
             The PDF bytes plus the metadata needed to serve them.
+
+        Raises
+        ------
+        RuntimeError
+            If ``self.report`` is ``None`` -- the orchestrator
+            generated a PDF without a stored report, which means
+            the report-to-PDF invariant was broken upstream.
         """
+        if self.report is None:
+            # Defence in depth: the PDF must correspond to a
+            # stored report. If the orchestrator called
+            # ``set_published_report`` without a prior
+            # ``set_report`` (e.g. a future bug or a buggy
+            # integration test), refuse to persist the PDF --
+            # otherwise the workspace would have a PDF whose
+            # bibliography is not enforceable against the
+            # user's rule.
+            raise RuntimeError(
+                "set_published_report called without a stored "
+                "report. The orchestrator must call set_report "
+                "before set_published_report so ADR-019 can "
+                "validate the citations."
+            )
         self.published_report = published_report
         self.touch()
+
+    def _assert_papers_within_corpus(
+        self,
+        papers: list[Paper],
+        *,
+        context: str,
+    ) -> None:
+        """
+        Assert that every paper in ``papers`` is in ``self.papers``.
+
+        Helper for :meth:`set_summary` and :meth:`set_report`.
+        Compares by :meth:`_paper_identity` (PMID → DOI → URL
+        fallback) so two papers with the same PMID compare as
+        the same paper even if their ``title``/``authors`` were
+        rewritten by the LLM during synthesis.
+
+        Parameters
+        ----------
+        papers : list[Paper]
+            Papers to validate. Each is checked against
+            ``self.papers`` by identity.
+
+        context : str
+            Human-readable label for the source of ``papers``
+            (used in the error message). Examples:
+            ``"summary.papers_used"``, ``"report.citations"``.
+
+        Raises
+        ------
+        ValueError
+            If any paper in ``papers`` is not in ``self.papers``.
+            The error message lists the offending paper
+            identifiers (PMID or DOI) for diagnostics.
+        """
+        if not papers:
+            return
+        corpus_identities = {
+            self._paper_identity(p) for p in self.papers
+        }
+        # We dedup the offenders by identity so a single paper
+        # appearing twice in ``papers`` doesn't show up twice in
+        # the error message. The list itself is preserved in
+        # iteration order for the message ("first offender
+        # first" is easier to debug than "set, then list").
+        seen_offenders: set[str] = set()
+        offenders: list[str] = []
+        for paper in papers:
+            pid = self._paper_identity(paper)
+            if pid in corpus_identities:
+                continue
+            if pid in seen_offenders:
+                continue
+            seen_offenders.add(pid)
+            label = (
+                f"pmid={paper.pmid}" if paper.pmid
+                else f"doi={paper.doi}" if paper.doi
+                else f"title={paper.title!r}"
+            )
+            offenders.append(label)
+        if not offenders:
+            return
+        corpus_size = len(self.papers)
+        offender_list = ", ".join(offenders)
+        raise ValueError(
+            f"{context} references papers not in workspace.papers "
+            f"({context}.size={len(papers)}, workspace.papers.size={corpus_size}). "
+            f"Offending paper identifiers: {offender_list}. "
+            "The user's rule 'the executive reports can contain only "
+            "references available at INTERMEDIATE, not more (less is "
+            "possible, but definitely not more!)' forbids this state. "
+            "If you are the orchestrator, the report mapper ran with a "
+            "stale summary.papers_used; re-summarise from session.papers "
+            "and re-run generate() to recover."
+        )
 
     def add_note(self, note: str) -> None:
         """
