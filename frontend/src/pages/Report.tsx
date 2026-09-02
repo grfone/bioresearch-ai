@@ -71,7 +71,7 @@ import {
   linkifyCitationMarkers,
 } from '../lib/citationLink';
 import { renderCitationWithDoiLink, renderItemWithCitationLinks } from '../lib/citationRender';
-import { FileText, RefreshCw, AlertCircle, Lightbulb, Download } from 'lucide-react';
+import { FileText, RefreshCw, AlertCircle, Lightbulb, Download, ArrowLeft, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -134,6 +134,15 @@ export const Report: React.FC = () => {
   // sets ``generating: true``. We don't want to flash the
   // report-or-error UI during that gap.
   const [inFlight, setInFlight] = useState(true);
+
+  // True while a back-to-workspace navigation is in flight.
+  // Used to disable the "Back to Workspace" button and show
+  // a spinner so the user gets feedback while the FSM
+  // regressive action runs. Without this, a fast double-click
+  // would queue two ``back_to_workspace`` actions and the
+  // second one would see the workspace in INTERMEDIATE
+  // (post the first action) and refuse with 409 -- confusing.
+  const [isBackInFlight, setIsBackInFlight] = useState(false);
 
   // Load workspace and generate report on mount if not already available.
   useEffect(() => {
@@ -328,6 +337,43 @@ export const Report: React.FC = () => {
       setTexError(
         err instanceof Error ? err.message : 'Failed to download LaTeX.',
       );
+    }
+  };
+
+  // Return to the Workspace page after dropping the workspace
+  // back to INTERMEDIATE so the user can edit the corpus and
+  // regenerate. The previous implementation just navigated
+  // client-side, which left the FSM in FINAL and made the
+  // Generate Report button on the Workspace page greyed out
+  // (the button is enabled only when the workspace is in
+  // INTERMEDIATE; see ADR-017). This handler runs the FSM
+  // regressive action ``back_to_workspace`` (FINAL ->
+  // INTERMEDIATE) and then navigates.
+  //
+  // Error handling: if the action fails (e.g. network error or
+  // the workspace is not in FINAL), we surface the error in a
+  // dedicated UI block and stay on the Report page so the user
+  // can retry. We do NOT navigate because a partial failure
+  // would leave the user on the Workspace page without a
+  // validated INTERMEDIATE state.
+  const [backError, setBackError] = useState<string | null>(null);
+  const handleBackToWorkspace = async () => {
+    if (!workspaceId || isBackInFlight) return;
+    setIsBackInFlight(true);
+    setBackError(null);
+    try {
+      // runAction('back_to_workspace') -> POST
+      // /workspaces/{id}/actions/back_to_workspace -> the
+      // backend transitions FINAL -> INTERMEDIATE and returns
+      // the updated workspace. The hook also refreshes the
+      // store, so by the time the user lands on the Workspace
+      // page the store is consistent with the backend.
+      await runAction('back_to_workspace');
+      navigate(`/workspace/${workspaceId}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setBackError(message);
+      setIsBackInFlight(false);
     }
   };
 
@@ -676,8 +722,16 @@ export const Report: React.FC = () => {
 
             <button
                 className="btn btn-outline"
-                onClick={() => navigate(`/workspace/${workspaceId}`)}
+                onClick={handleBackToWorkspace}
+                disabled={isBackInFlight}
+                data-action="back-to-workspace"
+                title="Return to the Workspace page to edit the corpus and regenerate"
             >
+              {isBackInFlight ? (
+                <Loader2 className="animate-spin" size={16} />
+              ) : (
+                <ArrowLeft size={16} />
+              )}
               Back to Workspace
             </button>
           </div>
@@ -699,6 +753,16 @@ export const Report: React.FC = () => {
               data-testid="download-tex-error"
             >
               Failed to download LaTeX: {texError}
+            </div>
+          )}
+
+          {backError && (
+            <div
+              className="text-error text-sm mt-2"
+              role="alert"
+              data-testid="back-to-workspace-error"
+            >
+              Could not return to the Workspace page: {backError}
             </div>
           )}
         </header>

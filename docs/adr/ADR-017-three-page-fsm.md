@@ -79,6 +79,23 @@ question. The `remove_paper` regression that drops the last paper
 (`INTERMEDIATE → INITIAL`) is the legacy path that handles the
 same scenario organically.
 
+**Client-side expectation for `back_to_workspace`.** The
+"Back to Workspace" button on the Report page (`src/pages/Report.tsx`)
+MUST call `runAction('back_to_workspace')` *before* navigating
+to `/workspace/{id}`. A pure client-side `navigate('/workspace/...')`
+would leave the workspace in `FINAL`, and the Workspace page's
+``can('generate')`` check (which reads ``allowed_actions`` from
+the FSM table) would return `false`, greying out the Generate
+Report button. The user would land on the Workspace page
+unable to do anything useful. This was a real bug introduced
+when the FSM was collapsed (commit `5310661` made the bug
+possible but not visible; the subsequent `4970bdf` + the
+generate action made it observable by the user). The fix
+lives at the SPA layer — the orchestrator and FSM are
+correct — and the regression is pinned by three tests in
+`src/pages/Report.test.tsx > Report > back-to-workspace
+navigation (FSM regressive action)`.
+
 ## Audit pattern
 
 This refactor touches every architectural layer (the audit

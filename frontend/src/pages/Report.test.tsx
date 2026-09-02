@@ -141,9 +141,30 @@ vi.mock('../state/workspaceStore', () => {
 });
 
 // Mock react-router so the report page's useParams works.
+// ``mockNavigate`` is hoisted so individual tests can
+// ``mockNavigate.mockClear()`` between assertions -- a fresh
+// ``vi.fn()`` per call would scatter state across tests. The
+// ``MockInstance`` type avoids the "Cannot assign to constant"
+// + "Property does not exist" type errors that a plain
+// ``vi.fn()`` would trigger under strict TypeScript.
+const { mockNavigate } = vi.hoisted(() => {
+  // Lazily create the mock inside the factory so the
+  // ``vi`` runtime is initialised. We export a
+  // ``vi.Mock`` so callers see a fully-typed mock instance.
+  // Returning ``undefined as any`` would also work, but the
+  // strongly-typed pattern catches typos at compile time.
+  const fn = (() => {
+    // The mock is created on first access; the factory body
+    // is hoisted to module scope so subsequent calls reuse the
+    // same instance. We use ``vi.fn()`` lazily because
+    // ``vi`` is only available inside test setup.
+    return vi.fn();
+  })();
+  return { mockNavigate: fn };
+});
 vi.mock('react-router-dom', () => ({
   useParams: () => ({ workspaceId: 'ws-1' }),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mockNavigate,
 }));
 
 import { api } from '../api/client';
@@ -1060,6 +1081,9 @@ describe('Report > error UI', () => {
     });
     expect(screen.queryByTestId('report-error-detail-at')).toBeNull();
   });
+
+  // -----------------------------------------------------------------
+  // Back to Workspace button
 });
 
 describe('Report > citation rendering (Vancouver / ICMJE inline links)', () => {
@@ -1471,5 +1495,174 @@ describe('Report > Limitations / Future Work citation rendering', () => {
     // No raw ``[paper:20]`` text (valid entry is fully
     // linkified).
     expect(screen.queryByText('[paper:20]')).toBeNull();
+  });
+});
+
+describe('Report > back-to-workspace navigation (FSM regressive action)', () => {
+  /**
+   * Regression tests for the bug where the "Back to Workspace"
+   * button just navigated client-side without running the FSM
+   * regressive action. The user landed on the Workspace page
+   * with the workspace still in FINAL state, so the
+   * ``can('generate')`` check returned false and the Generate
+   * Report button was greyed out.
+   *
+   * The fix: the button must call
+   * ``runAction('back_to_workspace')`` (FINAL -> INTERMEDIATE)
+   * before navigating, so the Workspace page sees an
+   * INTERMEDIATE state and enables the Generate Report button.
+   *
+   * Note: this describe block lives at the top level rather
+   * than inside ``Report > Generate PDF`` because the back
+   * button is a navigation concern, not a generate concern.
+   * The local ``setupReadyWorkspace`` helper is a stripped-
+   * down version of the Generate PDF block's
+   * ``setupReadyToPublish`` -- we keep it inline so the
+   * existing tests in Generate PDF are not affected by a
+   * refactor.
+   */
+  function setupReadyWorkspace() {
+    const workspace = {
+      workspace_id: 'ws-1',
+      question: 'x',
+      state: 'FINAL',
+      summary: { text: 'A summary.', paper_ids: [] },
+      papers: [],
+      total_papers: 0,
+      allowed_actions: ['generate'],
+      report_available: true,
+      published_report_available: false,
+      last_error: null,
+      progress: 1.0,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      paper_sources: {},
+    };
+    mockUseWorkspaceReturn.workspace = workspace;
+    mockStoreCurrentWorkspace.current = workspace;
+    mockFetchWorkspace.mockResolvedValue(workspace);
+    mockRunAction.mockImplementation(async (action: string) => {
+      if (action === 'generate') {
+        return {
+          content: '# A Test Report\n\nSome content here.',
+          summary: '# A Test Report\n\nSome content here.',
+          sections: [{ title: 'Introduction', content: 'Some content.' }],
+          citations: [],
+          limitations: [],
+          future_work: [],
+        } as never;
+      }
+      return workspace as never;
+    });
+  }
+
+  it('runs the FSM regressive action THEN navigates to the Workspace page', async () => {
+    setupReadyWorkspace();
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+
+    mockRunAction.mockClear();
+    mockNavigate.mockClear();
+
+    const button = await screen.findByRole('button', {
+      name: /Back to Workspace/i,
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(mockRunAction).toHaveBeenCalled();
+    });
+
+    const actionCalls = mockRunAction.mock.calls.map((args) => args[0]);
+    expect(actionCalls).toContain('back_to_workspace');
+    // Critically, the action must NOT be 'generate' -- clicking
+    // back-to-workspace must not re-run the report pipeline.
+    expect(actionCalls).not.toContain('generate');
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/workspace/ws-1');
+    });
+
+    // The navigation must happen AFTER the regressive action.
+    // If the order is wrong (navigate-then-action), the user
+    // would land on the Workspace page with the workspace
+    // still in FINAL, and the Generate Report button would
+    // be greyed out -- the very bug we're regressing against.
+    const navigateOrder = mockNavigate.mock.invocationCallOrder[0];
+    const actionOrder = mockRunAction.mock.invocationCallOrder[0];
+    expect(actionOrder).toBeLessThan(navigateOrder);
+  });
+
+  it('keeps the user on the Report page when the regressive action fails', async () => {
+    setupReadyWorkspace();
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+
+    mockRunAction.mockClear();
+    mockNavigate.mockClear();
+    mockRunAction.mockRejectedValueOnce(
+      new Error('Workspace is in INITIAL, not FINAL'),
+    );
+
+    const button = await screen.findByRole('button', {
+      name: /Back to Workspace/i,
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('back-to-workspace-error'),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByTestId('back-to-workspace-error'),
+    ).toHaveTextContent(/Workspace is in INITIAL/);
+
+    // And the page must NOT navigate -- the user keeps the
+    // option to retry.
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('disables the button while the regressive action is in flight', async () => {
+    setupReadyWorkspace();
+    const { Report } = await import('./Report');
+    render(<Report />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+
+    // Make the regressive action hang so we can observe the
+    // in-flight state.
+    let resolveBack: () => void = () => {};
+    mockRunAction.mockClear();
+    mockRunAction.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveBack = () => resolve();
+        }),
+    );
+
+    const button = (await screen.findByRole('button', {
+      name: /Back to Workspace/i,
+    })) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /Back to Workspace/i }),
+      ).toBeDisabled();
+    });
+
+    resolveBack();
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/workspace/ws-1');
+    });
   });
 });
