@@ -105,17 +105,48 @@ def test_mapmer_deduplicates_by_doi() -> None:
     assert report.citations[0].paper.title == "Preprint version"
 
 
-def test_mapper_caps_citation_count() -> None:
-    # 25 papers -> capped at 20 (the configured _MAX_CITATIONS).
+def test_mapper_includes_all_workspace_papers_no_cap() -> None:
+    """The bibliography includes every workspace paper (no cap).
+
+    Previously the mapper truncated at ``_MAX_CITATIONS = 20``
+    which silently dropped papers the LLM did not cite. After
+    the 2026-08-31 FSM-fix iteration the user asked for the
+    full bibliography on every report so they could verify
+    ``workspace.papers`` matched ``report.citations`` exactly.
+
+    A 25-paper workspace now produces a 25-citation report.
+    ADR-019 enforces ``citations ⊆ workspace.papers`` at the
+    entity layer so there's no risk of citations escaping the
+    workspace, and the user-facing report always reflects the
+    exact corpus they curated.
+    """
     papers = [_paper(f"Paper Number {i:02d}") for i in range(25)]
     summary_text = " ".join(p.title for p in papers)
     summary = _summary(summary_text, papers)
 
     report = ReportMapper().map(_response("Body of the report."), summary)
-    assert len(report.citations) == 20
+    assert len(report.citations) == 25
+    # Every workspace paper appears in the bibliography.
+    citation_titles = {c.paper.title for c in report.citations}
+    assert citation_titles == {p.title for p in papers}
 
 
-def test_mapper_skips_papers_not_mentioned_in_summary() -> None:
+def test_mapper_includes_papers_not_cited_by_llm() -> None:
+    """Papers the LLM didn't cite are still in the bibliography.
+
+    Previously the mapper dropped any paper the LLM did not
+    mention in the body. The user complained that this left
+    them unable to verify which papers were "actually used"
+    when the LLM focused on a subset. Now every workspace paper
+    appears, so a missing paper from the body's ``[paper:N]``
+    markers is detectable by the user.
+
+    Ordering: marker-cited papers first (Phase 1), then
+    substring-matched (Phase 2), then remaining workspace
+    papers in corpus order (Phase 3). With no markers and no
+    substring matches here, Phase 3 puts both papers in
+    corpus order.
+    """
     paper_in_text = _paper("Paper In Text", doi="10.1038/in_text")
     paper_out_of_text = _paper("Paper Out Of Text", doi="10.1038/out_of")
     summary = _summary("Paper In Text is discussed.", [paper_in_text, paper_out_of_text])
@@ -123,7 +154,10 @@ def test_mapper_skips_papers_not_mentioned_in_summary() -> None:
     report = ReportMapper().map(_response("Body of the report."), summary)
     titles = [c.paper.title for c in report.citations]
     assert "Paper In Text" in titles
-    assert "Paper Out Of Text" not in titles
+    # Both papers appear -- even the one not mentioned in the body.
+    assert "Paper Out Of Text" in titles
+    # Corpus order preserved within the same phase.
+    assert titles == ["Paper In Text", "Paper Out Of Text"]
 
 
 def test_mapper_returns_empty_citations_when_no_papers() -> None:

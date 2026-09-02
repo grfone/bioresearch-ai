@@ -550,6 +550,7 @@ class ResearchSession:
             list(papers),
             paper_sources=paper_sources,
             reason="Papers replaced",
+            advance_to_intermediate_if_initial=True,
         )
 
     def _force_state_regressive(

@@ -220,6 +220,40 @@ class TestPaperMutationInvalidatesStaleArtefacts:
     ``self.summary`` / ``self.report`` / ``self.published_report``
     so stale artefacts cannot survive a corpus mutation."""
 
+    def test_replace_papers_advances_initial_to_intermediate(self) -> None:
+        """``replace_papers`` from INITIAL state advances to
+        INTERMEDIATE.
+
+        The 2026-08-31 FSM-fix iteration dropped the explicit
+        ``force_state(INTERMEDIATE)`` call from ``replace_papers``;
+        the orchestrator's ``search()`` still advanced state
+        correctly because ``_enter_action(SEARCH)`` runs first
+        (per the FSM table ``INITIAL + SEARCH → INTERMEDIATE``).
+        But direct entity callers (tests, future code, anything
+        not going through ``_enter_action``) would leave the
+        state at INITIAL with papers loaded -- a latent bug
+        where ``can('generate')`` would be false even with
+        papers present.
+
+        This test pins the fix: ``replace_papers`` itself
+        advances state. Direct callers now behave consistently
+        with the orchestrator path.
+        """
+        session = ResearchSession(
+            question=ResearchQuestion(question="x"),
+            state=WorkspaceState.INITIAL,
+        )
+        assert session.state is WorkspaceState.INITIAL
+
+        new_paper = _make_paper("111")
+        session.replace_papers([new_paper])
+
+        # State advanced to INTERMEDIATE because the corpus is
+        # non-empty. Without this fix the state would have
+        # stayed at INITIAL -- the latent bug.
+        assert session.state is WorkspaceState.INTERMEDIATE
+        assert session.papers == [new_paper]
+
     def test_remove_paper_clears_summary(self) -> None:
         p1 = _make_paper("111")
         p2 = _make_paper("222")

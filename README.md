@@ -502,6 +502,7 @@ We capture every non-trivial architectural decision in an Architecture Decision 
 | [ADR-017](docs/adr/ADR-017-three-page-fsm.md) | Collapse the FSM to four states mapped 1:1 to the three pages (Home / Workspace / Report) | Accepted |
 | [ADR-018](docs/adr/ADR-018-context-aware-fsm-transitions.md) | Context-aware FSM transitions via callable resolvers (closes the ADR-017 TODO) | Accepted |
 | [ADR-019](docs/adr/ADR-019-citation-subset-invariant.md) | Citations are a strict subset of workspace.papers (structural invariant for the user's "executive reports only contain references available at INTERMEDIATE" rule) | Accepted |
+| [ADR-020](docs/adr/ADR-020-bibliography-equals-workspace-papers.md) | Bibliography equals workspace.papers (the mapper always includes every workspace paper regardless of LLM citation choices) | Accepted |
 
 Five ADRs are particularly worth reading for new contributors:
 

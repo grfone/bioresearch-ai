@@ -76,10 +76,13 @@ class TestMixedSignalCitationMatching:
 
     def test_mixed_marker_and_substring_signals(self) -> None:
         """Paper A is marker-cited, paper B is
-        title-substring-cited, paper C is uncited and
-        should be dropped. Both A and B appear in the
-        citation list, in their respective text-order
-        positions.
+        title-substring-cited, paper C is uncited.
+        As of the 2026-08-31 FSM-fix iteration, every
+        workspace paper appears in the bibliography regardless
+        of whether the LLM cited it -- so A, B, and C all
+        appear, with A and B in their respective text-order
+        positions and C appended at the end (Phase 3
+        corpus-order fallback).
         """
         papers = [
             _paper("PaperViaMarker"),
@@ -97,10 +100,10 @@ class TestMixedSignalCitationMatching:
         # Both cited papers appear.
         assert "PaperViaMarker" in titles
         assert "PaperViaSubstring12345" in titles
-        # The uncited paper is dropped.
-        assert "PaperNeverCited" not in titles
-        # Only the two cited papers -- no duplicates.
-        assert len(titles) == 2
+        # The uncited paper now also appears (Phase 3 inclusion).
+        assert "PaperNeverCited" in titles
+        # All three workspace papers -- no duplicates.
+        assert len(titles) == 3
 
 
 class TestMarkerPriorityOverSubstring:
@@ -179,8 +182,11 @@ class TestMarkerPriorityOverSubstring:
         # Paper 1 appears exactly once despite being cited
         # twice in the source.
         assert titles.count("DuplicateCitationsAcrossSignals") == 1
-        # Both other papers are absent (uncited).
-        assert "Other Paper A" not in titles
-        assert "Other Paper B" not in titles
-        # The result is a single-element citation list.
-        assert len(titles) == 1
+        # As of the 2026-08-31 FSM-fix iteration, every workspace
+        # paper appears in the bibliography regardless of LLM
+        # citation. The "Other Paper A/B" entries are now
+        # present in Phase 3 (corpus-order inclusion).
+        assert "Other Paper A" in titles
+        assert "Other Paper B" in titles
+        # All three workspace papers appear, each exactly once.
+        assert len(titles) == 3

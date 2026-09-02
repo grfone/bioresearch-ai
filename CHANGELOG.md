@@ -508,6 +508,28 @@ the contract. 389/389 backend tests pass.
   (workspace moves to `ERROR`, user retries per ADR-018).
   Adds 20 tests pinning the invariant.
 
+* **Bibliography equals workspace.papers** (see
+  [ADR-020](../docs/adr/ADR-020-bibliography-equals-workspace-papers.md)).
+  The user observed that the report mapper was dropping
+  workspace papers the LLM chose not to mention in its body
+  ("after generating report with 4 references, I still get
+  ten in the executive report and 20 again when I come back
+  to the workspace"). The fix removes the `_MAX_CITATIONS = 20`
+  cap and replaces the 2-phase mapper (marker + substring)
+  with a 3-phase mapper that always includes every workspace
+  paper: marker-cited first (Phase 1, in citation order),
+  substring-matched second (Phase 2, in first-appearance
+  order), and remaining corpus papers last (Phase 3, in
+  corpus order). Dedup uses PMID → DOI → title identity. The
+  user's invariant is now visible in the UI: every paper at
+  INTERMEDIATE appears in the bibliography, in the order the
+  LLM chose to mention them. Also fixes a latent
+  ``replace_papers`` bug where direct entity callers
+  (without going through the orchestrator's `_enter_action`)
+  would leave the state at INITIAL after adding papers.
+  Adds 2 tests; updates 7 tests that pinned the legacy
+  "uncited papers are dropped" / "20-cap" contracts.
+
 ### Changed
 
 * **Workspace.tsx — identifier naming.** ``identifierInputRef``

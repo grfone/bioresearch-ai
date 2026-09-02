@@ -99,6 +99,19 @@ These documents serve as long-term project documentation and help future contrib
   and surfaces as a clear `last_error` (the workspace moves
   to `ERROR`, the user retries per ADR-018).
 
+- [ADR-020: Bibliography equals workspace.papers](ADR-020-bibliography-equals-workspace-papers.md) —
+  removes the legacy `_MAX_CITATIONS = 20` cap and rewrites
+  `ReportMapper._build_citations` with a 3-phase logic:
+  marker-cited papers first (Phase 1), substring-matched papers
+  second (Phase 2), and remaining workspace papers last
+  (Phase 3, corpus order). The bibliography now always
+  equals the workspace paper count (after PMID/DOI dedup),
+  so the user can verify that every paper at INTERMEDIATE
+  appears in the report. Also fixes a latent `replace_papers`
+  bug where direct entity callers would leave the state at
+  INITIAL after adding papers (the orchestrator's
+  `_enter_action` masks this on the normal search path).
+
 ## Every ADR follows the same format:
 
 > # ADR-XXX Title

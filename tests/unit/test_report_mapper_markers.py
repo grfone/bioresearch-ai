@@ -86,7 +86,15 @@ def test_markers_out_of_range_are_ignored() -> None:
     """An out-of-range marker (``[paper:99]`` in a 3-paper list) is
     silently dropped. This guards against LLM hallucinations like
     ``[paper:99]`` that would otherwise silently extend the
-    citation list to non-existent papers."""
+    citation list to non-existent papers.
+
+    As of the 2026-08-31 FSM-fix iteration, every workspace
+    paper appears in the bibliography regardless of marker
+    citation. The marker-driven Phase 1 only sees
+    ``[paper:1]`` and ``[paper:2]`` (paper 99 is dropped because
+    it's out of range), but Phase 3 includes ``Paper Three``
+    from the corpus regardless.
+    """
     papers = [_paper("Paper One"), _paper("Paper Two"), _paper("Paper Three")]
     summary = _summary(
         "[paper:1] cited. [paper:99] hallucinated. [paper:2] cited.",
@@ -94,8 +102,14 @@ def test_markers_out_of_range_are_ignored() -> None:
     )
     report = ReportMapper().map(_response("Body."), summary)
     titles = [c.paper.title for c in report.citations]
-    assert titles == ["Paper One", "Paper Two"]
-    assert len(report.citations) == 2
+    # The hallucinated marker [paper:99] must not extend the
+    # bibliography to a non-existent paper. All three real
+    # workspace papers appear; their order follows Phase 1 +
+    # Phase 3 (corpus order for the rest).
+    assert "Paper One" in titles
+    assert "Paper Two" in titles
+    assert "Paper Three" in titles
+    assert len(report.citations) == 3
 
 
 def test_substring_fallback_when_no_markers_present() -> None:
@@ -139,10 +153,18 @@ def test_substring_match_on_doi() -> None:
     assert "Title Two" in titles
 
 
-def test_uncited_papers_are_dropped() -> None:
-    """Papers that appear in neither markers nor text are dropped
-    from the citation list. Citing them would be misleading --
-    the report makes no claim grounded in them."""
+def test_uncited_papers_are_included_in_bibliography() -> None:
+    """Papers the LLM didn't cite in the body are still in the
+    bibliography (Phase 3 fallback).
+
+    Previously the mapper dropped papers that appeared in
+    neither markers nor text on the grounds that "citing them
+    would be misleading." The user complained that this left
+    them unable to verify which papers were actually available
+    at INTERMEDIATE when the LLM focused on a subset. Now every
+    workspace paper appears -- marker-cited first, substring-
+    matched second, remaining corpus third.
+    """
     papers = [
         _paper("Paper Cited"),  # cited via marker
         _paper("Paper Not Cited"),  # not in text at all
@@ -155,9 +177,12 @@ def test_uncited_papers_are_dropped() -> None:
     )
     report = ReportMapper().map(_response("Body."), summary)
     titles = [c.paper.title for c in report.citations]
+    # Every workspace paper appears -- including the one the LLM
+    # didn't mention in the body.
     assert "Paper Cited" in titles
     assert "Paper Cited by Substring" in titles
-    assert "Paper Not Cited" not in titles
+    assert "Paper Not Cited" in titles
+    assert len(report.citations) == 3
 
 
 def test_doi_dedup_across_marker_and_substring() -> None:
@@ -180,14 +205,21 @@ def test_doi_dedup_across_marker_and_substring() -> None:
     assert report.citations[0].paper.title == "Preprint version"
 
 
-def test_no_citations_when_summary_does_not_mention_papers() -> None:
-    """If the summary text has zero markers AND no substring
-    matches, the citation list is empty. This is the "papers
-    were searched but the LLM wrote nothing useful" case -- the
-    mapper should not invent citations."""
-    papers = [_paper("Some Paper"), _paper("Other Paper")]
+def test_no_citations_when_no_papers_at_all() -> None:
+    """When the workspace has zero papers, the bibliography is
+    empty -- there's nothing to cite.
+
+    The mapper's Phase 3 (corpus-order inclusion) iterates
+    ``range(len(papers))``, so an empty ``papers_used`` produces
+    an empty citation list. This distinguishes the "no
+    corpus" case (Phase 3 contributes nothing) from the
+    "non-empty corpus, LLM didn't cite anything" case
+    (Phase 3 includes every corpus paper).
+    """
+    papers: list = []
     summary = _summary(
-        "The research field is broad and multifaceted.", papers
+        "The research field is broad and multifaceted.",
+        papers,
     )
     report = ReportMapper().map(_response("Body."), summary)
     assert report.citations == []

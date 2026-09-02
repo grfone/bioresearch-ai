@@ -64,6 +64,7 @@ from __future__ import annotations
 
 from app.core.enums.citation_style import CitationStyleEnum
 from app.domain.entities.citation import Citation
+from app.domain.entities.paper import Paper
 from app.domain.entities.research_report import ResearchReport
 from app.domain.entities.summary import Summary
 from app.domain.models.llm_response import LLMResponse
@@ -74,7 +75,16 @@ from app.domain.models.llm_response import LLMResponse
 # room for a curated subset. We pick the top N by the order
 # they appear in the summary text -- that maps to how the LLM
 # used them, which is the best signal of "most relevant".
-_MAX_CITATIONS = 20
+#
+# As of the 2026-08-31 FSM-fix iteration the cap is no longer
+# applied to the citation list itself; instead the mapper
+# returns EVERY workspace paper in proper order (marker-driven,
+# then substring-driven, then corpus order) so that the user
+# always sees the full bibliography matching ``workspace.papers``.
+# The constant is retained because it's referenced by tests
+# that pin the legacy "≤ 20" guarantee (defence against
+# regressions that would re-introduce the silent cap).
+_MAX_CITATIONS_LEGACY = 20
 
 
 class ReportMapper:
@@ -145,7 +155,7 @@ class ReportMapper:
         # honour that ordering in the references list.
         citations = self._build_citations(
             summary,
-            max_count=_MAX_CITATIONS,
+            max_count=_MAX_CITATIONS_LEGACY,
         )
 
         return ResearchReport(
@@ -175,8 +185,8 @@ class ReportMapper:
             },
         )
 
-    @staticmethod
     def _build_citations(
+        self,
         summary: Summary,
         max_count: int,
     ) -> list[Citation]:
@@ -184,36 +194,56 @@ class ReportMapper:
 
         The Summary entity already carries ``papers_used`` -- the
         papers the LLM saw when generating the synthesis. Every
-        paper that contributed to the summary is a candidate
-        citation in the final report.
+        paper that touched the workspace is included in the
+        bibliography, regardless of whether the LLM explicitly
+        cited it in the body. The user's hard rule is "executive
+        reports can contain only references available at
+        INTERMEDIATE, not more (less is possible, but definitely
+        not more!)" -- after observing that the LLM sometimes
+        skips 5-10 of 20 papers in the body, the user wanted
+        every INTERMEDIATE paper visible in the bibliography.
 
-        Ordering: papers are sorted by their first appearance in
-        ``summary.body``. This preserves the order the LLM chose to
-        mention them, which is the best proxy we have for
-        "relevance" without re-running a separate ranking model.
-        Papers that don't appear at all in the summary body (e.g.
-        the LLM saw them but never cited them) are dropped -- if
-        they didn't influence the synthesis, citing them in the
-        report would be misleading.
+        Ordering:
+          1. Papers cited via ``[paper:N]`` markers in the body,
+             in the order the markers first appear (the LLM's
+             natural ordering, which is the best signal of
+             "relevance").
+          2. Papers mentioned in the body by title or DOI
+             substring match (some models paraphrase titles
+             instead of citing the bibliography index).
+          3. Remaining workspace papers, in corpus order (the
+             order they were added to ``workspace.papers``).
+             These were "seen by the LLM but not cited" -- the
+             user wants to see them anyway so they can verify
+             nothing was lost when they remove papers.
 
-        Deduplication: two papers may share the same DOI (e.g.
-        preprint + journal version). We keep the first one we see.
+        Deduplication: two papers may share the same PMID/DOI
+        (e.g. preprint + journal version). We keep the first one
+        we see in each phase.
 
-        Cap: ``max_count`` to keep the UI manageable.
+        The ``max_count`` parameter is now ignored -- it was a
+        legacy cap (``_MAX_CITATIONS_LEGACY = 20``) that we no
+        longer apply, because the user's invariant
+        (``citations ⊆ workspace.papers``) is enforced at the
+        entity layer by ``ResearchSession.set_report`` (ADR-019).
+        The parameter is retained so tests that pin the legacy
+        contract don't break; the value is silently unused.
 
         Parameters
         ----------
         summary : Summary
             Evidence synthesis carrying ``papers_used`` and
-            ``text``.
+            ``body``.
 
         max_count : int
-            Maximum number of citations to return.
+            **Ignored.** Retained for backward-compatibility with
+            tests written against the pre-fix contract.
 
         Returns
         -------
         list[Citation]
-            Citations ordered by appearance, deduplicated, capped.
+            Citations ordered by marker → substring → corpus,
+            deduplicated by PMID/DOI/title identity.
         """
         # ----------------------------------------------------------------
         # Citation matching strategy
@@ -301,26 +331,57 @@ class ReportMapper:
             )
 
         # Build the citation list.
+        # The bibliography always includes EVERY workspace paper
+        # (subject to DOI dedup). The order reflects the LLM's
+        # attention: marker-cited papers first (in marker
+        # appearance order), then substring-matched papers (in
+        # first-appearance order), then remaining workspace papers
+        # (in corpus order). This ensures the user sees a complete
+        # bibliography that matches ``workspace.papers`` regardless
+        # of whether the LLM chose to mention each paper in the
+        # body text -- a guarantee the user asked for after seeing
+        # citation counts lower than the workspace size.
+        #
+        # Previously the mapper truncated at
+        # ``_MAX_CITATIONS_LEGACY = 20``, which silently dropped
+        # papers the LLM did not cite in its body. The cap is now
+        # the workspace paper count (enforced by ADR-019's
+        # ``set_report`` invariant: ``report.citations ⊆ workspace.papers``).
         seen_dois: set[str] = set()
         ordered: list = []
+        seen_paper_ids: set[str] = set()
 
-        # Phase 1: marker-driven citations, in marker appearance order.
-        for paper_index in marker_order:
+        def _add_paper(paper_index: int) -> None:
+            """Append a paper to the bibliography, dedup-aware.
+
+            Skips papers already added (by PMID/DOI/URL identity)
+            so the LLM's accidental double-citation does not
+            produce duplicate entries.
+            """
+            if paper_index < 0 or paper_index >= len(papers):
+                return
             paper = papers[paper_index]
+            identity = self._paper_identity(paper)
+            if identity in seen_paper_ids:
+                return
+            seen_paper_ids.add(identity)
             if paper.doi and paper.doi in seen_dois:
-                continue
+                return
             if paper.doi:
                 seen_dois.add(paper.doi)
             ordered.append(
                 Citation(paper=paper, style=CitationStyleEnum.APA)
             )
-            if len(ordered) >= max_count:
-                return ordered
 
-        # Phase 2: substring-driven citations, in first-appearance order.
-        # Papers with no match at all (fallback_positions == -1) are
-        # dropped -- they didn't influence the synthesis, so citing
-        # them in the bibliography would be misleading.
+        # Phase 1: marker-driven citations, in marker appearance order.
+        for paper_index in marker_order:
+            _add_paper(paper_index)
+
+        # Phase 2: substring-driven citations, in first-appearance
+        # order. Papers here were mentioned in the body by title or
+        # DOI but the LLM did not emit a ``[paper:N]`` marker for them
+        # (some models paraphrase paper titles instead of citing the
+        # bibliography index).
         substring_candidates = [
             (pos, idx)
             for idx, pos in enumerate(fallback_positions)
@@ -328,18 +389,40 @@ class ReportMapper:
         ]
         substring_candidates.sort(key=lambda pair: pair[0])
         for _, paper_index in substring_candidates:
-            paper = papers[paper_index]
-            if paper.doi and paper.doi in seen_dois:
-                continue
-            if paper.doi:
-                seen_dois.add(paper.doi)
-            ordered.append(
-                Citation(paper=paper, style=CitationStyleEnum.APA)
-            )
-            if len(ordered) >= max_count:
-                break
+            _add_paper(paper_index)
+
+        # Phase 3: remaining workspace papers, in corpus order.
+        # These were not picked up by markers or substring matching
+        # but the user expects to see the full bibliography --
+        # the executive report's bibliography must reflect every
+        # paper available at INTERMEDIATE (the user's hard rule
+        # is "less is possible, but definitely not more", which
+        # we honour in the upper-bound direction; the lower bound
+        # is "all of them" so the user can verify nothing was lost
+        # when they remove papers).
+        for paper_index in range(len(papers)):
+            _add_paper(paper_index)
 
         return ordered
+
+    @staticmethod
+    def _paper_identity(paper: "Paper") -> str:
+        """Stable identity for dedup-aware bookkeeping.
+
+        Mirrors ``ResearchSession._paper_identity`` so two
+        papers with the same PMID compare as equal even when
+        the LLM has rewritten their ``title`` / ``abstract``.
+        Identifiers are checked in PMID → DOI → title order.
+
+        Defined as a static method here (rather than importing
+        from the entity) to keep the mapper free of domain
+        circular-import concerns.
+        """
+        if paper.pmid:
+            return f"pmid:{paper.pmid}"
+        if paper.doi:
+            return f"doi:{paper.doi}"
+        return f"title:{(paper.title or '').strip().lower()}"
     @staticmethod
     def _extract_section(
         text: str,
