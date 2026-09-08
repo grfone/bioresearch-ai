@@ -54,14 +54,17 @@ const mockApi = api as unknown as {
 };
 
 // Mock the workspace store so we don't need a real
-// Zustand context. The component now mirrors the
-// server's ``WorkspaceResponse`` via
-// ``setCurrentWorkspace`` (commit 6e565bb + this commit
-// fix the FSM-aware local-mirror pattern across the
-// whole workspace page). We expose both
-// ``addPapersToCurrent`` (legacy) and
-// ``setCurrentWorkspace`` (current) so the test can
-// assert which one is called per path.
+// Zustand context. The component mirrors the server's
+// ``WorkspaceResponse`` via ``setCurrentWorkspace`` (see
+// commit 6e565bb for the search-path sibling). The store
+// no longer exposes the legacy local-only corpus mutations
+// (``addPapersToCurrent``, ``removePaper``, ``clearPapers``)
+// -- they were removed on 2026-09-08 because the next
+// ``fetchWorkspace`` silently resurrected the original
+// corpus whenever a local-only mutation ran. The hook
+// (``useWorkspace``) is now the only path that writes the
+// store, via ``setCurrentWorkspace`` after a backend
+// round-trip.
 vi.mock('../state/workspaceStore', () => ({
   useWorkspaceStore: (selector: (state: any) => any) => {
     return selector(mockWorkspaceStoreState);
@@ -81,17 +84,13 @@ vi.mock('../state/toastStore', () => ({
 import { toast } from '../state/toastStore';
 
 // Hoisted shared mock state so individual tests can assert
-// against ``setCurrentWorkspace`` (the new FSM-aware
-// local-mirror) and ``addPapersToCurrent`` (the legacy
-// local-push). Without this, the inline closure inside the
-// vi.mock factory creates a fresh object per call, and the
-// tests can't reach the same mock instance as the component
-// under test.
+// against ``setCurrentWorkspace`` -- the canonical store
+// mirror after a backend round-trip. The store no longer
+// exposes ``addPapersToCurrent`` or any other local-only
+// corpus mutation; the hook owns corpus writes.
 const { mockWorkspaceStoreState } = vi.hoisted(() => ({
   mockWorkspaceStoreState: {
-    addPapersToCurrent: vi.fn(),
     setCurrentWorkspace: vi.fn(),
-    removePaper: vi.fn(),
   },
 }));
 
@@ -102,9 +101,7 @@ describe('AddPapersPanel', () => {
     mockApi.addPaper.mockReset();
     mockApi.uploadPdf.mockReset();
     mockApi.addPaperByTitle.mockReset();
-    mockWorkspaceStoreState.addPapersToCurrent.mockReset();
     mockWorkspaceStoreState.setCurrentWorkspace.mockReset();
-    mockWorkspaceStoreState.removePaper.mockReset();
   });
 
   afterEach(() => {
@@ -392,13 +389,15 @@ describe('AddPapersPanel', () => {
     it('mirrors the server response via setCurrentWorkspace (FSM-aware)', async () => {
       // Regression test for the "Generate Report button stayed
       // greyed out after I added a paper" bug: the panel
-      // used to call ``addPapersToCurrent(response.papers)``
-      // (local-push only) which left ``workspace.state`` /
-      // ``allowed_actions`` stale. It must instead call
-      // ``setCurrentWorkspace(response)`` so the workspace
-      // page re-renders with the post-add FSM state and the
-      // Generate Report button becomes enabled. See commit
-      // 6e565bb for the sibling fix on the search paths.
+      // used to write ``currentWorkspace.papers`` directly via
+      // a local-only Zustand action (later named
+      // ``addPapersToCurrent``), which left ``workspace.state`` /
+      // ``allowed_actions`` stale and the next ``fetchWorkspace``
+      // silently resurrected the original corpus. The panel MUST
+      // mirror the full server response via ``setCurrentWorkspace``
+      // so the workspace page re-renders with the post-add FSM
+      // state and the Generate Report button becomes enabled. See
+      // commit 6e565bb for the sibling fix on the search paths.
       const user = userEvent.setup();
       const resolvedPaper = {
         title: 'A real paper.',
@@ -407,34 +406,29 @@ describe('AddPapersPanel', () => {
         year: null,
         abstract: '',
         doi: '10.1038/nature12373',
-        pmid: null,
-        keywords: [],
-        url: null,
       };
-      mockApi.resolvePapers.mockResolvedValue({
-        results: [
-          {
-            resolved: {
-              identifier: '10.1038/nature12373',
-              identifier_type: 'doi',
-              paper: resolvedPaper,
-            },
-            failed: null,
-          },
-        ],
-        resolved_count: 1,
-        failed_count: 0,
-      });
       const serverWorkspace = {
         workspace_id: 'ws-1',
         question: 'x',
         state: 'INTERMEDIATE',
         papers: [resolvedPaper],
         total_papers: 1,
-        allowed_actions: ['report', 'summarize', 'search'],
+        allowed_actions: [
+          'add_paper', 'remove_paper', 'report', 'search', 'summarize',
+        ],
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-01T00:00:00Z',
       };
+      mockApi.resolvePapers.mockResolvedValue({
+        resolved_count: 1,
+        failed_count: 0,
+        results: [
+          {
+            identifier: '10.1038/nature12373',
+            resolved: { identifier: '10.1038/nature12373', paper: resolvedPaper },
+          },
+        ],
+      });
       mockApi.addPapersBulk.mockResolvedValue(serverWorkspace);
 
       render(
@@ -460,14 +454,12 @@ describe('AddPapersPanel', () => {
       );
 
       // The fix: the panel must call setCurrentWorkspace with
-      // the full server response, NOT the legacy
-      // addPapersToCurrent(response.papers) local-push.
+      // the full server response (which is the only mutation
+      // left on the store). The previous local-only push
+      // action was removed on 2026-09-08.
       expect(
         mockWorkspaceStoreState.setCurrentWorkspace,
       ).toHaveBeenCalledWith(serverWorkspace);
-      expect(
-        mockWorkspaceStoreState.addPapersToCurrent,
-      ).not.toHaveBeenCalled();
     });
   });
 
@@ -558,11 +550,14 @@ describe('AddPapersPanel', () => {
     it('mirrors the server response via setCurrentWorkspace (FSM-aware)', async () => {
       // The user's exact reproduction: "I just added a paper
       // and the Generate Report button got greyed out."
-      // The panel used to call
-      // ``addPapersToCurrent(response.papers)`` which only
-      // pushed the new paper into local state but left the
-      // workspace FSM stuck at CREATED (no ``report`` in
-      // ``allowed_actions``). It must instead mirror the
+      // The panel used to write ``currentWorkspace.papers``
+      // via a local-only Zustand action (later named
+      // ``addPapersToCurrent``), which only pushed the new
+      // paper into local state but left the workspace FSM
+      // stuck at CREATED (no ``report`` in
+      // ``allowed_actions``) and the next ``fetchWorkspace``
+      // resurrected the original corpus. The local-only path
+      // was removed on 2026-09-08. The panel MUST mirror the
       // full server response so the workspace page
       // re-renders with the post-add FSM state.
       const serverWorkspace = {
@@ -606,9 +601,6 @@ describe('AddPapersPanel', () => {
           mockWorkspaceStoreState.setCurrentWorkspace,
         ).toHaveBeenCalledWith(serverWorkspace);
       });
-      expect(
-        mockWorkspaceStoreState.addPapersToCurrent,
-      ).not.toHaveBeenCalled();
     });
 
     it('shows the extractor error from the API', async () => {
@@ -970,10 +962,14 @@ describe('AddPapersPanel', () => {
     });
 
     it('mirrors the title-fallback response via setCurrentWorkspace', async () => {
-      // Third commit path that used to call
-      // ``addPapersToCurrent(response.papers)``. Same
-      // FSM-aware mirror as the DOI-bulk and PDF-upload
-      // paths.
+      // Third commit path: this used to write
+      // ``currentWorkspace.papers`` via a local-only Zustand
+      // action (``addPapersToCurrent``). The local-only path
+      // was removed on 2026-09-08 because the next
+      // ``fetchWorkspace`` resurrected the original corpus.
+      // Now the panel mirrors the server response via
+      // ``setCurrentWorkspace`` -- same contract as the
+      // DOI-bulk and PDF-upload paths.
       const user = userEvent.setup();
       mockApi.uploadPdf.mockRejectedValue(noIdError);
       const serverWorkspace = {
@@ -1029,9 +1025,6 @@ describe('AddPapersPanel', () => {
           mockWorkspaceStoreState.setCurrentWorkspace,
         ).toHaveBeenCalledWith(serverWorkspace);
       });
-      expect(
-        mockWorkspaceStoreState.addPapersToCurrent,
-      ).not.toHaveBeenCalled();
     });
 
     it('surfaces title_no_confident_match as an inline error', async () => {

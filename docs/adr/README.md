@@ -112,6 +112,21 @@ These documents serve as long-term project documentation and help future contrib
   INITIAL after adding papers (the orchestrator's
   `_enter_action` masks this on the normal search path).
 
+- [ADR-021: Workspace corpus mutations are server-authoritative](ADR-021-workspace-corpus-server-authoritative.md) —
+  removes the local-only ``useWorkspaceStore.removePaper`` /
+  ``clearPapers`` / ``addPapersToCurrent`` Zustand actions
+  that caused the "INTERMEDIATE: [P1..P4], Generate, FINAL
+  report: [P1..P20]" bug. The previous Workspace page bound
+  ``useWorkspaceStore.removePaper`` (a local filter) instead
+  of calling ``DELETE /workspaces/{id}/papers/{paper_id}``,
+  so every removal was silently dropped on the next
+  ``fetchWorkspace``. The fix wires all corpus mutations
+  through the ``useWorkspace`` hook, which round-trips to
+  the backend and mirrors the canonical ``WorkspaceResponse``
+  into the store. The store is now a write-once mirror of
+  the persisted workspace; there is no longer any local-only
+  path that can diverge from the backend.
+
 ## Every ADR follows the same format:
 
 > # ADR-XXX Title

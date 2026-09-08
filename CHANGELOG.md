@@ -1111,6 +1111,29 @@ links to the commit that introduced it.
   failure that the previous code path triggered.
   (Commit: `d6f226b`.)
 
+#### Workspace corpus invariant (server-authoritative removals)
+
+* **The corpus-resurrection bug is fixed.** The user
+  reported (2026-09-02): "after generating report with 4
+  references, I still get ten in the executive report and
+  20 again when I come back to the workspace." Root cause:
+  ``Workspace.tsx::handleRemovePaper`` was bound to
+  ``useWorkspaceStore.removePaper`` -- a local-only
+  Zustand filter that never called
+  ``DELETE /workspaces/{id}/papers/{paper_id}``. Every
+  removal was silently dropped on the next
+  ``fetchWorkspace``. Fix: every corpus mutation now
+  goes through the ``useWorkspace`` hook, which
+  round-trips to the backend and mirrors the canonical
+  ``WorkspaceResponse`` into the store. The local-only
+  store actions ``removePaper`` / ``clearPapers`` /
+  ``addPapersToCurrent`` were deleted; their supporting
+  helpers (``paperIdentity``, ``paperStrongIdentities``,
+  ``nextAllowedActions``) and the dead
+  ``handleClearPapers`` button handler were deleted with
+  them. See
+  [ADR-021](docs/adr/ADR-021-workspace-corpus-server-authoritative.md).
+
 #### Tests
 
 * **1095 tests passing** (was 641 at v0.1.0):

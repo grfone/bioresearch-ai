@@ -33,9 +33,11 @@ vi.mock('../api/client', () => ({
 vi.mock('../state/workspaceStore', () => ({
   useWorkspaceStore: (selector: (state: any) => any) => {
     const fakeState = {
-      addPapersToCurrent: vi.fn(),
       // Advanced Search submit calls setCurrentWorkspace so
-      // the action bar reflects the new FSM state.
+      // the action bar reflects the new FSM state. The
+      // store no longer exposes ``addPapersToCurrent`` /
+      // ``removePaper`` / ``clearPapers`` -- those local-only
+      // mutations were removed on 2026-09-08.
       setCurrentWorkspace: vi.fn(),
     };
     return selector(fakeState);

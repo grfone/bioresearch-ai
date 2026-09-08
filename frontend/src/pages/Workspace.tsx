@@ -66,6 +66,7 @@ export const Workspace: React.FC = () => {
     error,
     fetchWorkspace,
     runAction,
+    removePaper: removePaperOnServer,
   } = useWorkspace(workspaceId, { autoFetch: false });
 
   useEffect(() => {
@@ -79,9 +80,6 @@ export const Workspace: React.FC = () => {
       })();
     }
   }, [workspaceId, shouldFetch, fetchWorkspace]);
-
-  const removePaper = useWorkspaceStore((s) => s.removePaper);
-  const clearPapers = useWorkspaceStore((s) => s.clearPapers);
 
   const can = (action: WorkspaceAction): boolean => {
     return workspace?.allowed_actions.includes(action) ?? false;
@@ -121,11 +119,33 @@ export const Workspace: React.FC = () => {
     navigate(`/report/${workspaceId}`);
   };
 
-  const handleRemovePaper = (paper: any) => {
+  // Server-authoritative paper removal.
+  //
+  // The previous implementation called ``useWorkspaceStore.removePaper``,
+  // a local-only Zustand filter that never reached the backend. Every
+  // removal was silently dropped on the next ``fetchWorkspace``
+  // refetch (e.g. navigating to Report, returning to Workspace,
+  // any 409 retry), which is why a workspace that started at 20
+  // papers and was edited down to 4 would "resurrect" to 20 as
+  // soon as the user clicked Generate Report.
+  //
+  // The fix is to call ``useWorkspace.removePaper``, which
+  // round-trips through ``DELETE /workspaces/{id}/papers/{paper_id}``
+  // and mirrors the canonical ``WorkspaceResponse`` into the
+  // store. The button is disabled while ``loading`` is true so
+  // the user gets immediate visual feedback (no optimistic
+  // mutation by design — the user explicitly chose correctness
+  // over speed).
+  const handleRemovePaper = async (paper: any) => {
     const id = paper.pmid || paper.doi;
-    if (id) {
-      removePaper(id);
+    if (!id) return;
+    try {
+      await removePaperOnServer(id);
       toast.info('Paper removed');
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : String(err);
+      toast.error(`Remove failed: ${message}`);
     }
   };
 
@@ -205,12 +225,21 @@ export const Workspace: React.FC = () => {
   };
   useKeyboardShortcut({ key: 'k', ctrl: true }, focusShortcutTarget);
 
-  const handleClearPapers = () => {
-    if (window.confirm('Remove all papers from this workspace?')) {
-      clearPapers();
-      toast.info('All papers cleared');
-    }
-  };
+  // ``handleClearPapers`` was removed on 2026-09-08.
+  //
+  // It used to call ``useWorkspaceStore.clearPapers`` -- a local-only
+  // Zustand mutation that emptied ``currentWorkspace.papers`` without
+  // touching the backend. The same divergence that broke removePaper
+  // applied: the next ``fetchWorkspace`` would resurrect the persisted
+  // corpus and the user would see their "cleared" papers reappear.
+  // The corresponding JSX button was already disabled in an earlier
+  // refactor but the handler was left behind; removing it here closes
+  // the gap so a future developer can't accidentally wire a "Clear All"
+  // button back to the local-only mutation. If a real "Clear All"
+  // affordance is needed it MUST go through a new backend endpoint
+  // (e.g. ``DELETE /workspaces/{id}/papers`` with no paper_id) and a
+  // matching ``clearPapers`` on the ``useWorkspace`` hook that mirrors
+  // the canonical ``WorkspaceResponse``.
 
   if (loading && !workspace) {
     return (

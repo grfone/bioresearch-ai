@@ -1,11 +1,24 @@
 // workspaceStore.test.ts
 //
-// Tests for the Zustand store actions, particularly the
-// FSM-state side effects in addPapersToCurrent.
+// Tests for the Zustand store actions.
+//
+// On 2026-09-08 the local-only corpus mutations
+// (``addPapersToCurrent``, ``removePaper``, ``clearPapers``)
+// were removed from this store. Corpus mutations are now
+// exclusively server-authoritative -- callers go through
+// the ``useWorkspace`` hook's ``addPaper`` / ``addPapersBulk``
+// / ``removePaper`` actions, which round-trip to the backend
+// and mirror the canonical ``WorkspaceResponse`` back into
+// this store via ``setCurrentWorkspace``. The previous
+// "test the dedup logic lives on the frontend" tests are
+// obsolete: the three-tier dedup (``_paper_identity``: PMID
+// > DOI > title) now lives exclusively in
+// ``app/domain/entities/research_session.py`` and is
+// covered by backend tests. This file tests only the
+// surviving store actions.
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useWorkspaceStore } from './workspaceStore';
-import type { Paper } from '../models/paper';
 import type { WorkspaceResponse } from '../models/workspace';
 
 const SAMPLE_WORKSPACE: WorkspaceResponse = {
@@ -27,187 +40,113 @@ const SAMPLE_WORKSPACE: WorkspaceResponse = {
   paper_sources: {},
 };
 
-function makePaper(
-  pmid: string | null = null,
-  doi: string | null = null,
-  title = 'Test',
-): Paper {
-  return {
-    title,
-    authors: [],
-    journal: null,
-    year: 2024,
-    abstract: '',
-    doi,
-    pmid,
-    keywords: [],
-    url: null,
-  };
-}
-
 describe('workspaceStore', () => {
   beforeEach(() => {
-    // The Zustand store is a module-level singleton; reset
-    // state between tests by calling setCurrentWorkspace
-    // with the test fixture and clearing papers.
-    useWorkspaceStore.getState().setCurrentWorkspace(SAMPLE_WORKSPACE);
-    useWorkspaceStore.getState().clearPapers();
     useWorkspaceStore.getState().setCurrentWorkspace(SAMPLE_WORKSPACE);
   });
 
-  describe('addPapersToCurrent', () => {
-    it('advances the FSM state from CREATED to PAPERS_RETRIEVED when papers are added', () => {
-      // The user added papers via the legacy
-      // LiteratureSearch path. The workspace was in
-      // CREATED; after addPapers, the action bar should
-      // expose Summarize (which requires PAPERS_RETRIEVED).
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper('12345'),
-        makePaper('67890'),
-      ]);
-      const ws = useWorkspaceStore.getState().currentWorkspace!;
-      expect(ws.state).toBe('INTERMEDIATE');
-      expect(ws.allowed_actions).toContain('generate');
-      expect(ws.total_papers).toBe(2);
-      expect(ws.papers.length).toBe(2);
+  describe('setCurrentWorkspace', () => {
+    it('replaces the entire currentWorkspace payload atomically', () => {
+      // The hook uses setCurrentWorkspace as the ONLY path to
+      // update the store after a backend round-trip. The
+      // store MUST NOT merge partial state into the existing
+      // payload; the backend response is canonical.
+      const next: WorkspaceResponse = {
+        ...SAMPLE_WORKSPACE,
+        state: 'INTERMEDIATE',
+        papers: [
+          { pmid: '11111', doi: null, title: 'A' } as never,
+          { pmid: '22222', doi: null, title: 'B' } as never,
+        ],
+        total_papers: 2,
+        allowed_actions: ['add_paper', 'back_to_home', 'generate', 'remove_paper'],
+      };
+      useWorkspaceStore.getState().setCurrentWorkspace(next);
+      const ws = useWorkspaceStore.getState().currentWorkspace;
+      expect(ws?.state).toBe('INTERMEDIATE');
+      expect(ws?.total_papers).toBe(2);
+      expect(ws?.papers.length).toBe(2);
+      expect(ws?.papers[0]?.pmid).toBe('11111');
     });
 
-    it('does NOT regress the state — papers added in PAPERS_RETRIEVED stay there', () => {
-      // Start with PAPERS_RETRIEVED (e.g. user ran the
-      // advanced search modal then added papers via
-      // manual entry).
+    it('overwrites a prior workspace entirely (no merge)', () => {
+      // Bug regression: a stale "set" that merged partial
+      // state into the existing payload would leave the
+      // previous paper list intact while updating fields
+      // like ``state``. The setCurrentWorkspace contract is
+      // "replace, don't merge".
       useWorkspaceStore.getState().setCurrentWorkspace({
         ...SAMPLE_WORKSPACE,
         state: 'INTERMEDIATE',
-        allowed_actions: ['add_paper', 'back_to_home', 'generate', 'remove_paper'],
-        papers: [makePaper('1')],
+        papers: [{ pmid: '11111', doi: null, title: 'A' } as never],
         total_papers: 1,
       });
-      useWorkspaceStore.getState().addPapersToCurrent([makePaper('2')]);
-      const ws = useWorkspaceStore.getState().currentWorkspace!;
-      expect(ws.state).toBe('INTERMEDIATE');
-      expect(ws.allowed_actions).toContain('generate');
-      expect(ws.total_papers).toBe(2);
+      useWorkspaceStore.getState().setCurrentWorkspace({
+        ...SAMPLE_WORKSPACE,
+        state: 'INTERMEDIATE',
+        papers: [{ pmid: '99999', doi: null, title: 'Z' } as never],
+        total_papers: 1,
+      });
+      const ws = useWorkspaceStore.getState().currentWorkspace;
+      expect(ws?.papers.length).toBe(1);
+      expect(ws?.papers[0]?.pmid).toBe('99999');
+    });
+  });
+
+  describe('clearCurrentWorkspace', () => {
+    it('nulls out the workspace', () => {
+      useWorkspaceStore.getState().clearCurrentWorkspace();
+      expect(useWorkspaceStore.getState().currentWorkspace).toBeNull();
+    });
+  });
+
+  describe('setSummary', () => {
+    it('sets summary on the current workspace', () => {
+      useWorkspaceStore.getState().setSummary('a summary');
+      expect(
+        useWorkspaceStore.getState().currentWorkspace?.summary,
+      ).toBe('a summary');
     });
 
-    it('dedupes by PMID before adding', () => {
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper('1', 'Alpha'),
-        makePaper('1', 'Alpha duplicate'),
-        makePaper('2', 'Beta'),
-      ]);
-      const ws = useWorkspaceStore.getState().currentWorkspace!;
-      expect(ws.papers.length).toBe(2);
+    it('is a no-op when no workspace is loaded', () => {
+      useWorkspaceStore.getState().clearCurrentWorkspace();
+      useWorkspaceStore.getState().setSummary('orphan');
+      // Must not crash; must not create a workspace.
+      expect(useWorkspaceStore.getState().currentWorkspace).toBeNull();
     });
+  });
 
-    it('does NOT advance state when the dedup leaves zero new papers', () => {
-      // Workspace stays in CREATED if every paper we tried
-      // to add is already there. (Edge case — this matters
-      // because the empty-add path shouldn't move the FSM.)
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper('1', null, 'Alpha'),
-      ]);
-      const stateBefore =
-        useWorkspaceStore.getState().currentWorkspace!.state;
-      expect(stateBefore).toBe('INTERMEDIATE');
-      // Now try adding the same paper again — dedup, no
-      // new papers.
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper('1', null, 'Alpha duplicate'),
-      ]);
-      const ws = useWorkspaceStore.getState().currentWorkspace!;
-      // State should not change.
-      expect(ws.state).toBe('INTERMEDIATE');
-      // Total paper count should not change.
-      expect(ws.total_papers).toBe(1);
+  describe('setReportAvailable', () => {
+    it('toggles report_available', () => {
+      useWorkspaceStore.getState().setReportAvailable(true);
+      expect(
+        useWorkspaceStore.getState().currentWorkspace?.report_available,
+      ).toBe(true);
     });
+  });
 
-    // --------------------------------------------------------------
-    // DOI-based deduplication
-    // --------------------------------------------------------------
-    //
-    // The original PMID-only dedup missed papers without a
-    // PMID -- e.g. Springer book chapters, arXiv preprints,
-    // conference proceedings. A user could add the same DOI
-    // twice and end up with two identical cards. These tests
-    // pin the contract that mirrors the backend's
-    // ``_paper_identity``: PMID first, DOI fallback,
-    // normalized title last resort.
-    it('dedupes by DOI when PMID is absent', () => {
-      // The user's reproduction: add a Springer book
-      // chapter (DOI only, no PMID) twice in a row. Should
-      // produce exactly one card, not two.
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper(null, '10.1007/978-3-031-64636-2_17', 'Springer chapter'),
-      ]);
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper(null, '10.1007/978-3-031-64636-2_17', 'Springer chapter'),
-      ]);
-      const ws = useWorkspaceStore.getState().currentWorkspace!;
-      expect(ws.papers.length).toBe(1);
-      expect(ws.total_papers).toBe(1);
-    });
-
-    it('dedupes by DOI even when PMID is also present and matches', () => {
-      // Paper has both PMID and DOI. The first add lands.
-      // The second add (with the same DOI but a different
-      // -- or absent -- PMID) is a duplicate because DOI
-      // is enough.
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper('12345', '10.1038/nature14539', 'Deep learning'),
-      ]);
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper(null, '10.1038/nature14539', 'Deep learning'),
-      ]);
-      const ws = useWorkspaceStore.getState().currentWorkspace!;
-      expect(ws.papers.length).toBe(1);
-    });
-
-    it('does NOT dedup papers with the same title but different DOI', () => {
-      // Two genuinely distinct papers can share a title
-      // (e.g. "Letter to the Editor"). Without the DOI
-      // check, the title dedup would falsely merge them.
-      // This is the contract that title is a LAST resort,
-      // not a primary key.
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper(null, '10.1234/aaa', 'Letter to the Editor'),
-      ]);
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper(null, '10.5678/bbb', 'Letter to the Editor'),
-      ]);
-      const ws = useWorkspaceStore.getState().currentWorkspace!;
-      // Both papers kept -- different DOIs, same title is
-      // not a duplicate signal.
-      expect(ws.papers.length).toBe(2);
-    });
-
-    it('dedupes by normalized title only when no PMID and no DOI', () => {
-      // Pre-print / stub record with no PMID and no DOI.
-      // The only signal we have is the title; we should
-      // still dedup because a duplicate entry is worse
-      // than a possible false-positive.
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper(null, null, 'Glucose metabolism in hepatocytes'),
-      ]);
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper(null, null, 'Glucose metabolism in hepatocytes'),
-      ]);
-      const ws = useWorkspaceStore.getState().currentWorkspace!;
-      expect(ws.papers.length).toBe(1);
-    });
-
-    it('treats case-only title differences as duplicates', () => {
-      // Title normalization is lowercased + whitespace-
-      // collapsed before comparison, so "Foo" and "foo "
-      // are the same identity.
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper(null, null, 'Foo Bar'),
-      ]);
-      useWorkspaceStore.getState().addPapersToCurrent([
-        makePaper(null, null, 'foo bar '),
-      ]);
-      const ws = useWorkspaceStore.getState().currentWorkspace!;
-      expect(ws.papers.length).toBe(1);
+  describe('dangerous-abstraction regression', () => {
+    it('exposes NO local-only corpus mutation (removePaper / clearPapers / addPapersToCurrent)', () => {
+      // The bug that motivated removing the local-only
+      // mutations was that future developers could write
+      // ``useWorkspaceStore.removePaper(id)`` and believe
+      // they had persisted a removal. Pin the contract: the
+      // store's keys are ONLY the surviving actions.
+      const keys = Object.keys(useWorkspaceStore.getState());
+      expect(keys).not.toContain('removePaper');
+      expect(keys).not.toContain('clearPapers');
+      expect(keys).not.toContain('addPapersToCurrent');
+      // The surviving actions.
+      expect(keys).toEqual(
+        expect.arrayContaining([
+          'currentWorkspace',
+          'setCurrentWorkspace',
+          'updateCurrentWorkspace',
+          'clearCurrentWorkspace',
+          'setSummary',
+          'setReportAvailable',
+        ]),
+      );
     });
   });
 });

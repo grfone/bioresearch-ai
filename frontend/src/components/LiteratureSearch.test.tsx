@@ -35,11 +35,12 @@ vi.mock('../state/workspaceStore', () => ({
   // accepts a selector function. The selector receives the
   // full state and returns a slice. The component reads
   // ``state.setCurrentWorkspace`` so we expose it through
-  // a fake selector.
+  // a fake selector. The store no longer exposes
+  // ``addPapersToCurrent`` / ``removePaper`` (removed
+  // 2026-09-08 -- local-only corpus mutations that
+  // diverged from the persisted workspace).
   useWorkspaceStore: (selector: (state: any) => any) => {
     const fakeState = {
-      addPapersToCurrent: vi.fn(),
-      removePaper: vi.fn(),
       setCurrentWorkspace: vi.fn(),
     };
     return selector(fakeState);

@@ -33,6 +33,7 @@ import type {
   WorkspaceRequest,
   WorkspaceStatusResponse,
 } from '../models/workspace';
+import type { PaperRequest } from '../models/paper';
 import type { ReportRequest, ReportResponse } from '../models/report';
 import { useWorkspaceStore } from '../state/workspaceStore';
 
@@ -117,6 +118,33 @@ interface UseWorkspaceResult {
   generateReport: (
     options?: Partial<Omit<ReportRequest, 'workspace_id'>>,
   ) => Promise<ReportResponse>;
+  /**
+   * Remove a paper from the workspace (PMID or DOI).
+   *
+   * Server-authoritative: calls ``DELETE
+   * /workspaces/{id}/papers/{paper_id}``, mirrors the
+   * canonical ``WorkspaceResponse`` into the store. This is
+   * the ONLY path that persists a paper removal — there is
+   * no optimistic local-only removal. We accept a slow UI
+   * (round-trip) over an instant UI that lies about the
+   * persisted corpus.
+   *
+   * See ``Workspace.test.tsx > remove_paper end-to-end`` for
+   * the regression test that pins this behaviour: remove 16
+   * of 20 papers, generate, return to workspace, refresh —
+   * the corpus must remain the 4 papers the backend saw.
+   */
+  removePaper: (paperId: string) => Promise<WorkspaceResponse>;
+  /**
+   * Add a single paper to the workspace (full metadata).
+   *
+   * Server-authoritative: calls ``POST /workspaces/{id}/papers``
+   * and mirrors the canonical response. ``AddPapersPanel``
+   * uses ``addPapersBulk`` for bulk adds; this singular
+   * variant is for callers that already have a
+   * ``PaperRequest`` (e.g. the manual-DOI entry path).
+   */
+  addPaper: (paper: PaperRequest) => Promise<WorkspaceResponse>;
 }
 
 /**
@@ -135,9 +163,21 @@ export function useWorkspace(
     initialWorkspaceId,
   );
 
-  // Global store
-  const { currentWorkspace, setCurrentWorkspace, clearCurrentWorkspace, addPapersToCurrent } =
-    useWorkspaceStore();
+  // Global store.
+  //
+  // ``addPapersToCurrent`` was removed on 2026-09-08 along
+  // with the other local-only corpus mutations
+  // (``removePaper``, ``clearPapers``). Corpus mutations
+  // are now exclusively server-authoritative; the store
+  // is only ever written via ``setCurrentWorkspace`` with
+  // the canonical ``WorkspaceResponse`` from a backend
+  // round-trip. The local-only paths that diverged from
+  // the persisted corpus are gone.
+  const {
+    currentWorkspace,
+    setCurrentWorkspace,
+    clearCurrentWorkspace,
+  } = useWorkspaceStore();
 
   // Fetch workspace by ID
   const fetchWorkspace = useCallback(
@@ -331,6 +371,80 @@ export function useWorkspace(
     [workspaceId, fetchWorkspace],
   );
 
+  // Server-authoritative paper removal.
+  //
+  // The previous implementation bound ``useWorkspaceStore.removePaper``
+  // (a local-only Zustand filter) directly from ``Workspace.tsx``,
+  // which silently dropped every removal on the next ``fetchWorkspace``
+  // refetch — the backend kept all 20 papers from the original search
+  // and any subsequent Generate produced a 20-paper report. The fix
+  // is to round-trip through ``DELETE /workspaces/{id}/papers/{paper_id}``
+  // and mirror the canonical ``WorkspaceResponse`` into the store, so
+  // the local state and the persisted corpus cannot diverge.
+  //
+  // We deliberately do NOT do optimistic updates here. The user
+  // explicitly asked for the slower-but-correct behaviour: "I would
+  // rather have a slightly slower but correct UI than an instant UI
+  // that lies about the persisted state." The hook's ``loading``
+  // flag flips while the DELETE is in flight; ``Workspace.tsx``
+  // disables the remove button while loading.
+  const removePaper = useCallback(
+    async (paperId: string) => {
+      if (!workspaceId) {
+        throw new Error(
+          'No workspace ID available. Cannot remove a paper.',
+        );
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await api.removePaper(workspaceId, paperId);
+        setCurrentWorkspace(data);
+        return data;
+      } catch (err) {
+        const errorObj =
+          err instanceof Error ? err : new Error(String(err));
+        setError(errorObj);
+        throw errorObj;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [workspaceId, setCurrentWorkspace],
+  );
+
+  // Server-authoritative single-paper add. Mirrors the bulk path
+  // in ``AddPapersPanel`` — backend is the source of truth, store
+  // mirrors the response. ``AddPapersPanel`` calls this via
+  // ``api.addPapersBulk`` / ``api.addPaperFromTitle`` etc.; this
+  // hook variant is the imperative surface for callers that already
+  // have a fully-built ``PaperRequest`` (e.g. the manual-DOI
+  // entry path that needs no resolver round-trip).
+  const addPaper = useCallback(
+    async (paper: PaperRequest) => {
+      if (!workspaceId) {
+        throw new Error(
+          'No workspace ID available. Cannot add a paper.',
+        );
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await api.addPaper(workspaceId, paper);
+        setCurrentWorkspace(data);
+        return data;
+      } catch (err) {
+        const errorObj =
+          err instanceof Error ? err : new Error(String(err));
+        setError(errorObj);
+        throw errorObj;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [workspaceId, setCurrentWorkspace],
+  );
+
   // Expose workspace from store
   const workspace = currentWorkspace;
 
@@ -344,5 +458,7 @@ export function useWorkspace(
     runAction,
     fetchTransitions,
     generateReport,
+    removePaper,
+    addPaper,
   };
 }

@@ -66,15 +66,19 @@ vi.mock('../api/client', () => ({
 // Mock the workspaceStore with a minimal stub. The
 // simplified Workspace page reads ``currentWorkspace``
 // for the action bar's ``canReport`` flag; we provide a
-// REPORTED workspace so the button is enabled.
+// REPORTED workspace so the button is enabled. The store
+// no longer exposes the local-only corpus mutations
+// (``removePaper`` / ``clearPapers`` / ``addPapersToCurrent``)
+// -- those were removed on 2026-09-08 because the next
+// ``fetchWorkspace`` silently resurrected the original
+// corpus. The Workspace page now calls the hook's
+// ``removePaper`` (server-authoritative) instead.
 import { useWorkspaceStore } from '../state/workspaceStore';
 vi.mock('../state/workspaceStore', () => ({
   useWorkspaceStore: (
     selector: (state: {
       currentWorkspace: unknown;
       setCurrentWorkspace: (...args: unknown[]) => void;
-      removePaper: (...args: unknown[]) => void;
-      clearPapers: (...args: unknown[]) => void;
     }) => unknown,
   ) => {
     return selector({
@@ -87,8 +91,6 @@ vi.mock('../state/workspaceStore', () => ({
         allowed_actions: ['add_paper', 'generate'],
       },
       setCurrentWorkspace: vi.fn(),
-      removePaper: vi.fn(),
-      clearPapers: vi.fn(),
     });
   },
 }));
@@ -97,7 +99,8 @@ vi.mock('../state/workspaceStore', () => ({
 // already loaded (no fetch needed) and a no-op ``runAction``.
 // The bug we fixed was in handleGenerateReport calling
 // runAction("generate") -- the test below ensures that call
-// no longer happens.
+// no longer happens. ``removePaper`` is now an async method
+// on the hook that round-trips to the backend.
 vi.mock('../hooks/useWorkspace', () => ({
   useWorkspace: () => ({
     workspace: {
@@ -116,8 +119,18 @@ vi.mock('../hooks/useWorkspace', () => ({
     searchAndAddPapers: vi.fn(),
     fetchTransitions: vi.fn(),
     generateReport: vi.fn(),
-    removePaper: vi.fn(),
+    removePaper: mockRemovePaper,
+    addPaper: vi.fn(),
   }),
+}));
+
+// ``mockRemovePaper`` is shared between the hook mock and
+// the regression test that pins "removing papers hits the
+// backend". ``vi.hoisted`` ensures the mock factory (which
+// Vitest hoists above the imports) sees the same instance
+// that the rest of the file uses.
+const { mockRemovePaper } = vi.hoisted(() => ({
+  mockRemovePaper: vi.fn(),
 }));
 
 describe('Workspace > handleGenerateReport', () => {
@@ -342,14 +355,14 @@ describe('Workspace > Add Papers collapse', () => {
     // does NOT include 'add_paper'.
     //
     // We use vi.doMock so the import resolves against the
-    // alternative mock for this test only.
+    // alternative mock for this test only. The store no
+    // longer exposes ``removePaper`` / ``clearPapers`` --
+    // those local-only mutations were removed on 2026-09-08.
     vi.doMock('../state/workspaceStore', () => ({
       useWorkspaceStore: (
         selector: (state: {
           currentWorkspace: unknown;
           setCurrentWorkspace: (...args: unknown[]) => void;
-          removePaper: (...args: unknown[]) => void;
-          clearPapers: (...args: unknown[]) => void;
         }) => unknown,
       ) => {
         return selector({
@@ -363,8 +376,6 @@ describe('Workspace > Add Papers collapse', () => {
             allowed_actions: ['generate'],
           },
           setCurrentWorkspace: vi.fn(),
-          removePaper: vi.fn(),
-          clearPapers: vi.fn(),
         });
       },
     }));
@@ -387,6 +398,7 @@ describe('Workspace > Add Papers collapse', () => {
         fetchTransitions: vi.fn(),
         generateReport: vi.fn(),
         removePaper: vi.fn(),
+        addPaper: vi.fn(),
       }),
     }));
 
