@@ -394,7 +394,7 @@ The frontend will start with hot reloading enabled.
 - ✅ FastAPI REST API
 - ✅ Modular LLM providers
 - ✅ Clean Architecture implementation
-- ✅ 806 backend + 289 frontend tests passing
+- ✅ 848 backend + 295 frontend tests passing
 - ✅ CI on every push (see [`docs/ci.md`](docs/ci.md))
 
 ---

@@ -280,9 +280,9 @@ CATALOG: tuple[ProviderMeta, ...] = (
         display_name="MiniMax",
         region="CN",
         base_url="https://api.minimax.io/anthropic",
-        default_model="MiniMax-M3",
+        default_model="MiniMax-M3.1-Flash",
         api_key_env="MINIMAX_API_KEY",
-        model_hint="abab6.5s-chat, MiniMax-M3, MiniMax-Text-01",
+        model_hint="abab6.5s-chat, MiniMax-M3.1-Flash, MiniMax-Text-01",
         notes=(
             "Uses Anthropic-compatible /v1/messages. The retain "
             "API key starts with ``eyJ...``."

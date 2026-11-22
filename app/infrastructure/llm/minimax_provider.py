@@ -62,7 +62,11 @@ class MinimaxProvider(LLMProvider):
     ChatPath = "/v1/messages"
 
     ENDPOINT = BaseURL + ChatPath
-    DEFAULT_MODEL = "MiniMax-M3"
+    # MiniMax-M3.1-Flash replaces the retired MiniMax-M3: cheaper per token
+    # ($0.15/$0.60 vs $0.30/$1.20 per 1M) and a flat rate at any prompt
+    # length, whereas M3's rate doubles above 512K input. The MINIMAX_MODEL
+    # env var overrides this default when set.
+    DEFAULT_MODEL = "MiniMax-M3.1-Flash"
 
     def __init__(
         self,

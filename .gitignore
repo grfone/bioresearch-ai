@@ -45,3 +45,5 @@ bioresearch.db-journal
 
 # Hermes agent sandbox (not project code)
 .hermes/
+.env.bak*
+.env*
