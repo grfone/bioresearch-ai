@@ -60,6 +60,10 @@ def _isolate_from_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
         "app.infrastructure.llm.minimax_provider.load_dotenv",
         lambda *args, **kwargs: None,
     )
+    # The MiniMax provider refuses to construct without a key. The
+    # developer's local ``.env`` supplies one; a CI runner has no
+    # ``.env`` at all. Give it a dummy so the test is hermetic.
+    monkeypatch.setenv("MINIMAX_API_KEY", "dummy")
 
 
 def _clear_timeout_env(monkeypatch: pytest.MonkeyPatch) -> None:
