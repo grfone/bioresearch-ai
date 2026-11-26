@@ -38,6 +38,7 @@ MINIMAX_MODEL
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from pathlib import Path
@@ -49,6 +50,46 @@ from dotenv import load_dotenv
 from app.domain.interfaces.llm_provider import LLMProvider
 from app.domain.models.llm_response import LLMResponse
 from app.domain.models.prompt import Prompt
+
+
+logger = logging.getLogger(__name__)
+
+#: Default HTTP timeout in seconds when ``MINIMAX_TIMEOUT`` is unset.
+DEFAULT_TIMEOUT_SECONDS = 60.0
+
+
+def _timeout_from_env() -> float:
+    """
+    Read the request timeout from ``MINIMAX_TIMEOUT``.
+
+    Returns
+    -------
+    float
+        The timeout in seconds. Falls back to
+        :data:`DEFAULT_TIMEOUT_SECONDS` when the variable is unset
+        or cannot be parsed as a number — a malformed value must not
+        take the whole application down at import time.
+    """
+    raw = os.getenv("MINIMAX_TIMEOUT")
+    if raw is None or not raw.strip():
+        return DEFAULT_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "MINIMAX_TIMEOUT=%r is not a number; using %s seconds.",
+            raw,
+            DEFAULT_TIMEOUT_SECONDS,
+        )
+        return DEFAULT_TIMEOUT_SECONDS
+    if value <= 0:
+        logger.warning(
+            "MINIMAX_TIMEOUT=%r is not positive; using %s seconds.",
+            raw,
+            DEFAULT_TIMEOUT_SECONDS,
+        )
+        return DEFAULT_TIMEOUT_SECONDS
+    return value
 
 
 class MinimaxProvider(LLMProvider):
@@ -72,7 +113,7 @@ class MinimaxProvider(LLMProvider):
         self,
         api_key: str | None = None,
         model: str | None = None,
-        timeout: float = 60.0,
+        timeout: float | None = None,
     ) -> None:
         """
         Initialize the Minimax provider.
@@ -84,8 +125,19 @@ class MinimaxProvider(LLMProvider):
             the MINIMAX_API_KEY environment variable (including .env file).
         model : str | None
             Model identifier. Falls back to MINIMAX_MODEL env var or default.
-        timeout : float
-            HTTP request timeout in seconds.
+        timeout : float | None
+            HTTP request timeout in seconds. When omitted, the
+            ``MINIMAX_TIMEOUT`` environment variable is used
+            (default: 60 seconds).
+
+            The timeout needs to be generous for this provider:
+            ``MiniMax-M3.1-Flash`` is a *reasoning* model — it emits
+            a ``thinking`` block before the answer — and the
+            ``generate`` pipeline summarises the whole workspace
+            corpus in one call. A 20-paper corpus routinely exceeds
+            the 60-second default, and the resulting
+            ``httpx.ReadTimeout`` surfaces as "Unable to connect to
+            the MiniMax API", which sends the workspace to ERROR.
 
         Raises
         ------
@@ -112,8 +164,18 @@ class MinimaxProvider(LLMProvider):
 
         self._model = model or os.getenv("MINIMAX_MODEL", self.DEFAULT_MODEL)
 
+        # The timeout is configurable via ``MINIMAX_TIMEOUT`` (an
+        # explicit constructor argument still wins). It mirrors the
+        # ``OLLAMA_TIMEOUT`` convention already used by the Ollama
+        # provider, and it exists because the 60-second default is
+        # too short for the corpus-summarisation call.
+        if timeout is not None:
+            self._timeout = float(timeout)
+        else:
+            self._timeout = _timeout_from_env()
+
         self._client = httpx.Client(
-            timeout=timeout,
+            timeout=self._timeout,
             headers={
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
