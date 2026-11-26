@@ -71,6 +71,7 @@ import {
   linkifyCitationMarkers,
 } from '../lib/citationLink';
 import { renderCitationWithDoiLink, renderItemWithCitationLinks } from '../lib/citationRender';
+import { extractReportTitle, stripTitleAndDuplicate } from '../lib/reportTitle';
 import { FileText, RefreshCw, AlertCircle, Lightbulb, Download, ArrowLeft, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -628,16 +629,17 @@ export const Report: React.FC = () => {
     );
   }
 
-  // Extract the report title from the first Markdown heading
-  const reportTitle =
-      report.summary
-          .split("\n")
-          .find((line) => line.startsWith("# "))
-          ?.replace(/^#\s+/, "") ?? "Research Report";
+  // Extract the report title from the first Markdown heading.
+  // The backend guarantees that line is clean (no raw markdown),
+  // so the page and the PDF always show the same title.
+  const reportTitle = extractReportTitle(report.summary);
 
-// Remove the title from the markdown so it isn't shown twice
+  // Remove the title from the markdown so it isn't shown twice,
+  // and drop the opening paragraph that repeats it -- the H1
+  // fallback derives the title from that paragraph, so the body
+  // still carries it. The PDF generator strips the same repeat.
   const reportBody = linkifyCitationMarkers(
-    report.summary.replace(/^# .*\n?/, ""),
+    stripTitleAndDuplicate(report.summary),
     report.citations.length,
   );
 

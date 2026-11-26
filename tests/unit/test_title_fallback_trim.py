@@ -243,3 +243,63 @@ class TestTrimIntegratedWithDeriveTitle:
             f"word, not a function word; got {out!r} "
             f"(last: {last_word!r})"
         )
+
+class TestTrailingPunctuation:
+    """A truncated title must not end in stray punctuation.
+
+    The word cap cuts the candidate at a word boundary, but the word
+    it lands on can carry punctuation: "...purely clinical," or
+    "...blood-based assays" cut to "blood-". A title is rendered as
+    plain text, so a dangling comma is as visible as a raw ``**``.
+    """
+
+    def test_trailing_comma_is_stripped(self):
+        words = ["a", "purely", "clinical,"]
+        out = _trim_to_last_content_word(words)
+        assert out == "a purely clinical"
+
+    def test_trailing_colon_is_stripped(self):
+        words = ["the", "framework", "of", "diagnosis:"]
+        out = _trim_to_last_content_word(words)
+        assert out == "the framework of diagnosis"
+
+    def test_function_word_with_a_comma_is_trimmed(self):
+        """A function word wearing a comma is still a function word.
+
+        Without stripping the comma first, "for," would not be
+        recognised and the title would keep both the dangling "for"
+        and the stray comma.
+        """
+        words = ["a", "sensitive", "marker", "for,"]
+        out = _trim_to_last_content_word(words)
+        assert out == "a sensitive marker"
+
+    def test_a_word_cut_in_half_is_dropped(self):
+        """A compound word cut by the cap is a fragment, not a word."""
+        words = ["measured", "in", "CSF", "and", "blood-"]
+        out = _trim_to_last_content_word(words)
+        assert out == "measured in CSF"
+
+    def test_a_complete_hyphenated_word_survives(self):
+        words = ["measured", "in", "blood-based", "assays"]
+        out = _trim_to_last_content_word(words)
+        assert out == "measured in blood-based assays"
+
+    def test_derivation_never_ends_in_punctuation(self):
+        """End-to-end: a long first sentence yields a clean title."""
+        from app.infrastructure.llm.title_fallback import (
+            derive_title_from_first_sentence,
+        )
+
+        body = (
+            "The diagnosis of Alzheimer's disease (AD) has shifted from a "
+            "purely clinical, neuropathological definition to a "
+            "biomarker-led one, and the shift has been rapid."
+        )
+        out = derive_title_from_first_sentence(body)
+        assert out.endswith("clinical"), (
+            f"the title should end on a content word: {out!r}"
+        )
+        assert not out.endswith((",", ";", ":", "-")), (
+            f"the title ends in punctuation: {out!r}"
+        )

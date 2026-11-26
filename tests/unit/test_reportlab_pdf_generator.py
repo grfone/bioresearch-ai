@@ -609,6 +609,55 @@ class TestStripFirstSentenceDuplicate:
         out = _strip_first_sentence_duplicate("", "Some title")
         assert out == ""
 
+    def test_skips_a_leading_section_heading(self) -> None:
+        """The duplicate is the prose AFTER a section label.
+
+        The synthesis LLM sometimes opens with a label written at
+        the wrong level ("### Bottom line"). The label is
+        structure and must survive; the prose after it is the
+        repeat and must go.
+        """
+        body = (
+            "# Among the supplied studies, plasma tau emerged\n"
+            "\n"
+            "### Bottom line\n"
+            "\n"
+            "Among the supplied studies, plasma tau emerged first.\n"
+            "\n"
+            "## Next section\n"
+            "\n"
+            "More prose.\n"
+        )
+        out = _strip_first_sentence_duplicate(
+            body, "Among the supplied studies, plasma tau emerged",
+        )
+        assert "### Bottom line" in out
+        assert "emerged first" not in out
+        assert "## Next section" in out
+
+    def test_matches_when_the_body_carries_markdown(self) -> None:
+        """The comparison is made on the text the reader sees.
+
+        The title is derived from the body and carries no markup,
+        while the body's opening sentence may still carry it. A
+        raw comparison never matched, and the duplicate survived
+        into the PDF.
+        """
+        body = (
+            "# Among the supplied studies, plasma tau emerged\n"
+            "\n"
+            "Among the supplied studies, **plasma tau** emerged first.\n"
+            "\n"
+            "## Next section\n"
+            "\n"
+            "More prose.\n"
+        )
+        out = _strip_first_sentence_duplicate(
+            body, "Among the supplied studies, plasma tau emerged",
+        )
+        assert "emerged first" not in out
+        assert "## Next section" in out
+
 
 class TestConvertPaperMarkersToRLM:
     """Convert ``[paper:N]`` markers to RLM link tags."""

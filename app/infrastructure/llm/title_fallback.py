@@ -66,6 +66,8 @@ from __future__ import annotations
 import logging
 import re
 
+from app.core.markdown_text import strip_inline_markdown
+
 logger = logging.getLogger(__name__)
 
 # Cap the derived title to a useful "headline" length. Long
@@ -106,7 +108,25 @@ _FALLBACK_WINDOW: list[int] = []
 _H1_LINE_RE = re.compile(r"^#\s+\S", re.MULTILINE)
 _SENTENCE_END_RE = re.compile(r"[.!?](?:\s|$)")
 _PAPER_MARKER_RE = re.compile(r"\[paper:\d+(?:,\s*paper:\d+)*\]")
-_WHITESPACE_RE = re.compile(r"\s+")
+
+# A markdown heading line at any level: ``# Title``, ``## Title``,
+# ``### Title``. The captured group is the heading's own text.
+#
+# This matters because the synthesis LLM sometimes opens with a
+# section label written at the wrong level -- ``### Bottom line``
+# instead of a ``# `` title. That line is not the opening of a
+# sentence, so it must not become part of a sentence-derived title.
+_HEADING_LINE_RE = re.compile(r"^#{1,6}\s+(.*\S)\s*$")
+
+# A heading marker at the very start of a candidate, e.g. when a
+# heading's text is used as the title.
+_LEADING_HEADING_MARKER_RE = re.compile(r"^#{1,6}\s+")
+
+#: Trailing punctuation a truncated title can land on. The word cap
+#: cuts the candidate at a word boundary, but the word it lands on may
+#: carry punctuation -- "clinical," out of "...purely clinical," or
+#: "fluid-" out of "...blood-based assays".
+_TRAILING_PUNCTUATION = ".,;:!?—–-"
 
 # Function words whose presence at the END of a title
 # suggests an incomplete phrase. When the word-cap
@@ -168,8 +188,8 @@ def _trim_to_last_content_word(words: list[str]) -> str:
     Trim ``words`` back to the last non-function word.
 
     The caller has already truncated the candidate to
-    ``_MAX_TITLE_WORDS`` words. If the truncation landed on
-    a function word (article, conjunction, preposition,
+    ``_MAX_TITLE_WORDS`` words. If the truncation landed on a
+    function word (article, conjunction, preposition,
     modal verb), we back off to the last content word so
     the title doesn't end in "and", "of", "the", etc.
 
@@ -187,10 +207,25 @@ def _trim_to_last_content_word(words: list[str]) -> str:
     - Empty input: returns ``""``.
     - All-function-words input (very rare; only if the
       sentence is something like "And the of a in"):
-      returns the input as-is (no clean place to cut).
+      returns the first word of the list. No clean cut is
+      possible, and the caller can fall back to the default
+      label.
     - Single-word input: returned unchanged (truncation
-      didn't land on a function word -- there's nothing
-      to back off to).
+      didn't land on a function word -- there's nothing to
+      back off to).
+
+    Two refinements over a plain function-word walk:
+
+    1. **Trailing punctuation is stripped** from the last word
+       before the function-word check. A truncation that lands on
+       "for," is the function word "for" wearing a comma;
+       without stripping it first the title would keep the
+       dangling "for" *and* end in a stray comma. The same
+       applies to any other trailing punctuation the word cap
+       can land on (``,``, ``;``, ``:``, ``-``).
+    2. **A word cut in half by the cap** ("blood-" out of
+       "blood-based") is a fragment, not a word, so it is
+       dropped rather than left dangling.
 
     Why not a real POS tagger?
     --------------------------
@@ -205,15 +240,34 @@ def _trim_to_last_content_word(words: list[str]) -> str:
     """
     if not words:
         return ""
+    # Work on a copy: the caller may reuse the list.
+    trimmed = list(words)
     # Walk backwards from the end of the list. If the last
     # word is a function word, drop it and check the next.
     # Stop when we find a content word OR run out of words
     # (in which case the input was all function words --
     # fall through to the all-function-words branch).
-    last_idx = len(words) - 1
-    while last_idx > 0 and words[last_idx].lower() in _TRAILING_FUNCTION_WORDS:
-        last_idx -= 1
-    return " ".join(words[: last_idx + 1])
+    while len(trimmed) > 1:
+        last = trimmed[-1]
+        # A compound word cut by the cap ("blood-" out of
+        # "blood-based") is a fragment -- drop it.
+        if last.endswith("-") and len(last) > 1:
+            trimmed.pop()
+            continue
+        # Strip trailing punctuation so the title does not end
+        # with a stray comma, and so a function word is still
+        # recognised when it arrives as "for,".
+        stripped = last.rstrip(_TRAILING_PUNCTUATION)
+        if not stripped:
+            trimmed.pop()
+            continue
+        if stripped != last:
+            trimmed[-1] = stripped
+        if stripped.lower() in _TRAILING_FUNCTION_WORDS:
+            trimmed.pop()
+            continue
+        break
+    return " ".join(trimmed)
 
 
 def has_h1_title(body: str) -> bool:
@@ -228,24 +282,107 @@ def has_h1_title(body: str) -> bool:
     return bool(_H1_LINE_RE.search(body))
 
 
+def _split_leading_headings(text: str) -> tuple[str, str]:
+    """
+    Split a body into its leading prose and its first heading.
+
+    The synthesis LLM sometimes opens with a section label written
+    at the wrong level -- ``### Bottom line`` where a ``# `` title
+    was asked for. Such a line is a *heading*, not the opening of
+    a sentence, so it must not become part of a sentence-derived
+    title: including it produced titles like::
+
+        ### Bottom line Among the supplied studies, **plasma N-terminal tau fragment 1**
+
+    which is what both the PDF generator and the React UI then
+    displayed verbatim, raw markdown and all.
+
+    Parameters
+    ----------
+    text : str
+        The body text (already stripped).
+
+    Returns
+    -------
+    tuple[str, str]
+        ``(prose, first_heading_text)``. ``prose`` is the body with
+        its leading heading lines (and the blank lines between
+        them) removed; it is empty when the body consists only of
+        headings. ``first_heading_text`` is the text of the first
+        heading, without its ``#`` markers, or ``""`` when the body
+        does not start with a heading.
+    """
+    lines = text.split("\n")
+    index = 0
+    headings: list[str] = []
+    while index < len(lines):
+        line = lines[index].strip()
+        if not line:
+            index += 1
+            continue
+        match = _HEADING_LINE_RE.match(line)
+        if match is None:
+            break
+        headings.append(match.group(1))
+        index += 1
+    prose = "\n".join(lines[index:])
+    first_heading = headings[0] if headings else ""
+    return prose.strip(), first_heading.strip()
+
+
+def _clean_title_text(text: str) -> str:
+    """
+    Strip markdown syntax that must not appear in a title.
+
+    A title is rendered as plain text in the React UI and as a
+    ReportLab paragraph in the PDF. Neither renders markdown, so a
+    title that carries ``**`` or a ``#`` marker shows the raw
+    characters to the reader.
+
+    Only unambiguous markers are removed: ``**bold**`` and
+    `` `code` ``, plus a leading heading marker. A single ``*`` or
+    ``_`` is left alone -- those occur in ordinary text
+    ("p-tau217", "3 * 4", "snake_case") and stripping them would
+    mangle the content.
+
+    Parameters
+    ----------
+    text : str
+        The candidate title.
+
+    Returns
+    -------
+    str
+        The candidate with inline markup removed and whitespace
+        collapsed.
+    """
+    cleaned = _LEADING_HEADING_MARKER_RE.sub("", text)
+    return strip_inline_markdown(cleaned)
+
+
 def derive_title_from_first_sentence(body: str) -> str:
     """
     Derive a title from the first sentence of ``body``.
 
     Algorithm
     ---------
-    1. Take the first ``.``, ``!``, ``?``, or ``\\n``
-       terminated sentence.
-    2. Strip ``[paper:N]`` citation markers (visual noise).
-    3. Collapse internal whitespace.
-    4. Truncate to ``_MAX_TITLE_WORDS`` words, then
+    1. Skip any leading markdown headings. They are section
+       labels (or a title written at the wrong level), not the
+       opening of a sentence.
+    2. Take the first ``.``, ``!``, ``?``, or ``\\n``
+       terminated sentence of what remains.
+    3. Strip ``[paper:N]`` citation markers (visual noise).
+    4. Strip inline markdown (``**``, `` ` ``) so the title
+       renders as plain text in the PDF and the React UI.
+    5. Collapse internal whitespace.
+    6. Truncate to ``_MAX_TITLE_WORDS`` words, then
        **trim back to the last content word** if the
        truncation landed on a function word. This avoids
        mid-phrase cut-offs like "Tau biomarkers have
        become central to the biological diagnosis and"
        (trailing "and" dangling). See
        ``_trim_to_last_content_word`` for details.
-    5. If the result is empty, return ``""`` (caller falls
+    7. If the result is empty, return ``""`` (caller falls
        back to its default label).
 
     The function never raises -- invalid input returns
@@ -253,12 +390,18 @@ def derive_title_from_first_sentence(body: str) -> str:
     """
     if not body:
         return ""
+    text = body.strip()
+    # Skip leading headings: a heading is not prose.
+    text, first_heading = _split_leading_headings(text)
+    if not text:
+        # The body is nothing but headings. The first one is the
+        # best title available.
+        return _clean_title_text(first_heading)
     # Find the first sentence. We split on the FIRST
     # sentence-ending character (``.``, ``!``, ``?``, ``\n``)
     # rather than the full body -- a body without any of
     # those characters yields the whole body as the candidate
     # title (after truncation).
-    text = body.strip()
     match = _SENTENCE_END_RE.search(text)
     if match is not None:
         candidate = text[: match.start()].strip()
@@ -269,8 +412,10 @@ def derive_title_from_first_sentence(body: str) -> str:
     # Strip ``[paper:N]`` citation markers (and grouped
     # variants) so the title reads cleanly without brackets.
     candidate = _PAPER_MARKER_RE.sub("", candidate)
-    # Collapse whitespace runs.
-    candidate = _WHITESPACE_RE.sub(" ", candidate).strip()
+    # Strip inline markdown so the title renders as plain text.
+    candidate = _clean_title_text(candidate)
+    if not candidate:
+        return ""
     # Reject purely-punctuation candidates (e.g. body was
     # only "..." after marker stripping). A title of "." or
     # "..." is useless -- the caller's default label is

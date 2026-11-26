@@ -282,3 +282,192 @@ class TestInjectH1Fallback:
         """
         body = "# My Title"
         assert inject_h1_fallback(body) == body
+
+class TestLeadingHeadingIsNotProse:
+    """A leading markdown heading must not leak into the title.
+
+    The synthesis LLM sometimes opens with a section label written
+    at the wrong level -- ``### Bottom line`` where a ``# `` title
+    was asked for. The heading is not the opening of a sentence, so
+    including it produced titles like::
+
+        ### Bottom line Among the supplied studies, **plasma N-terminal tau fragment 1**
+
+    which both the PDF generator and the React UI displayed
+    verbatim, raw markdown and all.
+    """
+
+    BODY = (
+        "### Bottom line\n"
+        "\n"
+        "Among the supplied studies, **plasma N-terminal tau fragment 1** "
+        "(p-tau217) emerged as the most consistently elevated marker, "
+        "outperforming CSF assays in several cohorts."
+    )
+
+    def test_heading_marker_is_not_in_the_title(self):
+        title = derive_title_from_first_sentence(self.BODY)
+        assert "#" not in title, (
+            f"the heading marker leaked into the title: {title!r}"
+        )
+
+    def test_bold_markers_are_not_in_the_title(self):
+        title = derive_title_from_first_sentence(self.BODY)
+        assert "**" not in title, (
+            f"the bold marker leaked into the title: {title!r}"
+        )
+
+    def test_the_heading_text_is_not_in_the_title(self):
+        title = derive_title_from_first_sentence(self.BODY)
+        assert "Bottom line" not in title, (
+            f"the section label leaked into the title: {title!r}"
+        )
+
+    def test_the_title_carries_the_actual_content(self):
+        title = derive_title_from_first_sentence(self.BODY)
+        assert "plasma N-terminal tau fragment 1" in title, (
+            f"the title lost the report's subject: {title!r}"
+        )
+
+    def test_injected_h1_is_plain_text(self):
+        injected = inject_h1_fallback(self.BODY)
+        first_line = injected.split("\n", 1)[0]
+        assert first_line.startswith("# ")
+        assert first_line.count("#") == 1, (
+            f"the injected H1 carries extra '#' characters: {first_line!r}"
+        )
+        assert "**" not in first_line, (
+            f"the injected H1 carries bold markers: {first_line!r}"
+        )
+
+    def test_an_h2_heading_is_also_skipped(self):
+        body = (
+            "## Overview of the Biomarker Landscape\n"
+            "\n"
+            "The diagnostic framework for Alzheimer's disease has evolved "
+            "rapidly in recent years."
+        )
+        title = derive_title_from_first_sentence(body)
+        assert "#" not in title
+        assert "Overview" not in title
+        assert "diagnostic framework" in title
+
+    def test_several_leading_headings_are_skipped(self):
+        body = (
+            "### Bottom line\n"
+            "\n"
+            "### Key findings\n"
+            "\n"
+            "Plasma p-tau217 outperformed CSF assays across the cohorts."
+        )
+        title = derive_title_from_first_sentence(body)
+        assert "Bottom line" not in title
+        assert "Key findings" not in title
+        assert "Plasma p-tau217" in title
+
+    def test_a_body_of_only_headings_uses_the_first_one(self):
+        """No prose to derive from -- the heading is the best title."""
+        body = "### Tau Biomarkers in Alzheimer's Disease"
+        title = derive_title_from_first_sentence(body)
+        assert title == "Tau Biomarkers in Alzheimer's Disease"
+
+
+class TestTitleTextIsPlainText:
+    """Inline markdown must not reach a title.
+
+    A title is rendered as plain text in the React UI and as a
+    ReportLab paragraph in the PDF; neither renders markdown.
+    """
+
+    def test_bold_markers_are_stripped(self):
+        body = "**Plasma p-tau217** is a sensitive marker of AD."
+        title = derive_title_from_first_sentence(body)
+        assert title == "Plasma p-tau217 is a sensitive marker of AD"
+
+    def test_code_markers_are_stripped(self):
+        body = "`p-tau217` is a sensitive marker of AD."
+        title = derive_title_from_first_sentence(body)
+        assert title == "p-tau217 is a sensitive marker of AD"
+
+    def test_underscores_in_identifiers_are_preserved(self):
+        """A single ``_`` is ordinary text, not emphasis.
+
+        Stripping it would mangle identifiers like ``p_tau217``.
+        """
+        body = "The p_tau217 assay is a sensitive marker of AD."
+        title = derive_title_from_first_sentence(body)
+        assert "p_tau217" in title, (
+            f"the underscore in the identifier was stripped: {title!r}"
+        )
+
+    def test_a_hyphenated_identifier_survives(self):
+        body = "**Plasma N-terminal tau fragment 1** (p-tau217) is a marker."
+        title = derive_title_from_first_sentence(body)
+        assert "p-tau217" in title
+
+
+class TestConsumersSeeTheCleanTitle:
+    r"""Both consumers take the first ``# `` line -- it must be clean.
+
+    The PDF generator matches ``^#\s+(.+?)\s*$`` and the React UI
+    matches ``line.startsWith("# ")``. Whatever they find becomes
+    the visible title, so a title with markdown in it is a title
+    the reader sees with raw markdown in it.
+    """
+
+    BODY = (
+        "### Bottom line\n"
+        "\n"
+        "Among the supplied studies, **plasma N-terminal tau fragment 1** "
+        "(p-tau217) emerged as the most consistently elevated marker."
+    )
+
+    def test_the_pdf_generator_finds_a_clean_title(self):
+        """The PDF generator's extraction, ported to Python.
+
+        ``app/infrastructure/pdf/reportlab_generator.py`` splits the
+        body into lines and matches the first line that looks like
+        an H1::
+
+            for line in body_lines:
+                m = _H1_LINE_RE.match(line)
+                if m:
+                    title = m.group(1).strip()
+                    break
+        """
+        from app.infrastructure.pdf.reportlab_generator import (
+            _H1_LINE_RE,
+        )
+
+        injected = inject_h1_fallback(self.BODY)
+        title = ""
+        for line in injected.split("\n"):
+            match = _H1_LINE_RE.match(line)
+            if match:
+                title = match.group(1).strip()
+                break
+        assert title, "the PDF generator found no title at all"
+        assert "#" not in title
+        assert "**" not in title
+        assert "Bottom line" not in title
+
+    def test_the_frontend_finds_a_clean_title(self):
+        r"""The React UI's extraction, ported to Python.
+
+        ``frontend/src/pages/Report.tsx`` does::
+
+            report.summary
+                .split("\n")
+                .find((line) => line.startsWith("# "))
+                ?.replace(/^#\s+/, "")
+        """
+        import re
+
+        injected = inject_h1_fallback(self.BODY)
+        first_h1_line = next(
+            line for line in injected.split("\n") if line.startswith("# ")
+        )
+        title = re.sub(r"^#\s+", "", first_h1_line)
+        assert "#" not in title
+        assert "**" not in title
+        assert "Bottom line" not in title

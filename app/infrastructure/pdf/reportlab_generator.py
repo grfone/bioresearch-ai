@@ -112,6 +112,7 @@ from reportlab.platypus import (
 )
 from reportlab.platypus.flowables import HRFlowable
 
+from app.core.markdown_text import strip_inline_markdown
 from app.domain.entities.citation import Citation
 from app.domain.entities.research_report import ResearchReport
 from app.domain.interfaces.pdf_generator import PDFGenerator
@@ -137,6 +138,11 @@ _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 
 # Headings: H1 / H2 / H3 lines. Only H1 is used for the page title.
 _H1_LINE_RE = re.compile(r"^#\s+(.+?)\s*$")
+
+# Any markdown heading, at any level. Used to find the first
+# *prose* line of a body (the LLM sometimes opens with a section
+# label written at the wrong level, e.g. "### Bottom line").
+_HEADING_LINE_RE = re.compile(r"^#{1,6}\s+")
 _H2_LINE_RE = re.compile(r"^##\s+(.+?)\s*$")
 _H3_LINE_RE = re.compile(r"^###\s+(.+?)\s*$")
 
@@ -190,9 +196,13 @@ def _strip_first_sentence_duplicate(
     only needs the title once.
 
     We detect the duplicate by looking at the body's
-    **first non-H1 line** -- the line that would become
+    **first prose line** -- the line that would become
     the executive summary's opening paragraph. If that
-    line starts with the title text, drop it.
+    line starts with the title text, drop it. Section
+    headings (H2/H3/...) are skipped to find that line
+    but are kept: the LLM sometimes opens with a label
+    written at the wrong level ("### Bottom line"), and
+    the duplicate is the prose after it, not the label.
 
     The match is intentionally strict: we require the
     body sentence to start with the title AND to be
@@ -208,7 +218,14 @@ def _strip_first_sentence_duplicate(
     """
     if not title or not body:
         return body
-    title_norm = title.lower().strip().rstrip(".,;:!?")
+    # Compare the text the reader actually sees. The title is
+    # derived from the body and carries no markup, while the
+    # body's opening sentence may still carry it ("**plasma** N-
+    # terminal tau"). Comparing raw markdown against a clean
+    # title never matched, and the duplicate survived into the PDF.
+    title_norm = (
+        strip_inline_markdown(title).lower().strip().rstrip(".,;:!?")
+    )
     if len(title_norm) < 8:
         # Too short to safely match against the body
         # without false positives.
@@ -229,14 +246,32 @@ def _strip_first_sentence_duplicate(
         start_idx += 1
     if start_idx >= len(body_lines):
         return body
-    first = body_lines[start_idx].strip()
-    first_norm = first.lower().rstrip(".,;:!?")
+    # Skip any section headings (H2/H3/...) that follow. The
+    # synthesis LLM sometimes opens with a section label written
+    # at the wrong level -- "### Bottom line" -- and the H1
+    # fallback then derives the title from the prose *after*
+    # that heading. The duplicate we are looking for is that
+    # prose, not the heading, so the heading must be skipped
+    # to find it. The heading itself is kept: it is structure,
+    # not duplication.
+    prose_idx = start_idx
+    while prose_idx < len(body_lines) and (
+        not body_lines[prose_idx].strip()
+        or _HEADING_LINE_RE.match(body_lines[prose_idx].strip())
+    ):
+        prose_idx += 1
+    if prose_idx >= len(body_lines):
+        return body
+    first = body_lines[prose_idx].strip()
+    first_norm = (
+        strip_inline_markdown(first).lower().strip().rstrip(".,;:!?")
+    )
     if first_norm == title_norm:
         # Exact match -- the body line IS the title.
         # Always drop.
         return "\n".join(
-            body_lines[:start_idx]
-            + body_lines[start_idx + 1 :]
+            body_lines[:prose_idx]
+            + body_lines[prose_idx + 1 :]
         ).lstrip("\n")
     if first_norm.startswith(title_norm):
         # Body line starts with the title -- probably
@@ -244,8 +279,8 @@ def _strip_first_sentence_duplicate(
         # words after. Drop the body line; keep the
         # rest of the prose.
         return "\n".join(
-            body_lines[:start_idx]
-            + body_lines[start_idx + 1 :]
+            body_lines[:prose_idx]
+            + body_lines[prose_idx + 1 :]
         ).lstrip("\n")
     return body
 

@@ -83,6 +83,54 @@ the first line. The fallback is defense-in-depth for
 when the directive still slips through (LLM rate of
 omission dropped from ~30% to ~5% with the directive).
 
+### Amendment: leading headings and inline markup
+
+Live reports showed the fallback producing titles that carried
+raw markdown:
+
+```
+### Bottom line Among the supplied studies, **plasma N-terminal tau fragment 1**
+```
+
+Two defects, one root cause: the synthesis LLM sometimes opens
+with a **section label written at the wrong level**
+(`### Bottom line` where a `# ` title was asked for), and the
+fallback took the first *line* as the opening of a sentence.
+
+The fallback now:
+
+1. **Skips leading headings.** A heading line is structure, not
+   the opening of a sentence, so it is not part of a
+   sentence-derived title. The prose after it is. When the body
+   consists only of headings, the first heading's text is the
+   title.
+2. **Strips inline markup.** `**bold**` and `` `code` `` are
+   removed. A single `*` or `_` is kept — they occur in
+   ordinary text ("p-tau217", "3 * 4", "snake_case") and
+   stripping them would mangle the content.
+3. **Trims trailing punctuation.** The word cap can land on
+   "clinical," or on a compound word cut in half ("blood-");
+   both left a stray mark at the end of the title.
+
+Because both consumers read the same `# ` line, the fix is
+applied once at the derivation boundary and the PDF and the
+React UI agree by construction.
+
+### Amendment: the duplicated opening paragraph
+
+The title is derived from the body's opening sentence, so the
+body still carries that sentence. The PDF generator already
+stripped the repeat; the React UI did not, and the PDF's
+comparison failed whenever the body's sentence carried
+markup (`**bold**`) that the clean title did not.
+
+Both now compare the text the reader actually sees, using the
+shared stripper in `app/core/markdown_text.py`. The PDF drops
+the repeated line; the React UI drops the repeated paragraph
+(markdown blocks are paragraphs, not lines). Both skip a
+leading section heading to find the repeat, and both keep the
+heading itself.
+
 ## Consequences
 
 ### Positive
@@ -106,6 +154,12 @@ omission dropped from ~30% to ~5% with the directive).
 - Commit `b00b34a fix(report): inject H1 title fallback when synthesis LLM omits it`
 - Commit `7fd5f46 fix(observability): title-fallback rate + warning at >50%`
 - `app/infrastructure/llm/title_fallback.py`
+- `app/core/markdown_text.py` — the shared inline-markdown stripper
+- `app/infrastructure/pdf/reportlab_generator.py` —
+  `_strip_first_sentence_duplicate`
+- `frontend/src/lib/reportTitle.ts` — the React UI's equivalent
+- `scripts/repair_report_titles.py` — repairs reports written
+  before this amendment
 - `app/api/routes/health.py` — `/health/title-fallback`
 - `app/infrastructure/observability/prometheus_exposition.py`
 - `tests/unit/test_title_fallback.py`
