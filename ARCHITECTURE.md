@@ -89,6 +89,15 @@ Responsibilities:
 * Execute workflows
 * Manage AI reasoning pipelines
 
+The workspace finite state machine lives here, as an executable
+LangGraph `StateGraph`
+(`app/application/workflows/workspace_graph.py`). The graph is
+*derived from* the transition table in
+`app/core/enums/workspace_state.py`, so the specification and the
+executable topology cannot drift. The domain layer below contains
+no framework import. See
+[ADR-022](docs/adr/ADR-022-langgraph-workspace-fsm.md).
+
 Examples:
 
 ```
@@ -203,7 +212,7 @@ app/
 ├── application/
 │   ├── services/
 │   ├── use_cases/
-│   └── workflows/
+│   └── workflows/       # workspace_graph.py — the FSM as a LangGraph
 
 ├── domain/
 │   ├── entities/
@@ -432,6 +441,13 @@ Deterministic execution graphs provide:
 * branching
 * human review
 * checkpointing
+
+**Shipped.** The workspace FSM is the first graph to reach
+production: `app/application/workflows/workspace_graph.py` executes
+every workspace transition, with one node per state and one
+labelled edge per action. Checkpointing, graph-native retry and
+tracing are the next steps — see
+[ADR-022](docs/adr/ADR-022-langgraph-workspace-fsm.md).
 
 ---
 

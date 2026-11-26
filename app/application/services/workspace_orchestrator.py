@@ -45,12 +45,12 @@ from uuid import UUID
 from app.application.use_cases.generate_report import GenerateReportUseCase
 from app.application.use_cases.search_literature import SearchLiteratureUseCase
 from app.application.use_cases.summarize_papers import SummarizePapersUseCase
+from app.application.workflows.workspace_graph import run_transition
 from app.core.enums.search_source import SearchSource
 from app.core.enums.workspace_state import (
     WorkspaceAction,
     WorkspaceState,
     allowed_actions,
-    next_state,
 )
 from app.core.exceptions import IllegalWorkspaceActionError
 from app.domain.entities.paper import Paper
@@ -271,13 +271,13 @@ class WorkspaceOrchestrator:
             else session.question
         )
 
-        self._enter_action(session, WorkspaceAction.SEARCH)
+        origin_state = self._enter_action(session, WorkspaceAction.SEARCH)
 
         try:
             papers = self._search_use_case.execute(question)
         except Exception as exc:
             logger.exception("SEARCH failed for workspace %s", workspace_id)
-            self._fail(session, exc)
+            self._fail(session, exc, origin_state=origin_state)
             raise
 
         session.replace_papers(papers)
@@ -324,7 +324,7 @@ class WorkspaceOrchestrator:
             The updated workspace.
         """
         session = self._repository.get(workspace_id)
-        self._enter_action(session, WorkspaceAction.SEARCH)
+        origin_state = self._enter_action(session, WorkspaceAction.SEARCH)
 
         try:
             results = self._search_use_case.execute_with_filters(
@@ -335,7 +335,7 @@ class WorkspaceOrchestrator:
                 "SEARCH (filters) failed for workspace %s",
                 workspace_id,
             )
-            self._fail(session, exc)
+            self._fail(session, exc, origin_state=origin_state)
             raise
 
         # Replace the workspace's papers with the new results.
@@ -634,7 +634,7 @@ class WorkspaceOrchestrator:
             If GENERATE is not legal from the current state.
         """
         session = self._repository.get(workspace_id)
-        self._enter_action(session, WorkspaceAction.GENERATE)
+        origin_state = self._enter_action(session, WorkspaceAction.GENERATE)
 
         # Stage 1: summarise. We always run this even if the
         # workspace already has a Summary — re-running is cheap
@@ -652,7 +652,7 @@ class WorkspaceOrchestrator:
                 "GENERATE/summarize failed for workspace %s",
                 workspace_id,
             )
-            self._fail(session, exc)
+            self._fail(session, exc, origin_state=origin_state)
             raise
         session.set_summary(summary)
 
@@ -676,7 +676,7 @@ class WorkspaceOrchestrator:
                 "GENERATE/report failed for workspace %s",
                 workspace_id,
             )
-            self._fail(session, exc)
+            self._fail(session, exc, origin_state=origin_state)
             raise
         session.set_report(report)
 
@@ -692,7 +692,7 @@ class WorkspaceOrchestrator:
                 "GENERATE/pdf failed for workspace %s",
                 workspace_id,
             )
-            self._fail(session, exc)
+            self._fail(session, exc, origin_state=origin_state)
             raise
         published_report = PublishedReport.create(
             pdf_bytes=pdf_bytes,
@@ -756,7 +756,7 @@ class WorkspaceOrchestrator:
         # The resolver is session-aware and reads
         # ``session.last_known_state`` + ``session.papers``
         # directly; we don't need to compute the target here.
-        session.transition_to(WorkspaceAction.RETRY)
+        run_transition(session, WorkspaceAction.RETRY)
         return self._repository.update(session)
 
     def back_to_workspace(self, workspace_id: UUID) -> ResearchSession:
@@ -772,7 +772,7 @@ class WorkspaceOrchestrator:
         ``GENERATE`` action overwrites them.
         """
         session = self._repository.get(workspace_id)
-        session.transition_to(WorkspaceAction.BACK_TO_WORKSPACE)
+        run_transition(session, WorkspaceAction.BACK_TO_WORKSPACE)
         return self._repository.update(session)
 
     def back_to_home(self, workspace_id: UUID) -> ResearchSession:
@@ -787,7 +787,7 @@ class WorkspaceOrchestrator:
         ``SEARCH`` action will replace them.
         """
         session = self._repository.get(workspace_id)
-        session.transition_to(WorkspaceAction.BACK_TO_HOME)
+        run_transition(session, WorkspaceAction.BACK_TO_HOME)
         return self._repository.update(session)
 
     # ------------------------------------------------------------------
@@ -802,12 +802,34 @@ class WorkspaceOrchestrator:
         """
         Validate the action and move to the corresponding state.
 
+        The transition is executed by the LangGraph workspace FSM
+        (``app.application.workflows.workspace_graph``): the
+        graph's conditional edges decide whether the action is legal
+        and where it leads, and the aggregate records the result in
+        its audit trail.
+
         The caller is responsible for filling the new state with
         the action's result (e.g. papers, summary, report).
-        """
-        session.transition_to(action)
 
-    def _fail(self, session: ResearchSession, exc: Exception) -> None:
+        Returns
+        -------
+        WorkspaceState
+            The state the workspace was in *before* the action ran.
+            The failure path needs it: ``_fail`` records it as
+            ``last_known_state`` so RETRY can restore the page the
+            user was on when the action failed.
+        """
+        origin_state = session.state
+        run_transition(session, action)
+        return origin_state
+
+    def _fail(
+        self,
+        session: ResearchSession,
+        exc: Exception,
+        *,
+        origin_state: WorkspaceState | None = None,
+    ) -> None:
         """
         Move the session to ERROR with the exception's message.
 
@@ -815,17 +837,42 @@ class WorkspaceOrchestrator:
         where to go back to (INITIAL for a failed search,
         INTERMEDIATE for a failed generation).
 
-        The repository is updated so the failure is persisted.
+        Parameters
+        ----------
+        session : ResearchSession
+            The session to move to ERROR.
+        exc : Exception
+            The failure that caused it.
+        origin_state : WorkspaceState | None
+            The state the workspace was in *before* the failing
+            action ran. This is what RETRY restores, and it is
+            **not** the same as ``session.state`` at the moment of
+            failure: the action's own transition has already moved
+            the session on (SEARCH moves INITIAL → INTERMEDIATE
+            before the search runs; GENERATE moves INTERMEDIATE →
+            FINAL before the pipeline runs).
+
+            Recording the post-transition state would send the user
+            to the wrong page on retry — a failed search would land
+            them on the Workspace page instead of Home, and a failed
+            generation would land them on the Report page instead of
+            the Workspace page. The origin state is what the FSM
+            table documents as the retry destination.
+
+            ``None`` means "use the session's current state", which
+            preserves the behaviour of callers that have no action
+            context.
         """
         try:
-            # Remember the pre-error state so RETRY can
-            # restore it. We use ``force_state`` for the
-            # initial → INTERMEDIATE / INTERMEDIATE →
-            # INTERMEDIATE transitions that ``_fail`` is
-            # called from; the ``last_known_state`` is set
-            # BEFORE force_state(ERROR) so it reflects the
-            # state we were in when the failure occurred.
-            session.last_known_state = session.state
+            # Remember the pre-action state so RETRY can restore
+            # the page the user was on. We use ``force_state`` for
+            # the INTERMEDIATE → ERROR / FINAL → ERROR step; the
+            # ``last_known_state`` is set BEFORE force_state(ERROR)
+            # so it reflects the state we were in when the failure
+            # occurred.
+            session.last_known_state = (
+                session.state if origin_state is None else origin_state
+            )
             session.force_state(
                 WorkspaceState.ERROR,
                 reason=f"{type(exc).__name__}: {exc}",

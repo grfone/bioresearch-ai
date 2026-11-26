@@ -10,6 +10,48 @@ The format is based on **Keep a Changelog**, and this project follows **Semantic
 
 ## [Unreleased]
 
+### Changed
+
+* **The workspace FSM now executes as a real LangGraph
+  `StateGraph`.** The hand-written imperative dispatcher in
+  `WorkspaceOrchestrator` has been replaced by
+  `app/application/workflows/workspace_graph.py`, which the
+  orchestrator drives for every workspace transition. The graph is
+  *derived from* the `TRANSITIONS` table in
+  `app/core/enums/workspace_state.py` — one node per state
+  (`state_<name>` as a source, `land_<name>` as a destination),
+  one labelled conditional edge per action — so the specification
+  and the executable topology cannot drift. Routing delegates to
+  the same pure `next_state()` the domain aggregate uses, so the
+  illegal-action payload (and therefore the HTTP 409 response
+  body) is byte-for-byte unchanged. The graph lives in the
+  application layer; the domain and core layers contain no
+  LangGraph import (enforced by test). The decorative
+  `app/application/workflows/research_workflow.py` — a hand-written
+  mirror of the FSM that had already drifted and was never called —
+  has been deleted. LangGraph is now a declared runtime dependency
+  in `requirements/minimal-requirements.txt` and
+  `environment.yaml`. See
+  [ADR-022](docs/adr/ADR-022-langgraph-workspace-fsm.md).
+
+### Fixed
+
+* **Retry after a failed action now returns to the right page.**
+  `_fail()` recorded `last_known_state` from the session's state
+  *after* the failing action's own transition had already moved it
+  on, so the recorded state was the post-transition state rather
+  than the state the user was on. A failed search recorded
+  `INTERMEDIATE` (should be `INITIAL`) and sent the user to the
+  Workspace page — which implies search results, but the search
+  failed, so there were none. A failed generation recorded `FINAL`
+  (should be `INTERMEDIATE`) and sent the user to the **Report
+  page, for a report that was never produced**. Four docstrings
+  described the intended behaviour and none of them matched the
+  code; the existing tests missed it because they called `_fail()`
+  directly rather than through a failing action. `_enter_action()`
+  now returns the pre-action state and `_fail()` takes it as
+  `origin_state`; four regression tests pin it.
+
 ### Added
 
 * **Shared abstract-enricher cache for multi-worker deployments.**

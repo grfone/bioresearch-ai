@@ -117,6 +117,49 @@ INITIAL ──search──▶ INTERMEDIATE ──generate──▶ FINAL
                        └─ERROR (recoverable: retry, add_paper, remove_paper)
 ```
 
+### The FSM runs on LangGraph
+
+The state machine above is **executed as a real LangGraph
+`StateGraph`**, not hand-written `if`/`elif` branches. Every workspace
+transition the orchestrator performs is routed through it:
+
+```python
+from app.application.workflows.workspace_graph import WORKSPACE_GRAPH
+
+print(WORKSPACE_GRAPH.get_graph().draw_mermaid())
+```
+
+The graph has one node per workspace state and one labelled
+conditional edge per action, so it renders as a readable diagram of
+the FSM:
+
+```text
+INITIAL      ──search──────────▶ INTERMEDIATE
+INTERMEDIATE ──generate────────▶ FINAL
+INTERMEDIATE ──back_to_home────▶ INITIAL
+FINAL        ──back_to_workspace▶ INTERMEDIATE
+ERROR        ──retry────────────▶ INITIAL | INTERMEDIATE
+```
+
+Two properties make this safe to change:
+
+- **The graph is derived from the transition table, not written
+  beside it.** `app/core/enums/workspace_state.py` remains the single
+  source of truth for what is legal; `workspace_graph.py` builds its
+  topology from that table, so the two cannot drift. The previous
+  hand-written mirror of the FSM had already drifted and was never
+  executed by anything — it has been removed.
+- **The domain layer stays framework-free.** The graph lives in the
+  application layer. `app/domain` and `app/core` contain no LangGraph
+  import, so the aggregate's invariants do not depend on a framework
+  (see [ADR-022](docs/adr/ADR-022-langgraph-workspace-fsm.md)).
+
+Routing is delegated to the same pure `next_state()` function the
+aggregate uses, so the graph and the domain can never disagree about
+what is legal. An illegal action raises the identical
+`IllegalWorkspaceActionError` payload the old dispatcher produced, so
+the HTTP 409 response body is unchanged.
+
 The FSM is **linear since 2026-08-31** (see [ADR-017](docs/adr/ADR-017-three-page-fsm.md)):
 nine states collapsed to four (`INITIAL`, `INTERMEDIATE`, `FINAL`,
 `ERROR`), with transient in-flight markers (SEARCHING, SUMMARIZING,
@@ -134,8 +177,9 @@ care about the steps internally. The `page` field on
 `workspace` / `report` / `error`) so the SPA can route without parsing
 the FSM state.
 
-The FSM is documented in [`app/core/enums/workspace_state.py`](app/core/enums/workspace_state.py)
-and the orchestrator in [`WorkspaceOrchestrator`](app/application/services/workspace_orchestrator.py).
+The FSM is documented in [`app/core/enums/workspace_state.py`](app/core/enums/workspace_state.py),
+executed as a LangGraph in [`app/application/workflows/workspace_graph.py`](app/application/workflows/workspace_graph.py),
+and driven by the orchestrator in [`WorkspaceOrchestrator`](app/application/services/workspace_orchestrator.py).
 The frontend mirrors the FSM state in its lab-bench UI: enabled
 buttons depend on `workspace.allowed_actions`, which is the
 legal-next-actions list for the current state.
@@ -162,6 +206,7 @@ simplification that mapped the FSM to the three pages.
 | 📊 Prometheus metrics | `/metrics` endpoint exports sanitizer counters, title-fallback rate, and gauges for scraping |
 | 🩺 Sanity telemetry | `/health/sanitizer` and `/health/title-fallback` endpoints report in-process LLM-safety counters |
 | ⚡ FastAPI Backend | REST API following Clean Architecture |
+| 🔀 LangGraph FSM | The workspace state machine executes as a LangGraph `StateGraph` — one node per state, one labelled edge per action |
 | 🎨 React Frontend | Modern and responsive user interface |
 | 🧩 Modular LLM Providers | Easily switch between multiple AI providers |
 | 💾 Persistent Workspaces | Save and continue research sessions |
@@ -211,7 +256,7 @@ A snapshot of the work since the first public release:
 - **Observability** — `/metrics` (Prometheus text format) and `/health/sanitizer` + `/health/title-fallback` endpoints expose in-process LLM-safety counters and the title-fallback rate (with a warning log when >50% over a 20-call window)
 - **H1 title fallback** — if the synthesis LLM omits the `# ` heading, we inject one from the first sentence (idempotent) so the report always has a real title (instead of "Untitled" or the body duplicated as the title)
 - **Anti-fabrication sanitizer telemetry** — every call to the citation marker sanitizer is logged + counted, so you can see the running total via `/health/sanitizer` and confirm the guard is doing its job
-- **17 ADRs** documenting the architectural decisions (see [Design decisions](#design-decisions))
+- **18 ADRs** documenting the architectural decisions (see [Design decisions](#design-decisions))
 
 See the [Roadmap](#roadmap) below for what's left.
 
@@ -388,13 +433,13 @@ The frontend will start with hot reloading enabled.
 - ✅ Persistent research workspaces
 - ✅ Deterministic finite state machine (FSM) lifecycle — see the [Workflow](#workflow) section
 - ✅ Illegal action rejection (HTTP 409) with the list of legal next actions
-- ✅ LangGraph workflow topology (in [`app/application/workflows/research_workflow.py`](app/application/workflows/research_workflow.py))
+- ✅ The workspace FSM executes as a real LangGraph `StateGraph` (in [`app/application/workflows/workspace_graph.py`](app/application/workflows/workspace_graph.py)) — derived from the transition table so the two cannot drift
 - ✅ Lab-bench UI: state, progress, action availability, transition history
 - ✅ Modern React frontend
 - ✅ FastAPI REST API
 - ✅ Modular LLM providers
 - ✅ Clean Architecture implementation
-- ✅ 848 backend + 295 frontend tests passing
+- ✅ 872 backend + 295 frontend tests passing
 - ✅ CI on every push (see [`docs/ci.md`](docs/ci.md))
 
 ---
@@ -436,7 +481,7 @@ bioresearch-ai/
 │   ├── application/
 │   │   ├── services/
 │   │   ├── use_cases/
-│   │   └── workflows/
+│   │   └── workflows/      # NEW: workspace_graph.py — the FSM as a LangGraph
 │   ├── config/
 │   ├── core/
 │   │   ├── enums/
@@ -464,11 +509,11 @@ bioresearch-ai/
 │   ├── architecture.md
 │   ├── ci.md
 │   ├── repository.md
-│   └── adr/                # 9 ADRs (see Design decisions)
+│   └── adr/                # 18 ADRs (see Design decisions)
 
 ├── tests/
-│   ├── unit/               # 806 tests
-│   └── integration/        # 35 tests (FSM end-to-end)
+│   ├── unit/               # 845 tests
+│   └── integration/        # 38 tests (FSM end-to-end)
 
 ├── notebooks/
 ├── scripts/
@@ -501,6 +546,7 @@ We capture every non-trivial architectural decision in an Architecture Decision 
 | [ADR-016](docs/adr/ADR-016-remove-compared-state.md) | Remove the COMPARING/COMPARED FSM states — see ADR for the four-layer audit | Accepted |
 | [ADR-017](docs/adr/ADR-017-three-page-fsm.md) | Collapse the FSM to four states mapped 1:1 to the three pages (Home / Workspace / Report) | Accepted |
 | [ADR-018](docs/adr/ADR-018-context-aware-fsm-transitions.md) | Context-aware FSM transitions via callable resolvers (closes the ADR-017 TODO) | Accepted |
+| [ADR-022](docs/adr/ADR-022-langgraph-workspace-fsm.md) | Execute the workspace FSM as a real LangGraph `StateGraph`, derived from the transition table | Accepted |
 | [ADR-019](docs/adr/ADR-019-citation-subset-invariant.md) | Citations are a strict subset of workspace.papers (structural invariant for the user's "executive reports only contain references available at INTERMEDIATE" rule) | Accepted |
 | [ADR-020](docs/adr/ADR-020-bibliography-equals-workspace-papers.md) | Bibliography equals workspace.papers (the mapper always includes every workspace paper regardless of LLM citation choices) | Accepted |
 | [ADR-021](docs/adr/ADR-021-workspace-corpus-server-authoritative.md) | Workspace corpus mutations are server-authoritative (removes the local-only ``useWorkspaceStore.removePaper`` Zustand action that caused the "INTERMEDIATE: [P1..P4], Generate, FINAL report: [P1..P20]" bug) | Accepted |

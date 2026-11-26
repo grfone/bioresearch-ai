@@ -730,3 +730,139 @@ def test_remove_paper_persists(
 # ---------------------------------------------------------------------------
 # Stubs needed by tests above (kept at the bottom for readability)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Regression: the retry destination after a failed action
+# ---------------------------------------------------------------------------
+#
+# ``_fail()`` used to record ``last_known_state`` from ``session.state``
+# at the moment of the failure. By then the failing action's own
+# transition had already moved the session on — SEARCH moves INITIAL ->
+# INTERMEDIATE before the search runs, GENERATE moves INTERMEDIATE ->
+# FINAL before the pipeline runs — so the recorded state was the
+# *post-transition* state, not the state the user was on.
+#
+# The effect: RETRY sent the user to the wrong page. A failed search
+# landed them on the Workspace page (which implies "search returned at
+# least one paper", but the search failed so there are none), and a
+# failed generation landed them on the Report page — a report page for
+# a report that was never produced.
+#
+# Four separate docstrings described the intended behaviour
+# ("INITIAL for a failed search, INTERMEDIATE for a failed generation")
+# and none of them matched the code.
+
+
+class _FailingPubMed(StubPubMed):
+    """PubMed stub that always fails."""
+
+    def search(self, question, filters=None):
+        raise RuntimeError("pubmed down")
+
+    def search_with_filters(self, filters):
+        raise RuntimeError("pubmed down")
+
+
+class _FailingLLM(StubLLM):
+    """LLM stub that always fails."""
+
+    def generate(self, prompt, **kwargs):
+        raise RuntimeError("llm down")
+
+
+def test_failed_search_records_initial_as_last_known_state(
+    repo: InMemoryRepository,
+) -> None:
+    """A failed SEARCH must record INITIAL, not INTERMEDIATE.
+
+    The user clicked Search on the Home page and the search failed.
+    RETRY must take them back to Home, not to the Workspace page.
+    """
+    orch = WorkspaceOrchestrator(
+        workspace_repository=repo,
+        literature_searcher=_FailingPubMed([]),
+        llm_provider=StubLLM(),
+        report_generator=StubReportGenerator(),
+        pdf_generator=StubPDFGenerator(),
+    )
+    ws = ResearchSession(question=ResearchQuestion(question="x"))
+    repo.create(ws)
+
+    with pytest.raises(RuntimeError):
+        orch.search(ws.id)
+
+    assert ws.state is WorkspaceState.ERROR
+    assert ws.last_known_state is WorkspaceState.INITIAL
+
+
+def test_failed_generate_records_intermediate_as_last_known_state(
+    repo: InMemoryRepository,
+    stub_papers: list[Paper],
+) -> None:
+    """A failed GENERATE must record INTERMEDIATE, not FINAL.
+
+    The user clicked Generate Report on the Workspace page and the
+    pipeline failed. RETRY must take them back to the Workspace page,
+    not to the Report page — there is no report to show.
+    """
+    orch = WorkspaceOrchestrator(
+        workspace_repository=repo,
+        literature_searcher=StubPubMed(stub_papers),
+        llm_provider=_FailingLLM(),
+        report_generator=StubReportGenerator(),
+        pdf_generator=StubPDFGenerator(),
+    )
+    ws = ResearchSession(question=ResearchQuestion(question="x"))
+    repo.create(ws)
+    ws.add_papers(stub_papers)
+
+    with pytest.raises(RuntimeError):
+        orch.generate(ws.id)
+
+    assert ws.state is WorkspaceState.ERROR
+    assert ws.last_known_state is WorkspaceState.INTERMEDIATE
+
+
+def test_retry_after_failed_search_returns_to_home(
+    repo: InMemoryRepository,
+) -> None:
+    """End-to-end: a failed search, then RETRY, lands the user on Home."""
+    orch = WorkspaceOrchestrator(
+        workspace_repository=repo,
+        literature_searcher=_FailingPubMed([]),
+        llm_provider=StubLLM(),
+        report_generator=StubReportGenerator(),
+        pdf_generator=StubPDFGenerator(),
+    )
+    ws = ResearchSession(question=ResearchQuestion(question="x"))
+    repo.create(ws)
+
+    with pytest.raises(RuntimeError):
+        orch.search(ws.id)
+
+    result = orch.retry(ws.id)
+    assert result.state is WorkspaceState.INITIAL
+
+
+def test_retry_after_failed_generate_returns_to_workspace(
+    repo: InMemoryRepository,
+    stub_papers: list[Paper],
+) -> None:
+    """End-to-end: a failed generate, then RETRY, lands on Workspace."""
+    orch = WorkspaceOrchestrator(
+        workspace_repository=repo,
+        literature_searcher=StubPubMed(stub_papers),
+        llm_provider=_FailingLLM(),
+        report_generator=StubReportGenerator(),
+        pdf_generator=StubPDFGenerator(),
+    )
+    ws = ResearchSession(question=ResearchQuestion(question="x"))
+    repo.create(ws)
+    ws.add_papers(stub_papers)
+
+    with pytest.raises(RuntimeError):
+        orch.generate(ws.id)
+
+    result = orch.retry(ws.id)
+    assert result.state is WorkspaceState.INTERMEDIATE

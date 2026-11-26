@@ -127,6 +127,28 @@ These documents serve as long-term project documentation and help future contrib
   the persisted workspace; there is no longer any local-only
   path that can diverge from the backend.
 
+- [ADR-022: Execute the workspace FSM as a LangGraph StateGraph](ADR-022-langgraph-workspace-fsm.md) —
+  replaces the hand-written imperative dispatcher with a real
+  LangGraph ``StateGraph`` that the orchestrator actually
+  executes, and deletes the decorative ``research_workflow.py``
+  that had already drifted from the FSM and was never called.
+  The graph is *derived from* the ``TRANSITIONS`` table rather
+  than written beside it, so the specification and the
+  executable topology cannot drift. Each state appears twice —
+  once as a source (``state_<name>``) and once as a
+  destination (``land_<name>``) — which is what makes the
+  graph terminate; the edge labels are the action names, so it
+  renders as a labelled diagram of the FSM. Routing delegates
+  to the same pure ``next_state()`` the domain aggregate uses,
+  so the illegal-action payload (and therefore the HTTP 409
+  body) is unchanged. The graph lives in the application layer
+  so the domain stays framework-free. The migration also found
+  and fixed a pre-existing bug: ``_fail()`` recorded
+  ``last_known_state`` from the *post-transition* state, so a
+  failed search retried to the Workspace page instead of Home
+  and a failed generation retried to the Report page for a
+  report that was never produced.
+
 ## Every ADR follows the same format:
 
 > # ADR-XXX Title

@@ -44,6 +44,16 @@ python-multipart>=0.0.9,<1.0
 # --- OpenAI Python client (used by every OpenAI-compat LLM provider) ---
 openai>=1.40,<2.0
 
+# --- LangGraph (the workspace FSM runtime) ---
+# The workspace state machine is executed as a real LangGraph
+# StateGraph (see app/application/workflows/workspace_graph.py).
+# The orchestrator routes every workspace transition through it, so
+# LangGraph is a genuine runtime import of the FastAPI backend, not
+# an optional extra. It pulls in langchain-core, which is pure
+# Python and adds no binary footprint. The pin is kept narrow
+# because LangGraph's StateGraph API is still moving.
+langgraph>=0.2.50,<0.3
+
 # --- Redis client (only required when CACHE_BACKEND=redis).
 # The redis-py package's pure-Python parser is sufficient for
 # our throughput; we don't pull in hiredis because the C

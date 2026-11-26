@@ -1,0 +1,263 @@
+{
+  "add_papers_advances": "INTERMEDIATE",
+  "allowed_actions": {
+    "ERROR": [
+      "add_paper",
+      "remove_paper",
+      "retry"
+    ],
+    "FINAL": [
+      "add_paper",
+      "back_to_workspace",
+      "remove_paper"
+    ],
+    "INITIAL": [
+      "add_paper",
+      "remove_paper",
+      "search"
+    ],
+    "INTERMEDIATE": [
+      "add_paper",
+      "back_to_home",
+      "generate",
+      "remove_paper"
+    ]
+  },
+  "audit_trail": [
+    {
+      "action": null,
+      "from": "INITIAL",
+      "reason": null,
+      "to": "INITIAL"
+    },
+    {
+      "action": "search",
+      "from": "INITIAL",
+      "reason": null,
+      "to": "INTERMEDIATE"
+    }
+  ],
+  "force_state": {
+    "ERROR->ERROR": "OK",
+    "ERROR->FINAL": "REJECTED:force:FINAL",
+    "ERROR->INITIAL": "REJECTED:force:INITIAL",
+    "ERROR->INTERMEDIATE": "REJECTED:force:INTERMEDIATE",
+    "FINAL->ERROR": "OK",
+    "FINAL->FINAL": "OK",
+    "FINAL->INITIAL": "REJECTED:force:INITIAL",
+    "FINAL->INTERMEDIATE": "OK",
+    "INITIAL->ERROR": "OK",
+    "INITIAL->FINAL": "REJECTED:force:FINAL",
+    "INITIAL->INITIAL": "OK",
+    "INITIAL->INTERMEDIATE": "OK",
+    "INTERMEDIATE->ERROR": "OK",
+    "INTERMEDIATE->FINAL": "OK",
+    "INTERMEDIATE->INITIAL": "OK",
+    "INTERMEDIATE->INTERMEDIATE": "OK"
+  },
+  "is_terminal": {
+    "ERROR": false,
+    "FINAL": true,
+    "INITIAL": false,
+    "INTERMEDIATE": false
+  },
+  "pages": {
+    "ERROR": "error",
+    "FINAL": "report",
+    "INITIAL": "home",
+    "INTERMEDIATE": "workspace"
+  },
+  "progress": {
+    "ERROR": 0.0,
+    "FINAL": 1.0,
+    "INITIAL": 0.0,
+    "INTERMEDIATE": 0.5
+  },
+  "rejected_actions": {
+    "ERROR+back_to_home": {
+      "action": "back_to_home",
+      "allowed": [
+        "add_paper",
+        "remove_paper",
+        "retry"
+      ],
+      "current_state": "ERROR"
+    },
+    "ERROR+back_to_workspace": {
+      "action": "back_to_workspace",
+      "allowed": [
+        "add_paper",
+        "remove_paper",
+        "retry"
+      ],
+      "current_state": "ERROR"
+    },
+    "ERROR+generate": {
+      "action": "generate",
+      "allowed": [
+        "add_paper",
+        "remove_paper",
+        "retry"
+      ],
+      "current_state": "ERROR"
+    },
+    "ERROR+retry": "TypeError: FSM transition ERROR + retry is session-aware (resolver='_retry_target'); next_state() requires the session argument.",
+    "ERROR+search": {
+      "action": "search",
+      "allowed": [
+        "add_paper",
+        "remove_paper",
+        "retry"
+      ],
+      "current_state": "ERROR"
+    },
+    "FINAL+back_to_home": {
+      "action": "back_to_home",
+      "allowed": [
+        "add_paper",
+        "back_to_workspace",
+        "remove_paper"
+      ],
+      "current_state": "FINAL"
+    },
+    "FINAL+generate": {
+      "action": "generate",
+      "allowed": [
+        "add_paper",
+        "back_to_workspace",
+        "remove_paper"
+      ],
+      "current_state": "FINAL"
+    },
+    "FINAL+retry": {
+      "action": "retry",
+      "allowed": [
+        "add_paper",
+        "back_to_workspace",
+        "remove_paper"
+      ],
+      "current_state": "FINAL"
+    },
+    "FINAL+search": {
+      "action": "search",
+      "allowed": [
+        "add_paper",
+        "back_to_workspace",
+        "remove_paper"
+      ],
+      "current_state": "FINAL"
+    },
+    "INITIAL+back_to_home": {
+      "action": "back_to_home",
+      "allowed": [
+        "add_paper",
+        "remove_paper",
+        "search"
+      ],
+      "current_state": "INITIAL"
+    },
+    "INITIAL+back_to_workspace": {
+      "action": "back_to_workspace",
+      "allowed": [
+        "add_paper",
+        "remove_paper",
+        "search"
+      ],
+      "current_state": "INITIAL"
+    },
+    "INITIAL+generate": {
+      "action": "generate",
+      "allowed": [
+        "add_paper",
+        "remove_paper",
+        "search"
+      ],
+      "current_state": "INITIAL"
+    },
+    "INITIAL+retry": {
+      "action": "retry",
+      "allowed": [
+        "add_paper",
+        "remove_paper",
+        "search"
+      ],
+      "current_state": "INITIAL"
+    },
+    "INTERMEDIATE+back_to_workspace": {
+      "action": "back_to_workspace",
+      "allowed": [
+        "add_paper",
+        "back_to_home",
+        "generate",
+        "remove_paper"
+      ],
+      "current_state": "INTERMEDIATE"
+    },
+    "INTERMEDIATE+retry": {
+      "action": "retry",
+      "allowed": [
+        "add_paper",
+        "back_to_home",
+        "generate",
+        "remove_paper"
+      ],
+      "current_state": "INTERMEDIATE"
+    },
+    "INTERMEDIATE+search": {
+      "action": "search",
+      "allowed": [
+        "add_paper",
+        "back_to_home",
+        "generate",
+        "remove_paper"
+      ],
+      "current_state": "INTERMEDIATE"
+    }
+  },
+  "remove_paper_regresses": "INITIAL",
+  "resolved_targets": {
+    "ERROR+add_paper": "ERROR",
+    "ERROR+remove_paper": "ERROR",
+    "FINAL+add_paper": "FINAL",
+    "FINAL+back_to_workspace": "INTERMEDIATE",
+    "FINAL+remove_paper": "FINAL",
+    "INITIAL+add_paper": "INITIAL",
+    "INITIAL+remove_paper": "INITIAL",
+    "INITIAL+search": "INTERMEDIATE",
+    "INTERMEDIATE+add_paper": "INTERMEDIATE",
+    "INTERMEDIATE+back_to_home": "INITIAL",
+    "INTERMEDIATE+generate": "FINAL",
+    "INTERMEDIATE+remove_paper": "INTERMEDIATE"
+  },
+  "retry_resolution": {
+    "last_known=INITIAL,papers=False": "INITIAL",
+    "last_known=INITIAL,papers=True": "INITIAL",
+    "last_known=INTERMEDIATE,papers=False": "INTERMEDIATE",
+    "last_known=INTERMEDIATE,papers=True": "INTERMEDIATE",
+    "last_known=None,papers=False": "INITIAL",
+    "last_known=None,papers=True": "INTERMEDIATE"
+  },
+  "transitions": {
+    "ERROR": {
+      "add_paper": "ERROR",
+      "remove_paper": "ERROR",
+      "retry": "CALLABLE"
+    },
+    "FINAL": {
+      "add_paper": "FINAL",
+      "back_to_workspace": "INTERMEDIATE",
+      "remove_paper": "FINAL"
+    },
+    "INITIAL": {
+      "add_paper": "INITIAL",
+      "remove_paper": "INITIAL",
+      "search": "INTERMEDIATE"
+    },
+    "INTERMEDIATE": {
+      "add_paper": "INTERMEDIATE",
+      "back_to_home": "INITIAL",
+      "generate": "FINAL",
+      "remove_paper": "INTERMEDIATE"
+    }
+  }
+}

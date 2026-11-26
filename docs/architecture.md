@@ -116,6 +116,25 @@ Frameworks are implementation details.
 
 The architecture should survive framework changes.
 
+This holds in practice, not just in principle. The workspace FSM is
+executed by a real LangGraph `StateGraph`
+(`app/application/workflows/workspace_graph.py`), and:
+
+- the graph sits in the **application** layer, never in the domain
+  or core layer;
+- the FSM's *specification* — the transition table and
+  `next_state()` — is framework-free pure data in
+  `app/core/enums/workspace_state.py`, and the domain aggregate
+  enforces its invariants with it directly;
+- the graph is **derived from** that table rather than restating
+  it, so removing LangGraph would mean re-deriving the topology,
+  not re-designing the FSM.
+
+A test asserts that no module under `app/domain` or `app/core`
+imports a framework, so the rule is enforced rather than merely
+documented. See
+[ADR-022](../adr/ADR-022-langgraph-workspace-fsm.md).
+
 ---
 
 # Architecture
@@ -186,7 +205,7 @@ bioresearch-ai/
         application/
             use_cases/
             services/       # WorkspaceOrchestrator
-            workflows/      # LangGraph research pipeline
+            workflows/      # workspace_graph.py — the FSM as a LangGraph
             agents/
 
         infrastructure/
@@ -293,7 +312,9 @@ for the full commit history.
 
 ## 0.4
 
-- LangGraph workflow topology
+- LangGraph workflow topology (the workspace FSM executes as a
+  real `StateGraph` — see
+  [ADR-022](../adr/ADR-022-langgraph-workspace-fsm.md))
 - WorkspaceOrchestrator runtime
 - **FSM-aware REPORT action** that returns the full
   ReportResponse
