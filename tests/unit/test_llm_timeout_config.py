@@ -60,6 +60,16 @@ def _isolate_from_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
         "app.infrastructure.llm.minimax_provider.load_dotenv",
         lambda *args, **kwargs: None,
     )
+    # The OpenAI-compatible family's ``_load_env()`` loads the whole
+    # repository ``.env`` into ``os.environ`` -- including
+    # ``MINIMAX_TIMEOUT``, which then correctly outranks the shared
+    # setting for that one provider. Neutralise it so these tests
+    # measure the shared setting and not the developer's local file.
+    monkeypatch.setattr(
+        "app.infrastructure.llm._openai_compatible."
+        "OpenAICompatibleProvider._load_env",
+        lambda self: None,
+    )
     # The MiniMax provider refuses to construct without a key. The
     # developer's local ``.env`` supplies one; a CI runner has no
     # ``.env`` at all. Give it a dummy so the test is hermetic.
@@ -262,3 +272,179 @@ def test_openai_timeout_is_not_the_variable_name(
     settings = LLMSettings()
     assert settings.timeout == 60, "OPENAI_TIMEOUT must not be read"
     assert settings.provider_timeout is None
+
+
+# ---------------------------------------------------------------------------
+# Every provider in the catalog
+# ---------------------------------------------------------------------------
+#
+# The operator has API keys for MiniMax only, so the other providers
+# cannot be exercised against their real endpoints. They can still be
+# verified structurally, and that is what matters here: the timeout
+# must land on the HTTP client that actually issues the request.
+#
+# Constructing a client makes no network call, so this is safe and
+# fast.
+
+
+def _http_timeout(client) -> float:
+    """Return the timeout an HTTP client will actually use."""
+    timeout = client.timeout
+    if isinstance(timeout, (int, float)):
+        return float(timeout)
+    read = timeout.read
+    return float(read) if read is not None else 0.0
+
+
+def _construct(provider_class, timeout: float):
+    """
+    Build a provider with a dummy key and the given timeout.
+
+    The constructor arguments differ across the catalog -- the local
+    Ollama provider takes no API key, Azure forwards everything
+    through ``**kwargs`` -- so the arguments are chosen by asking
+    the class rather than by hard-coding a list.
+    """
+    import inspect
+
+    parameters = inspect.signature(provider_class.__init__).parameters
+    accepts_kwargs = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD
+        for p in parameters.values()
+    )
+
+    kwargs: dict = {}
+    if "api_key" in parameters or accepts_kwargs:
+        kwargs["api_key"] = "dummy-key-not-used-offline"
+    if "timeout" in parameters or accepts_kwargs:
+        kwargs["timeout"] = timeout
+    return provider_class(**kwargs)
+
+
+def _client_of(provider):
+    """
+    Return the HTTP client a provider will issue its request through.
+
+    The OpenAI-compatible family builds its client lazily, so the
+    accessor is called to materialise it. That constructs an SDK
+    client; it does not send anything.
+    """
+    getter = getattr(provider, "_get_client", None)
+    if getter is not None:
+        return getter()
+    client = getattr(provider, "_client", None)
+    if client is None:
+        raise AssertionError(
+            f"{type(provider).__name__} exposes no HTTP client"
+        )
+    return client
+
+
+def test_every_provider_puts_the_timeout_on_its_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every provider in the catalog applies the timeout to its client.
+
+    This is the check that does not need an API key: it asserts that
+    the timeout reaches the object that makes the HTTP request, for
+    every provider, without contacting any endpoint.
+    """
+    import os
+
+    _clear_timeout_env(monkeypatch)
+    # Azure resolves its base URL from the environment; without it the
+    # client cannot be built.
+    os.environ.setdefault("AZURE_OPENAI_ENDPOINT", "https://example.invalid")
+
+    failures: list[str] = []
+    for slug, provider_class in sorted(
+        LLMFactory.PROVIDERS.items(), key=lambda kv: kv[0].value
+    ):
+        try:
+            provider = _construct(provider_class, 137.0)
+            actual = _http_timeout(_client_of(provider))
+        except Exception as exc:  # pragma: no cover - reported below
+            failures.append(f"{slug.value}: {type(exc).__name__}: {exc}")
+            continue
+        if actual != 137.0:
+            failures.append(
+                f"{slug.value}: HTTP client timeout is {actual}, "
+                f"expected 137.0"
+            )
+
+    assert not failures, (
+        "providers whose HTTP client did not receive the timeout:\n  "
+        + "\n  ".join(failures)
+    )
+
+
+def test_every_provider_gets_the_shared_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``TIMEOUT`` reaches the HTTP client of every provider."""
+    import os
+
+    _clear_timeout_env(monkeypatch)
+    monkeypatch.setenv("TIMEOUT", "137")
+    os.environ.setdefault("AZURE_OPENAI_ENDPOINT", "https://example.invalid")
+
+    settings = LLMSettings()
+    assert settings.provider_timeout == 137.0
+
+    failures: list[str] = []
+    for slug, provider_class in sorted(
+        LLMFactory.PROVIDERS.items(), key=lambda kv: kv[0].value
+    ):
+        try:
+            provider = _construct(provider_class, settings.provider_timeout)
+            actual = _http_timeout(_client_of(provider))
+        except Exception as exc:  # pragma: no cover - reported below
+            failures.append(f"{slug.value}: {type(exc).__name__}: {exc}")
+            continue
+        if actual != 137.0:
+            failures.append(
+                f"{slug.value}: HTTP client timeout is {actual}, "
+                f"expected 137.0"
+            )
+
+    assert not failures, (
+        "providers that did not receive the shared TIMEOUT:\n  "
+        + "\n  ".join(failures)
+    )
+
+
+def test_the_shared_setting_reaches_every_provider_through_the_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The factory path wires ``TIMEOUT`` into every provider.
+
+    The same end-to-end check, but through ``LLMFactory.create`` --
+    the path the application actually uses.
+    """
+    import os
+
+    os.environ.setdefault("AZURE_OPENAI_ENDPOINT", "https://example.invalid")
+    _clear_timeout_env(monkeypatch)
+    monkeypatch.setenv("TIMEOUT", "137")
+    settings = LLMSettings()
+
+    failures: list[str] = []
+    for slug in sorted(LLMFactory.PROVIDERS, key=lambda s: s.value):
+        try:
+            provider = LLMFactory.create(
+                slug, timeout=settings.provider_timeout
+            )
+            actual = _http_timeout(_client_of(provider))
+        except Exception as exc:  # pragma: no cover - reported below
+            failures.append(f"{slug.value}: {type(exc).__name__}: {exc}")
+            continue
+        if actual != 137.0:
+            failures.append(
+                f"{slug.value}: HTTP client timeout is {actual}, "
+                f"expected 137.0"
+            )
+
+    assert not failures, (
+        "providers the factory did not wire the shared TIMEOUT into:\n  "
+        + "\n  ".join(failures)
+    )
