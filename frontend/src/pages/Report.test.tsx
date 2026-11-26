@@ -406,6 +406,85 @@ describe('Report > loader phases', () => {
 
 
 /**
+ * Tests for the report title the page renders.
+ *
+ * The synthesis LLM sometimes opens with a section label written
+ * at the wrong level ("### Bottom line") instead of a "# " title.
+ * The backend derives a clean title from the prose after it; the
+ * page must render that title and must not repeat it in the body.
+ */
+describe('Report > title', () => {
+  /** The body shape the LLM produced for the live report. */
+  const HEADING_LEADING_BODY = [
+    '# Among the supplied studies, plasma N-terminal tau fragment 1 (NT1)',
+    '',
+    '### Bottom line',
+    '',
+    'Among the supplied studies, **plasma N-terminal tau fragment 1 (NT1)** has the strongest direct longitudinal evidence.',
+    '',
+    '### Plasma NT1: the clearest emerging analyte',
+    '',
+    'NT1 is a circulating tau species that retains its N-terminal region.',
+  ].join('\n');
+
+  it('renders the title without raw markdown', async () => {
+    mockFetchWorkspace.mockResolvedValue({
+      workspace_id: 'ws-1',
+      question: 'x',
+      state: 'FINAL',
+      summary: { text: 'A summary.', paper_ids: [] },
+      papers: [],
+      total_papers: 0,
+      allowed_actions: [],
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    });
+    mockUseWorkspaceReturn.workspace = {
+      workspace_id: 'ws-1',
+      question: 'x',
+      state: 'FINAL',
+      summary: { text: 'A summary.', paper_ids: [] },
+      papers: [],
+      total_papers: 0,
+      allowed_actions: [],
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+    mockStoreCurrentWorkspace.current = mockUseWorkspaceReturn.workspace;
+    mockRunAction.mockResolvedValue({
+      content: HEADING_LEADING_BODY,
+      summary: HEADING_LEADING_BODY,
+      sections: [{ title: 'Introduction', content: 'Some content.' }],
+      citations: [],
+      limitations: [],
+      future_work: [],
+    });
+
+    const { Report } = await import('./Report');
+    render(<Report />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading workspace/i)).not.toBeInTheDocument();
+    });
+
+    const heading = screen.getByRole('heading', {
+      level: 1,
+      name: 'Among the supplied studies, plasma N-terminal tau fragment 1 (NT1)',
+    });
+    expect(heading).toBeInTheDocument();
+    // No raw markdown anywhere in the title.
+    expect(heading.textContent).not.toContain('###');
+    expect(heading.textContent).not.toContain('**');
+    // The section label is structure -- it is kept.
+    expect(screen.getByText('Bottom line')).toBeInTheDocument();
+    // The title is not repeated as the opening paragraph.
+    expect(
+      screen.queryByText(/has the strongest direct longitudinal evidence/),
+    ).not.toBeInTheDocument();
+  });
+});
+
+/**
  * Tests for the "Generate PDF" action.
  *
  * The Publish button on the Report page runs the PUBLISH
