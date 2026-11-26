@@ -74,7 +74,10 @@ class LLMSettings(BaseSettings):
         Optional custom endpoint.
 
     timeout
-        Request timeout in seconds.
+        Request timeout in seconds, shared by every LLM provider.
+        Read from the ``TIMEOUT`` environment variable. Only applied
+        to providers when explicitly set -- see
+        :attr:`provider_timeout`.
 
     max_retries
         Maximum number of retry attempts for failed requests.
@@ -112,6 +115,37 @@ class LLMSettings(BaseSettings):
         default=60,
         alias="TIMEOUT",
     )
+
+    @property
+    def provider_timeout(self) -> float | None:
+        """
+        The timeout to hand to LLM providers, or ``None`` for
+        "use each provider's own default".
+
+        The shared ``TIMEOUT`` setting only overrides a provider's
+        own default when the operator has *explicitly* set it. That
+        distinction matters: the providers in the catalog have
+        deliberately different defaults (60 seconds for the hosted
+        HTTP APIs, 120 for the local Ollama provider), and silently
+        flattening them to one number would change behaviour for
+        anyone who never touched ``TIMEOUT``.
+
+        When the operator *has* set ``TIMEOUT``, it applies to every
+        provider. A provider-specific environment variable
+        (``MINIMAX_TIMEOUT``, ``OLLAMA_TIMEOUT``) still wins inside
+        the provider, because it is the more specific configuration.
+
+        Note
+        ----
+        The environment variable is ``TIMEOUT``, not
+        ``OPENAI_TIMEOUT`` -- ``LLMSettings`` sets no
+        ``env_prefix``, so the field alias is the literal variable
+        name. ``OPENAI_TIMEOUT`` was documented in ``.env.example``
+        but never read by anything.
+        """
+        if "timeout" not in self.model_fields_set:
+            return None
+        return float(self.timeout)
 
     max_retries: int = Field(
         default=3,

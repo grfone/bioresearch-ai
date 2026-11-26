@@ -249,14 +249,83 @@ def test_cli_wizard_falls_back_to_env_var_for_required_api_key(monkeypatch: pyte
     assert config.api_key == "sk-env-fallback"
 
 
-def test_ensure_tkinter_reports_already_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_tkinter_reports_already_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """When tkinter is already importable, ``_ensure_tkinter``
     returns True without running any package install."""
     import bootstrap
 
-    # tkinter is importable on this machine.
-    assert bootstrap._import_tkinter() is not None
+    installs: list[list[str]] = []
+
+    # Simulate "tkinter is importable" rather than asserting that it
+    # is. tkinter is an OS package: the slim Docker image, a bare CI
+    # runner and plenty of developer machines do not have it, and a
+    # test that depends on that fails for reasons that have nothing
+    # to do with the code under test. (This module's own docstring
+    # says as much: "These tests do not require a real display server
+    # or system package manager. They mock both.")
+    monkeypatch.setattr(
+        bootstrap,
+        "_import_tkinter",
+        lambda: (object(), object(), object()),
+    )
+
+    def _record_install(cmd, **kwargs):
+        installs.append(list(cmd))
+        return MagicMock(returncode=0)
+
+    monkeypatch.setattr(bootstrap, "run", _record_install)
+
     assert bootstrap._ensure_tkinter(_hw_stub()) is True
+    assert installs == [], (
+        f"_ensure_tkinter must not install anything when tkinter is "
+        f"already importable; it ran: {installs}"
+    )
+
+
+def test_ensure_tkinter_installs_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When tkinter is NOT importable, ``_ensure_tkinter`` installs it.
+
+    The companion to the test above: the original test only covered
+    the "already installed" branch, and it covered it by asserting a
+    property of the machine rather than of the code. This one drives
+    the missing-tkinter branch and checks that the install is
+    actually attempted -- behaviourally, not by grepping the source.
+    """
+    import bootstrap
+
+    installs: list[list[str]] = []
+    attempts = {"count": 0}
+
+    def _missing_tkinter():
+        # Not importable on the first check, importable after the
+        # install -- the shape of a successful install.
+        attempts["count"] += 1
+        return None if attempts["count"] == 1 else (object(),) * 3
+
+    monkeypatch.setattr(bootstrap, "_import_tkinter", _missing_tkinter)
+    monkeypatch.setattr(
+        bootstrap.shutil,
+        "which",
+        lambda name: "/usr/bin/apt-get" if name == "apt-get" else None,
+    )
+
+    def _record_install(cmd, **kwargs):
+        installs.append(list(cmd))
+        return MagicMock(returncode=0)
+
+    monkeypatch.setattr(bootstrap, "run", _record_install)
+
+    assert bootstrap._ensure_tkinter(_hw_stub()) is True
+    assert len(installs) == 1, (
+        f"expected exactly one install attempt, got: {installs}"
+    )
+    assert "python3-tk" in installs[0], (
+        f"the install must request python3-tk; it ran: {installs[0]}"
+    )
 
 
 def test_gui_wizard_wraps_mainloop_in_try_except() -> None:

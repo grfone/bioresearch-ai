@@ -12,13 +12,18 @@ one request, 60 seconds is not enough on a 20-paper corpus: the
 request times out, the orchestrator records the failure, and the
 workspace lands in ERROR.
 
-These tests pin the resolution order so the knob cannot regress:
+Resolution order for the MiniMax timeout:
 
-1. an explicit constructor argument wins;
-2. otherwise ``MINIMAX_TIMEOUT`` is used;
-3. otherwise the 60-second default;
-4. a malformed or non-positive value falls back to the default
-   rather than taking the application down.
+1. ``MINIMAX_TIMEOUT`` — the provider-specific environment variable.
+   It wins over the constructor argument because it is the more
+   specific configuration.
+2. the ``timeout`` constructor argument — the *shared* ``TIMEOUT``
+   setting, applied to every provider.
+3. 60 seconds — this provider's own default.
+
+A malformed or non-positive ``MINIMAX_TIMEOUT`` is ignored (with a
+warning) rather than raising: a bad value must not take the whole
+application down.
 
 Author
 ------
@@ -34,6 +39,22 @@ from app.infrastructure.llm.minimax_provider import (
     MinimaxProvider,
     _timeout_from_env,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_from_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop the provider from re-reading the repo's ``.env``.
+
+    ``MinimaxProvider.__init__`` calls ``load_dotenv()``, which
+    injects ``MINIMAX_TIMEOUT`` from the developer's local ``.env``
+    into ``os.environ`` -- permanently, for the rest of the test
+    session. Without this fixture the "default timeout" test reads
+    whatever the operator happens to have configured locally.
+    """
+    monkeypatch.setattr(
+        "app.infrastructure.llm.minimax_provider.load_dotenv",
+        lambda *args, **kwargs: None,
+    )
 
 
 def _timeout_of(provider: MinimaxProvider) -> float:
@@ -52,7 +73,10 @@ def test_default_timeout_is_sixty_seconds(
 ) -> None:
     """With nothing configured, the timeout is the 60-second default."""
     monkeypatch.delenv("MINIMAX_TIMEOUT", raising=False)
-    assert _timeout_from_env() == DEFAULT_TIMEOUT_SECONDS == 60.0
+    assert _timeout_from_env() is None
+
+    provider = MinimaxProvider(api_key="dummy")
+    assert _timeout_of(provider) == DEFAULT_TIMEOUT_SECONDS == 60.0
 
 
 def test_timeout_comes_from_the_environment(
@@ -66,13 +90,27 @@ def test_timeout_comes_from_the_environment(
     assert _timeout_of(provider) == 300.0
 
 
-def test_explicit_argument_beats_the_environment(
+def test_environment_beats_the_constructor_argument(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A constructor argument wins over the environment variable."""
-    monkeypatch.setenv("MINIMAX_TIMEOUT", "300")
-    provider = MinimaxProvider(api_key="dummy", timeout=45.0)
-    assert _timeout_of(provider) == 45.0
+    """The provider-specific variable wins over the shared setting.
+
+    The constructor argument carries the shared ``TIMEOUT`` setting,
+    which applies to every provider. ``MINIMAX_TIMEOUT`` is the more
+    specific configuration, so it takes precedence.
+    """
+    monkeypatch.setenv("MINIMAX_TIMEOUT", "900")
+    provider = MinimaxProvider(api_key="dummy", timeout=300.0)
+    assert _timeout_of(provider) == 900.0
+
+
+def test_constructor_argument_applies_without_a_specific_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shared setting is used when no MiniMax-specific one exists."""
+    monkeypatch.delenv("MINIMAX_TIMEOUT", raising=False)
+    provider = MinimaxProvider(api_key="dummy", timeout=300.0)
+    assert _timeout_of(provider) == 300.0
 
 
 def test_malformed_timeout_falls_back_to_the_default(
@@ -80,7 +118,10 @@ def test_malformed_timeout_falls_back_to_the_default(
 ) -> None:
     """A non-numeric value must not take the application down."""
     monkeypatch.setenv("MINIMAX_TIMEOUT", "not-a-number")
-    assert _timeout_from_env() == DEFAULT_TIMEOUT_SECONDS
+    assert _timeout_from_env() is None
+
+    provider = MinimaxProvider(api_key="dummy")
+    assert _timeout_of(provider) == DEFAULT_TIMEOUT_SECONDS
 
 
 def test_non_positive_timeout_falls_back_to_the_default(
@@ -88,10 +129,10 @@ def test_non_positive_timeout_falls_back_to_the_default(
 ) -> None:
     """A zero or negative timeout is meaningless; fall back."""
     monkeypatch.setenv("MINIMAX_TIMEOUT", "0")
-    assert _timeout_from_env() == DEFAULT_TIMEOUT_SECONDS
+    assert _timeout_from_env() is None
 
     monkeypatch.setenv("MINIMAX_TIMEOUT", "-5")
-    assert _timeout_from_env() == DEFAULT_TIMEOUT_SECONDS
+    assert _timeout_from_env() is None
 
 
 def test_empty_timeout_falls_back_to_the_default(
@@ -99,7 +140,7 @@ def test_empty_timeout_falls_back_to_the_default(
 ) -> None:
     """An empty value is treated as unset."""
     monkeypatch.setenv("MINIMAX_TIMEOUT", "   ")
-    assert _timeout_from_env() == DEFAULT_TIMEOUT_SECONDS
+    assert _timeout_from_env() is None
 
 
 def test_fractional_timeout_is_accepted(

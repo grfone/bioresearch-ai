@@ -39,6 +39,9 @@ Guillermo Ramajo Fernández
 
 from __future__ import annotations
 
+import inspect
+import logging
+
 from app.core.enums.llm_provider import LLMProviderEnum
 from app.domain.interfaces.llm_provider import LLMProvider
 
@@ -65,6 +68,9 @@ from app.infrastructure.llm.tencent_provider import TencentProvider
 from app.infrastructure.llm.xai_provider import XaiProvider
 from app.infrastructure.llm.yi_provider import YiProvider
 from app.infrastructure.llm.zhipu_provider import ZhipuProvider
+
+
+logger = logging.getLogger(__name__)
 
 
 class LLMFactory:
@@ -129,6 +135,7 @@ class LLMFactory:
     def create(
         cls,
         provider: LLMProviderEnum,
+        timeout: float | None = None,
     ) -> LLMProvider:
         """
         Create an LLM provider instance.
@@ -137,6 +144,18 @@ class LLMFactory:
         ----------
         provider
             The provider to instantiate.
+
+        timeout
+            Request timeout in seconds, applied to providers that
+            accept one. ``None`` (the default) leaves every provider
+            on its own default.
+
+            The value comes from the shared ``TIMEOUT`` setting in
+            ``app/config/llm.py``, which is only applied when the
+            operator has explicitly set it. A provider-specific
+            environment variable (``MINIMAX_TIMEOUT``,
+            ``OLLAMA_TIMEOUT``) still wins over this argument, because
+            it is the more specific configuration.
 
         Returns
         -------
@@ -162,7 +181,54 @@ class LLMFactory:
                 f"Implemented providers: {supported}."
             )
 
-        return provider_class()
+        return provider_class(**cls._timeout_kwargs(provider_class, timeout))
+
+    @staticmethod
+    def _timeout_kwargs(
+        provider_class: type[LLMProvider],
+        timeout: float | None,
+    ) -> dict[str, float]:
+        """
+        Build the constructor keyword arguments for a provider.
+
+        Every provider in the catalog accepts a ``timeout`` argument
+        except that some take it through ``**kwargs`` and some
+        (historically the local Ollama provider) take none at all.
+        Rather than hard-code which is which, we ask the class: if
+        its constructor accepts ``timeout`` — explicitly or via
+        ``**kwargs`` — we pass it; otherwise we log and move on.
+
+        The check keeps this working when a provider is added later:
+        a provider without a timeout parameter simply keeps its own
+        default instead of raising ``TypeError`` at start-up.
+        """
+        if timeout is None:
+            return {}
+
+        try:
+            parameters = inspect.signature(provider_class.__init__).parameters
+        except (TypeError, ValueError):  # pragma: no cover - exotic classes
+            logger.warning(
+                "Cannot inspect %s.__init__; skipping the %s second "
+                "timeout.",
+                provider_class.__name__,
+                timeout,
+            )
+            return {}
+
+        accepts_timeout = "timeout" in parameters or any(
+            p.kind is inspect.Parameter.VAR_KEYWORD
+            for p in parameters.values()
+        )
+        if not accepts_timeout:
+            logger.warning(
+                "Provider %s does not accept a timeout argument; "
+                "it keeps its own default.",
+                provider_class.__name__,
+            )
+            return {}
+
+        return {"timeout": float(timeout)}
 
     @classmethod
     def available_providers(cls) -> list[LLMProviderEnum]:

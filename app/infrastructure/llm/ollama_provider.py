@@ -55,7 +55,26 @@ class OllamaProvider(BaseLLMProvider):
     chat completions endpoint. No API key is required.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, timeout: int | None = None) -> None:
+        """
+        Initialize the Ollama provider.
+
+        Parameters
+        ----------
+        timeout : int | None
+            Request timeout in seconds. Resolution order:
+
+            1. ``OLLAMA_TIMEOUT`` — the provider-specific
+               environment variable, which wins because it is the
+               more specific configuration;
+            2. the explicit ``timeout`` argument (the shared
+               ``TIMEOUT`` setting, when the operator set it);
+            3. 120 seconds, this provider's own default.
+
+            A local model can legitimately take longer than a hosted
+            API call, which is why this provider's default is higher
+            than the hosted providers' 60 seconds.
+        """
         super().__init__()
         self._base_url = (
             os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -63,7 +82,13 @@ class OllamaProvider(BaseLLMProvider):
         self._model = os.environ.get(
             "OLLAMA_MODEL", "deepseek-coder-v2-lite-instruct"
         )
-        self._timeout = int(os.environ.get("OLLAMA_TIMEOUT", "120"))
+        env_timeout = os.environ.get("OLLAMA_TIMEOUT")
+        if env_timeout is not None and env_timeout.strip():
+            self._timeout = int(env_timeout)
+        elif timeout is not None:
+            self._timeout = int(timeout)
+        else:
+            self._timeout = 120
         # Lazy import so the provider can be instantiated even when
         # the OpenAI client is not installed (it is shipped via the
         # ``openai`` package on conda).

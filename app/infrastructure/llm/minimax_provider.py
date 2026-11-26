@@ -58,37 +58,38 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_SECONDS = 60.0
 
 
-def _timeout_from_env() -> float:
+def _timeout_from_env() -> float | None:
     """
     Read the request timeout from ``MINIMAX_TIMEOUT``.
 
     Returns
     -------
-    float
-        The timeout in seconds. Falls back to
-        :data:`DEFAULT_TIMEOUT_SECONDS` when the variable is unset
-        or cannot be parsed as a number — a malformed value must not
-        take the whole application down at import time.
+    float | None
+        The timeout in seconds, or ``None`` when the variable is
+        unset — the caller then falls back to the shared ``TIMEOUT``
+        setting or the provider's own default.
+
+        A malformed or non-positive value logs a warning and returns
+        ``None`` rather than raising: a bad value must not take the
+        whole application down at import time.
     """
     raw = os.getenv("MINIMAX_TIMEOUT")
     if raw is None or not raw.strip():
-        return DEFAULT_TIMEOUT_SECONDS
+        return None
     try:
         value = float(raw)
     except ValueError:
         logger.warning(
-            "MINIMAX_TIMEOUT=%r is not a number; using %s seconds.",
+            "MINIMAX_TIMEOUT=%r is not a number; ignoring it.",
             raw,
-            DEFAULT_TIMEOUT_SECONDS,
         )
-        return DEFAULT_TIMEOUT_SECONDS
+        return None
     if value <= 0:
         logger.warning(
-            "MINIMAX_TIMEOUT=%r is not positive; using %s seconds.",
+            "MINIMAX_TIMEOUT=%r is not positive; ignoring it.",
             raw,
-            DEFAULT_TIMEOUT_SECONDS,
         )
-        return DEFAULT_TIMEOUT_SECONDS
+        return None
     return value
 
 
@@ -164,15 +165,24 @@ class MinimaxProvider(LLMProvider):
 
         self._model = model or os.getenv("MINIMAX_MODEL", self.DEFAULT_MODEL)
 
-        # The timeout is configurable via ``MINIMAX_TIMEOUT`` (an
-        # explicit constructor argument still wins). It mirrors the
+        # The timeout is configurable via ``MINIMAX_TIMEOUT`` (the
+        # provider-specific environment variable, which mirrors the
         # ``OLLAMA_TIMEOUT`` convention already used by the Ollama
-        # provider, and it exists because the 60-second default is
-        # too short for the corpus-summarisation call.
-        if timeout is not None:
+        # provider). It exists because the 60-second default is too
+        # short for the corpus-summarisation call.
+        #
+        # Resolution order: the provider-specific environment
+        # variable wins over the explicit constructor argument,
+        # because it is the more specific configuration. The
+        # constructor argument is the shared ``TIMEOUT`` setting,
+        # which applies to every provider.
+        env_timeout = _timeout_from_env()
+        if env_timeout is not None:
+            self._timeout = env_timeout
+        elif timeout is not None:
             self._timeout = float(timeout)
         else:
-            self._timeout = _timeout_from_env()
+            self._timeout = DEFAULT_TIMEOUT_SECONDS
 
         self._client = httpx.Client(
             timeout=self._timeout,

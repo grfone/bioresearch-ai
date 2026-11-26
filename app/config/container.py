@@ -241,7 +241,8 @@ class Container:
         literature_searcher = MultiSourceSearcher(searchers)
 
         llm_provider = LLMFactory.create(
-            LLMProviderEnum(settings.llm.provider)
+            LLMProviderEnum(settings.llm.provider),
+            timeout=settings.llm.provider_timeout,
         )
 
         report_mapper = ReportMapper()
@@ -290,7 +291,8 @@ class Container:
         literature_searcher = MultiSourceSearcher(searchers)
 
         llm_provider = LLMFactory.create(
-            LLMProviderEnum(settings.llm.provider)
+            LLMProviderEnum(settings.llm.provider),
+            timeout=settings.llm.provider_timeout,
         )
 
         report_mapper = ReportMapper()
@@ -390,7 +392,8 @@ def get_identifier_resolver() -> IdentifierResolver:
             llm_extractor = None
             if settings.literature.llm_abstract_extraction_enabled:
                 llm_provider = LLMFactory.create(
-                    LLMProviderEnum(settings.llm.provider)
+                    LLMProviderEnum(settings.llm.provider),
+                    timeout=settings.llm.provider_timeout,
                 )
                 llm_extractor = LLMExtractor(llm_provider=llm_provider)
             # Construct the cache backend. ``CACHE_BACKEND``
