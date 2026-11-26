@@ -268,4 +268,9 @@ def test_minimax_provider_preserved() -> None:
     from app.infrastructure.llm.minimax_provider import MinimaxProvider
     provider = MinimaxProvider(api_key="dummy")
     assert provider.ENDPOINT == "https://api.minimax.io/anthropic/v1/messages"
-    assert provider.DEFAULT_MODEL == "MiniMax-M3"
+    # The default model was moved to MiniMax-M3.1-Flash in commit
+    # 657f623 ("Record the MiniMax provider catalog update"), which
+    # updated the provider but left this assertion pointing at the
+    # old name. The provider is the source of truth here; the
+    # assertion is pinned to it so the two cannot drift again.
+    assert provider.DEFAULT_MODEL == "MiniMax-M3.1-Flash"
